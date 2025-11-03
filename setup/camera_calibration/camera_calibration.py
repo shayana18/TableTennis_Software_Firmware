@@ -6,14 +6,14 @@ import pickle
 
 # Camera calibration parameters
 # You can modify these variables as needed
-CHESSBOARD_SIZE = (9, 6)  # Number of inner corners per chessboard row and column
-SQUARE_SIZE = 2.5         # Size of a square in centimeters
-CALIBRATION_IMAGES_PATH = 'calibration_images/*.jpg'  # Path to calibration images
-OUTPUT_DIRECTORY = 'output'  # Directory to save calibration results
+CHESSBOARD_SIZE = (7, 10)  # Number of inner corners per chessboard row and column
+SQUARE_SIZE = 1.5         # Size of a square in centimeters
+CALIBRATION_IMAGES_PATH = 'calibration_images_cam1/*.jpg'  # Path to calibration images
+OUTPUT_DIRECTORY = 'output_cam1'  # Directory to save calibration results
 SAVE_UNDISTORTED = True   # Whether to save undistorted images
 
 def calibrate_camera():
-    """
+    """s
     Calibrate the camera using chessboard images.
     
     Returns:
@@ -53,7 +53,7 @@ def calibrate_camera():
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         
         # Find the chessboard corners
-        ret, corners = cv2.findChessboardCorners(gray, CHESSBOARD_SIZE, None)
+        ret, corners = cv2.findChessboardCornersSB(gray, CHESSBOARD_SIZE, cv2.CALIB_CB_EXHAUSTIVE | cv2.CALIB_CB_ACCURACY)
         
         # If found, add object points and image points
         if ret:
