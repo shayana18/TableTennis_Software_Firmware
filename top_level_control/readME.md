@@ -1,0 +1,1 @@
+This Directory contains all the all the code hosted on the laptop, it is responsible for the ball identification, 3d position reconstruction, trajectory planning and generated the desired joint positions to meet the all the desired position with the desired speed
