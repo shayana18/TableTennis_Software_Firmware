@@ -7,9 +7,7 @@ from queue import Queue, Empty, Full
 # Capture parameters
 CAMERA_ID = 1 # Camera ID 
 CHESSBOARD_SIZE = (10, 7)  # Number of inner corners per chessboard row and column
-OUTPUT_DIRECTORY = 'calibration_images_cam2_new'  # Directory to save calibrations images
-
-IMAGE_RES = (640,480)
+OUTPUT_DIRECTORY = 'calibration_images_cam1_new'  # Directory to save calibrations images
 
 FRAME_QUEUE_SIZE = 5  # Buffer a few frames to decouple capture and processing
 
