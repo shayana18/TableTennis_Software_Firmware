@@ -1,0 +1,9 @@
+###############################################################################
+# Python virtual environments
+###############################################################################
+
+# Virtual environments created inside top_level_control (e.g. mac_env, venv)
+top_level_control/mac_env/
+top_level_control/venv/
+top_level_control/.venv/
+top_level_control/*env*/
