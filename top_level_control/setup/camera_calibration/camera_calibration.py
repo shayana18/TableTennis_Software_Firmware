@@ -8,13 +8,8 @@ import pickle
 # You can modify these variables as needed
 CHESSBOARD_SIZE = (10, 7)  # Number of inner corners per chessboard row and column
 SQUARE_SIZE = 1.5         # Size of a square in centimeters
-<<<<<<< HEAD:setup/camera_calibration/camera_calibration.py
-CALIBRATION_IMAGES_PATH = 'calibration_images_cam2_new/*.jpg'  # Path to calibration images
-OUTPUT_DIRECTORY = 'output_cam2_new'  # Directory to save calibration results
-=======
-CALIBRATION_IMAGES_PATH = 'calibration_images_cam1_retry/*.jpg'  # Path to calibration images
-OUTPUT_DIRECTORY = 'output_cam1_retry'  # Directory to save calibration results
->>>>>>> e9eca7f (init for stm32):top_level_control/setup/camera_calibration/camera_calibration.py
+CALIBRATION_IMAGES_PATH = 'calibration_images_cam1/*.jpg'  # Path to calibration images
+OUTPUT_DIRECTORY = 'output_cam1'  # Directory to save calibration results
 SAVE_UNDISTORTED = True   # Whether to save undistorted images
 
 def calibrate_camera():
