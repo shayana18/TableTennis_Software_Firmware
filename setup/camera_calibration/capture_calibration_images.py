@@ -5,15 +5,17 @@ import threading
 from queue import Queue, Empty, Full
 
 # Capture parameters
-CAMERA_ID = 0 # Camera ID (usually 0 for built-in webcam)
-CHESSBOARD_SIZE = (7, 10)  # Number of inner corners per chessboard row and column
-OUTPUT_DIRECTORY = 'calibration_images_cam2_retry'  # Directory to save calibrations images
+CAMERA_ID = 1 # Camera ID 
+CHESSBOARD_SIZE = (10, 7)  # Number of inner corners per chessboard row and column
+OUTPUT_DIRECTORY = 'calibration_images_cam2_new'  # Directory to save calibrations images
 
 IMAGE_RES = (1280,720)
 
 FRAME_QUEUE_SIZE = 5  # Buffer a few frames to decouple capture and processing
 
-
+# Auto-capture settings
+AUTO_CAPTURE = True  # Enable auto-capture
+AUTO_CAPTURE_INTERVAL = 10  # Seconds between auto-captures
 
 def capture_calibration_images():
     """
@@ -73,9 +75,12 @@ def capture_calibration_images():
     # Counter for captured images
     img_counter = 0
     latest_raw_frame = None
-    
-    print("Press 'c' to capture an image")
+    last_capture_time = time.time()
+
+    print("Press 'c' to capture an image manually")
     print("Press 'q' or Escape to quit")
+    if AUTO_CAPTURE:
+        print(f"Auto-capture enabled: capturing every {AUTO_CAPTURE_INTERVAL} seconds when chessboard detected")
     print(f"Images will be saved to {OUTPUT_DIRECTORY}")
 
     try:
@@ -121,6 +126,22 @@ def capture_calibration_images():
                 cv2.putText(display_frame, "NOT detected", (50, 50),
                             cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
 
+            # Auto-capture countdown and capture
+            if AUTO_CAPTURE:
+                time_since_last = time.time() - last_capture_time
+                countdown = int(AUTO_CAPTURE_INTERVAL - time_since_last)
+                if countdown > 0:
+                    cv2.putText(display_frame, f"Next capture in: {countdown}s", (50, 100),
+                                cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 0), 2)
+
+                # Auto-capture if interval passed and chessboard detected
+                if time_since_last >= AUTO_CAPTURE_INTERVAL and ret_chess:
+                    img_name = os.path.join(OUTPUT_DIRECTORY, f"calibration_{img_counter:02d}.jpg")
+                    cv2.imwrite(img_name, latest_raw_frame)
+                    print(f"Auto-captured {img_name}")
+                    img_counter += 1
+                    last_capture_time = time.time()
+
             # Display the frame
             cv2.imshow('Camera Calibration', display_frame)
 
@@ -132,14 +153,14 @@ def capture_calibration_images():
                 print("Exiting...")
                 break
 
-            # 'c' to capture
+            # 'c' to capture manually
             elif key == ord('c') and latest_raw_frame is not None:
                 # Save the image
                 img_name = os.path.join(OUTPUT_DIRECTORY, f"calibration_{img_counter:02d}.jpg")
                 cv2.imwrite(img_name, latest_raw_frame)
-                print(f"Captured {img_name}")
-
+                print(f"Manually captured {img_name}")
                 img_counter += 1
+                last_capture_time = time.time()  # Reset auto-capture timer
     finally:
         stop_event.set()
         capture_thread.join(timeout=2)

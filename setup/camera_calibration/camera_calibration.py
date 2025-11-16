@@ -6,10 +6,10 @@ import pickle
 
 # Camera calibration parameters
 # You can modify these variables as needed
-CHESSBOARD_SIZE = (7, 10)  # Number of inner corners per chessboard row and column
+CHESSBOARD_SIZE = (10, 7)  # Number of inner corners per chessboard row and column
 SQUARE_SIZE = 1.5         # Size of a square in centimeters
-CALIBRATION_IMAGES_PATH = 'calibration_images_cam1/*.jpg'  # Path to calibration images
-OUTPUT_DIRECTORY = 'output_cam1'  # Directory to save calibration results
+CALIBRATION_IMAGES_PATH = 'calibration_images_cam2_new/*.jpg'  # Path to calibration images
+OUTPUT_DIRECTORY = 'output_cam2_new'  # Directory to save calibration results
 SAVE_UNDISTORTED = True   # Whether to save undistorted images
 
 def calibrate_camera():
@@ -103,6 +103,11 @@ def calibrate_camera():
     np.savetxt(os.path.join(OUTPUT_DIRECTORY, 'distortion_coefficients.txt'), dist)
     
     print(f"Calibration complete! RMS re-projection error: {ret}")
+    
+    # Save RMS error to text file
+    with open(os.path.join(OUTPUT_DIRECTORY, 'rms_error.txt'), 'w') as f:
+        f.write(f"RMS re-projection error: {ret}\n")
+        
     print(f"Results saved to {OUTPUT_DIRECTORY}")
     
     return ret, mtx, dist, rvecs, tvecs
