@@ -1,0 +1,8 @@
+{
+	"InstallScripts" : 
+	[
+		"/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/build/Debug/cmake_install.cmake",
+		"/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/build/Debug/cmake/stm32cubemx/cmake_install.cmake"
+	],
+	"Parallel" : false
+}
