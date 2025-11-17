@@ -4,8 +4,13 @@ import queue
 import sys
 import threading
 import time
+from pathlib import Path
 
 import cv2
+
+# Add parent directory to path for tracking module
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from tracking import BallTracker, PhysicsModel
 
 # Camera Constants
 DEFAULT_WIDTH = 640
@@ -60,11 +65,22 @@ def open_camera(index=0, backend=None):
     return cap
 
 
-def show_live_feed(indices=None, backend=None, window_name="Live Feed"):
+def show_live_feed(indices=None, backend=None, window_name="Live Feed",
+                   track_ball=False, show_mask=False):
     """
     Display one window per camera index in `indices`.
-    
+
     Press 'q' while any window is focused to close all feeds.
+    Press 't' to toggle ball tracking on/off.
+    Press 'm' to toggle mask overlay on/off.
+    Press 'c' to clear tracking trail.
+
+    Args:
+        indices: Camera indices to open
+        backend: OpenCV backend name
+        window_name: Base name for windows
+        track_ball: Enable HSV color-based ball tracking
+        show_mask: Show the HSV mask overlay
     """
     if hasattr(cv2, "setNumThreads"):
         cv2.setNumThreads(1)
@@ -77,6 +93,13 @@ def show_live_feed(indices=None, backend=None, window_name="Live Feed"):
 
     stop_event = threading.Event()
     capture_info = {}
+
+    # Create ball tracker and physics model if enabled
+    ball_tracker = BallTracker() if track_ball else None
+    physics_model = PhysicsModel() if track_ball else None
+    tracking_enabled = track_ball
+    mask_enabled = show_mask
+
     for idx in indices:
         cap = open_camera(index=idx, backend=backend)
         if hasattr(cv2, "CAP_PROP_BUFFERSIZE"):
@@ -109,16 +132,19 @@ def show_live_feed(indices=None, backend=None, window_name="Live Feed"):
             "last_report": None,
         }
 
+    if tracking_enabled:
+        print("Ball tracking ENABLED - Press 't' to toggle, 'm' for mask, 'c' to clear trail")
+
     try:
         while True:
             any_frame = False
             for idx, info in capture_info.items():
                 cap = info["cap"]
                 win_name = info["window"]
-                frame = _drain_queue(info["queue"])
-                if frame is None:
+                packet = _drain_queue(info["queue"])
+                if packet is None:
                     continue
-                now = frame["timestamp"]
+                now = packet["timestamp"]
                 last = info["last_time"]
                 if last is not None:
                     dt = now - last
@@ -135,11 +161,38 @@ def show_live_feed(indices=None, backend=None, window_name="Live Feed"):
                         info["last_report"] = now
 
                 any_frame = True
-                cv2.imshow(win_name, frame["data"])
+                frame = packet["data"]
 
-            if cv2.waitKey(1) & 0xFF == ord("q"):
+                # Apply ball tracking if enabled
+                if tracking_enabled and ball_tracker is not None:
+                    detection = ball_tracker.detect(frame)
+                    physics_info = physics_model.update(detection)
+                    frame = physics_model.draw(frame, detection, physics_info,
+                                               show_mask=mask_enabled)
+
+                cv2.imshow(win_name, frame)
+
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord("q"):
                 stop_event.set()
                 break
+            elif key == ord("t"):
+                # Toggle tracking
+                if ball_tracker is None:
+                    ball_tracker = BallTracker()
+                    physics_model = PhysicsModel()
+                tracking_enabled = not tracking_enabled
+                print(f"Ball tracking {'ENABLED' if tracking_enabled else 'DISABLED'}")
+            elif key == ord("m"):
+                # Toggle mask overlay
+                mask_enabled = not mask_enabled
+                print(f"Mask overlay {'ENABLED' if mask_enabled else 'DISABLED'}")
+            elif key == ord("c"):
+                # Clear trail and reset physics
+                if physics_model is not None:
+                    physics_model.reset()
+                    print("Trail and physics state cleared")
+
             if not any_frame:
                 print("Warning: no frames available from any camera.")
     finally:
@@ -176,6 +229,14 @@ def parse_args(argv=None):
         "--suggest-backend", action="store_true",
         help="Print the likely backend for this OS and exit."
     )
+    parser.add_argument(
+        "-t", "--track", action="store_true",
+        help="Enable HSV color-based ball tracking."
+    )
+    parser.add_argument(
+        "--show-mask", action="store_true",
+        help="Show the HSV mask overlay (requires --track)."
+    )
     return parser.parse_args(argv)
 
 
@@ -190,7 +251,8 @@ def main(argv=None):
             print("Could not determine a backend suggestion for this OS.")
         return 0
 
-    show_live_feed(indices=args.indices, backend=args.backend)
+    show_live_feed(indices=args.indices, backend=args.backend,
+                   track_ball=args.track, show_mask=args.show_mask)
     return 0
 
 
