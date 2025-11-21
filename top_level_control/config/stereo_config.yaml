@@ -1,0 +1,23 @@
+# Stereo Camera Configuration
+# Values are loaded from calibration output directories
+
+# Camera 1 (Left)
+camera_left:
+  id: 0
+  calibration_dir: "output_cam1"  # Contains camera_matrix.txt, distortion_coefficients.txt
+
+# Camera 2 (Right)
+camera_right:
+  id: 1
+  calibration_dir: "output_cam2_new"  # Contains camera_matrix.txt, distortion_coefficients.txt
+
+# Stereo Extrinsics
+# After running calibrate_stereo_extrinsics.py, this folder is created
+stereo:
+  calibration_dir: "output_stereo"  # Contains R.txt, T.txt, baseline.txt
+
+# Image settings
+image:
+  width: 1280
+  height: 720
+  fps: 100

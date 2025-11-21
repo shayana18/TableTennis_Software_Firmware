@@ -70,10 +70,10 @@ def show_live_feed(indices=None, backend=None, window_name="Live Feed",
     """
     Display one window per camera index in `indices`.
 
-    Press 'q' while any window is focused to close all feeds.
-    Press 't' to toggle ball tracking on/off.
-    Press 'm' to toggle mask overlay on/off.
-    Press 'c' to clear tracking trail.
+    Keyboard Controls:
+    - 'q': Quit
+    - 't': Toggle ball tracking on/off
+    - 'm': Toggle mask overlay on/off
 
     Args:
         indices: Camera indices to open
@@ -96,7 +96,7 @@ def show_live_feed(indices=None, backend=None, window_name="Live Feed",
 
     # Create ball tracker and physics model if enabled
     ball_tracker = BallTracker() if track_ball else None
-    physics_model = PhysicsModel() if track_ball else None
+    physics_model = PhysicsModel(num_predictions=10) if track_ball else None
     tracking_enabled = track_ball
     mask_enabled = show_mask
 
@@ -133,7 +133,13 @@ def show_live_feed(indices=None, backend=None, window_name="Live Feed",
         }
 
     if tracking_enabled:
-        print("Ball tracking ENABLED - Press 't' to toggle, 'm' for mask, 'c' to clear trail")
+        print("\n=== Ball Tracking ENABLED ===")
+        print("Controls:")
+        print("  q - Quit")
+        print("  t - Toggle tracking on/off")
+        print("  m - Toggle mask overlay")
+        print("  c - Clear trail")
+        print("=============================\n")
 
     try:
         while True:
@@ -180,7 +186,7 @@ def show_live_feed(indices=None, backend=None, window_name="Live Feed",
                 # Toggle tracking
                 if ball_tracker is None:
                     ball_tracker = BallTracker()
-                    physics_model = PhysicsModel()
+                    physics_model = PhysicsModel(num_predictions=10)
                 tracking_enabled = not tracking_enabled
                 print(f"Ball tracking {'ENABLED' if tracking_enabled else 'DISABLED'}")
             elif key == ord("m"):
@@ -191,7 +197,7 @@ def show_live_feed(indices=None, backend=None, window_name="Live Feed",
                 # Clear trail and reset physics
                 if physics_model is not None:
                     physics_model.reset()
-                    print("Trail and physics state cleared")
+                    print("Trail cleared")
 
             if not any_frame:
                 print("Warning: no frames available from any camera.")
