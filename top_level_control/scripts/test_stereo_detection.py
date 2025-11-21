@@ -19,15 +19,17 @@ import numpy as np
 import sys
 from pathlib import Path
 
-# Add parent directory to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# Ensure the top-level control package is on the path for clean package imports
+project_root = Path(__file__).resolve().parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
 
 from tracking.stereo_tracker import StereoTracker
 
 
 def main():
     # Config path
-    script_dir = Path(__file__).parent.parent
+    script_dir = project_root
     config_path = script_dir / "config" / "stereo_config.yaml"
 
     print("=" * 50)
