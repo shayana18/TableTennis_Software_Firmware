@@ -6,7 +6,7 @@
 7	500	1763342017332473041	CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_rcc.c.obj	d4650cc84c6c94c6
 5	502	1763342017330542809	CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal.c.obj	818ea48e77b7cd6
 6	504	1763342017331102293	CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_cortex.c.obj	63ae98cc7b00fc57
-4	433	1763342036119996069	CMakeFiles/motor_control.dir/Core/Src/main.c.obj	33d1294b440bb33a
+19	393	1763347624894802930	CMakeFiles/motor_control.dir/Core/Src/main.c.obj	33d1294b440bb33a
 4	520	1763342017328686241	CMakeFiles/motor_control.dir/Core/Src/stm32c0xx_hal_msp.c.obj	280f9de085d33b39
 4	657	1763342017329531096	CMakeFiles/motor_control.dir/Drivers/BSP/STM32C0xx_Nucleo/stm32c0xx_nucleo.c.obj	8d4833f8b48c577e
 387	763	1763342017712463325	CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_rcc_ex.c.obj	16e9ef2e715efce3
@@ -37,8 +37,4 @@
 772	1694	1763342018096911529	CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_uart.c.obj	ba8534f986d2f97a
 1120	1750	1763342018445291986	CMakeFiles/motor_control.dir/Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2/cmsis_os2.c.obj	f0495546af94e6cb
 657	1810	1763342017982426504	CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_tim.c.obj	8e6745f534e2d0bf
-433	771	1763342036549144230	motor_control.elf	a79a973b126d1008
-2	409	1763345983510173795	CMakeFiles/motor_control.dir/Core/Src/main.c.obj	33d1294b440bb33a
-409	638	1763345983917599019	motor_control.elf	a79a973b126d1008
-19	393	1763347624894802930	CMakeFiles/motor_control.dir/Core/Src/main.c.obj	33d1294b440bb33a
 393	740	1763347625269088150	motor_control.elf	a79a973b126d1008
