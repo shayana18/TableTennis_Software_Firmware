@@ -3,7 +3,6 @@ Table Tennis Ball Tracking Module
 
 Contains:
 - ball_tracker: HSV color-based ball detection
-- physics_model: Velocity tracking and position prediction (2D radius-based)
 - triangulation: 3D position from stereo cameras
 - stereo_tracker: Dual camera ball detection with 3D output
 """

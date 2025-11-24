@@ -1,4 +1,7 @@
 """
+
+yaw:  5 degres
+pitch: 20 degrees 
 Stereo Extrinsic Calibration
 
 Captures stereo image pairs of a checkerboard and calculates
@@ -11,7 +14,17 @@ Controls:
     'c' - Capture current stereo pair
     'q' - Quit and run calibration
     'r' - Reset captured pairs
+    
+# Stereo Extrinsic Calibration STEPS! 
+
+1. **Mount cameras** in final positions
+2. **Run:** `python setup/camera_calibration/calibrate_stereo_extrinsics.py`
+3. **Capture:** Position checkerboard so both cameras see it, press 'c' (15-20 times)
+4. **Finish:** Press 'q' to calibrate
+5. **Output:** Saves R, T, baseline to `output_stereo/` folder
+
 """
+
 
 import cv2
 import numpy as np
@@ -56,6 +69,7 @@ def main():
     print("=" * 50)
     print("STEREO EXTRINSIC CALIBRATION")
     print("=" * 50)
+    
     print(f"\nCheckerboard: {CHECKERBOARD[0]}x{CHECKERBOARD[1]} corners")
     print(f"Square size: {SQUARE_SIZE} mm")
     print(f"\nControls:")
@@ -146,7 +160,7 @@ def main():
         cv2.putText(display_left, f"Pairs captured: {len(obj_points)}", (10, 60),
                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
 
-        # Resize to same height if different
+        # Resize to same height if different (same logic as test_camera_feed.py)
         h1, w1 = display_left.shape[:2]
         h2, w2 = display_right.shape[:2]
         if h1 != h2:
@@ -156,7 +170,8 @@ def main():
 
         # Show side by side
         combined = np.hstack([display_left, display_right])
-        # Resize if too large
+
+        # Resize if too wide
         h, w = combined.shape[:2]
         if w > 1920:
             scale = 1920 / w
