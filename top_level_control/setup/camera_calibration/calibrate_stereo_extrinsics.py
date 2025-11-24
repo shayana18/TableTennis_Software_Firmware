@@ -18,6 +18,12 @@ import numpy as np
 import sys
 from pathlib import Path
 
+DEFAULT_WIDTH = 1280
+DEFAULT_HEIGHT = 720
+REQUESTED_FPS = 100
+AUTO_EXPOSURE = 0.25
+PROP_EXPOSURE = -6 
+
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -39,7 +45,7 @@ def main():
 
     # Camera IDs - update if needed
     CAM_LEFT_ID = 0
-    CAM_RIGHT_ID = 2
+    CAM_RIGHT_ID = 1
 
     # Paths
     script_dir = Path(__file__).parent.parent.parent
@@ -73,7 +79,15 @@ def main():
 
     # Open cameras
     cap_left = cv2.VideoCapture(CAM_LEFT_ID)
+    cap_left.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG')) 
+    cap_left.set(cv2.CAP_PROP_FRAME_WIDTH, DEFAULT_WIDTH)
+    cap_left.set(cv2.CAP_PROP_FRAME_HEIGHT, DEFAULT_HEIGHT)
+    cap_left.set(cv2.CAP_PROP_FPS, REQUESTED_FPS)
     cap_right = cv2.VideoCapture(CAM_RIGHT_ID)
+    cap_right.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG')) 
+    cap_right.set(cv2.CAP_PROP_FRAME_WIDTH, DEFAULT_WIDTH)
+    cap_right.set(cv2.CAP_PROP_FRAME_HEIGHT, DEFAULT_HEIGHT)
+    cap_right.set(cv2.CAP_PROP_FPS, REQUESTED_FPS)
 
     if not cap_left.isOpened() or not cap_right.isOpened():
         print("ERROR: Could not open cameras!")
@@ -136,7 +150,7 @@ def main():
         h1, w1 = display_left.shape[:2]
         h2, w2 = display_right.shape[:2]
         if h1 != h2:
-            target_h = max(h1, h2)
+            target_h = min(h1, h2)
             display_left = cv2.resize(display_left, (int(w1 * target_h / h1), target_h))
             display_right = cv2.resize(display_right, (int(w2 * target_h / h2), target_h))
 

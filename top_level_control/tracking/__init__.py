@@ -9,7 +9,7 @@ Contains:
 """
 
 from .ball_tracker import BallTracker
-from .physics_model import PhysicsModel
+from .physics_model_2d_radiusbased import PhysicsModel
 from .triangulation import triangulate_point, compute_disparity
 from .stereo_tracker import StereoTracker
 
