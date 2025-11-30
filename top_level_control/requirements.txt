@@ -1,6 +1,6 @@
-imutils>=0.5.3
-numpy>=1.21.0
-opencv-python>=4.5.0
-matplotlib>=3.4.0
+imutils
+numpy<2.0.0
+opencv-python
+matplotlib
+# scipy
 pyyaml
-

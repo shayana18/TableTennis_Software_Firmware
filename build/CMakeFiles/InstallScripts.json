@@ -1,0 +1,8 @@
+{
+	"InstallScripts" : 
+	[
+		"/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/build/cmake_install.cmake",
+		"/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/build/cmake/stm32cubemx/cmake_install.cmake"
+	],
+	"Parallel" : false
+}
