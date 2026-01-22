@@ -13,8 +13,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from tracking import BallTracker, PhysicsModel
 
 # Camera Constants
-DEFAULT_WIDTH = 640
-DEFAULT_HEIGHT = 480
+DEFAULT_WIDTH = 1280
+DEFAULT_HEIGHT = 720
 REQUESTED_FPS = 100
 AUTO_EXPOSURE = 0.25
 PROP_EXPOSURE = -6 
@@ -189,6 +189,9 @@ def show_live_feed(indices=None, backend=None, window_name="Live Feed",
                     physics_model = PhysicsModel(num_predictions=10)
                 tracking_enabled = not tracking_enabled
                 print(f"Ball tracking {'ENABLED' if tracking_enabled else 'DISABLED'}")
+            elif key == ord("v"):
+                ball_tracker.motion_gate = not ball_tracker.motion_gate
+                print(f"Motion gate {'ENABLED' if ball_tracker.motion_gate else 'DISABLED'}")
             elif key == ord("m"):
                 # Toggle mask overlay
                 mask_enabled = not mask_enabled

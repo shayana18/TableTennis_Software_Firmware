@@ -10,8 +10,8 @@ import numpy as np
 
 # HSV thresholds for orange table tennis ball
 # Narrower hue range (5-20) to avoid red/yellow, higher saturation minimum
-DEFAULT_COLOR_LOWER = (5, 120, 120)
-DEFAULT_COLOR_UPPER = (20, 255, 255)
+DEFAULT_COLOR_LOWER = (2, 150, 150)
+DEFAULT_COLOR_UPPER = (16, 255, 255)
 
 
 class BallTracker:
@@ -41,6 +41,57 @@ class BallTracker:
 
         # Morphological kernel for noise reduction
         self.kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        self.motion_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+
+        # Motion-gating state
+        self.prev_gray = None
+        self.motion_threshold = 18   # Pixel diff threshold for motion mask
+        self.motion_min_area = 150   # Ignore tiny flickers/noise
+        self.motion_gate = False
+
+    def _detect_motion(self, gray_frame):
+        """
+        Build a binary motion mask from frame-to-frame differences.
+
+        Returns:
+            (has_motion, motion_mask, bbox)
+        """
+        if self.prev_gray is None:
+            self.prev_gray = gray_frame
+            return False, np.zeros_like(gray_frame), None
+
+        frame_delta = cv2.absdiff(self.prev_gray, gray_frame)
+        self.prev_gray = gray_frame
+
+        _, motion_mask = cv2.threshold(frame_delta, self.motion_threshold, 255, cv2.THRESH_BINARY)
+        motion_mask = cv2.dilate(motion_mask, self.motion_kernel, iterations=2)
+
+        contours, _ = cv2.findContours(motion_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        if not contours:
+            return False, np.zeros_like(motion_mask), None
+
+        filtered = np.zeros_like(motion_mask)
+        x_min = y_min = float('inf')
+        x_max = y_max = -float('inf')
+        found = False
+
+        for contour in contours:
+            if cv2.contourArea(contour) < self.motion_min_area:
+                continue
+            cv2.drawContours(filtered, [contour], -1, 255, -1)
+            x, y, w, h = cv2.boundingRect(contour)
+            x_min = min(x_min, x)
+            y_min = min(y_min, y)
+            x_max = max(x_max, x + w)
+            y_max = max(y_max, y + h)
+            found = True
+
+        if not found:
+            return False, np.zeros_like(motion_mask), None
+
+        bbox = (x_min, y_min, x_max - x_min, y_max - y_min)
+        return True, filtered, bbox
 
     def detect(self, frame):
         """
@@ -56,6 +107,8 @@ class BallTracker:
                 - 'radius': float or None
                 - 'contour': contour points or None
                 - 'mask': binary mask image
+                - 'motion_mask': binary motion mask (or None)
+                - 'motion_bbox': (x, y, w, h) of motion region (or None)
         """
         # Convert to HSV
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
@@ -71,6 +124,28 @@ class BallTracker:
         mask = cv2.GaussianBlur(mask, (5, 5), 0)
         _, mask = cv2.threshold(mask, 127, 255, cv2.THRESH_BINARY)
 
+        motion_mask = None
+        motion_bbox = None
+
+        # Optional motion gate: restrict detection to areas with movement
+        if self.motion_gate:
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            gray = cv2.GaussianBlur(gray, (5, 5), 0)
+            has_motion, motion_mask, motion_bbox = self._detect_motion(gray)
+
+            if not has_motion:
+                return {
+                    'found': False,
+                    'center': None,
+                    'radius': None,
+                    'contour': None,
+                    'mask': np.zeros_like(mask),
+                    'motion_mask': motion_mask,
+                    'motion_bbox': None
+                }
+
+            mask = cv2.bitwise_and(mask, mask, mask=motion_mask)
+
         # Find contours
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
@@ -79,7 +154,9 @@ class BallTracker:
             'center': None,
             'radius': None,
             'contour': None,
-            'mask': mask
+            'mask': mask,
+            'motion_mask': motion_mask,
+            'motion_bbox': motion_bbox
         }
 
         if not contours:
