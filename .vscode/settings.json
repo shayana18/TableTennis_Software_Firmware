@@ -1,0 +1,5 @@
+{
+"cmake.sourceDirectory": "${workspaceFolder}/motor_control",
+"cmake.useCMakePresets": "always",
+"cmake.configurePreset": "Debug",
+"cmake.buildPreset": "Debug"}

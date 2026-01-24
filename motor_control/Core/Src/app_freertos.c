@@ -6,7 +6,7 @@
   ******************************************************************************
   * @attention
   *
-  * Copyright (c) 2025 STMicroelectronics.
+  * Copyright (c) 2026 STMicroelectronics.
   * All rights reserved.
   *
   * This software is licensed under terms that can be found in the LICENSE file
@@ -45,17 +45,29 @@ typedef StaticTask_t osStaticThreadDef_t;
 /* USER CODE BEGIN Variables */
 
 /* USER CODE END Variables */
-/* Definitions for Task100Hz */
-osThreadId_t Task100HzHandle;
-uint32_t MyBufferTask01[ 512 ];
+/* Definitions for motor_coms */
+osThreadId_t motor_comsHandle;
+uint32_t MyBufferTask01[ 128 ];
 osStaticThreadDef_t MycontrolBlocTask01;
-const osThreadAttr_t Task100Hz_attributes = {
-  .name = "Task100Hz",
+const osThreadAttr_t motor_coms_attributes = {
+  .name = "motor_coms",
   .stack_mem = &MyBufferTask01[0],
   .stack_size = sizeof(MyBufferTask01),
   .cb_mem = &MycontrolBlocTask01,
   .cb_size = sizeof(MycontrolBlocTask01),
   .priority = (osPriority_t) osPriorityNormal,
+};
+/* Definitions for control_task */
+osThreadId_t control_taskHandle;
+uint32_t MyBufferTask02[ 128 ];
+osStaticThreadDef_t MycontrolBlocTask02;
+const osThreadAttr_t control_task_attributes = {
+  .name = "control_task",
+  .stack_mem = &MyBufferTask02[0],
+  .stack_size = sizeof(MyBufferTask02),
+  .cb_mem = &MycontrolBlocTask02,
+  .cb_size = sizeof(MycontrolBlocTask02),
+  .priority = (osPriority_t) osPriorityNormal2,
 };
 
 /* Private function prototypes -----------------------------------------------*/
@@ -88,8 +100,11 @@ void MX_FREERTOS_Init(void) {
   /* USER CODE BEGIN RTOS_QUEUES */
   /* add queues, ... */
   /* USER CODE END RTOS_QUEUES */
-  /* creation of Task100Hz */
-  Task100HzHandle = osThreadNew(StartTask100Hz, NULL, &Task100Hz_attributes);
+  /* creation of motor_coms */
+  motor_comsHandle = osThreadNew(StartDefaultTask, NULL, &motor_coms_attributes);
+
+  /* creation of control_task */
+  control_taskHandle = osThreadNew(StartTask02, NULL, &control_task_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
@@ -100,23 +115,40 @@ void MX_FREERTOS_Init(void) {
   /* USER CODE END RTOS_EVENTS */
 
 }
-/* USER CODE BEGIN Header_StartTask100Hz */
+/* USER CODE BEGIN Header_StartDefaultTask */
 /**
-* @brief Function implementing the Task100Hz thread.
+* @brief Function implementing the motor_coms thread.
 * @param argument: Not used
 * @retval None
 */
-/* USER CODE END Header_StartTask100Hz */
-void StartTask100Hz(void *argument)
+/* USER CODE END Header_StartDefaultTask */
+void StartDefaultTask(void *argument)
 {
-  /* USER CODE BEGIN Task100Hz */
+  /* USER CODE BEGIN motor_coms */
   /* Infinite loop */
-   (void)argument;
   for(;;)
   {
-    osDelay(10);
+    osDelay(1);
   }
-  /* USER CODE END Task100Hz */
+  /* USER CODE END motor_coms */
+}
+
+/* USER CODE BEGIN Header_StartTask02 */
+/**
+* @brief Function implementing the control_task thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_StartTask02 */
+void StartTask02(void *argument)
+{
+  /* USER CODE BEGIN control_task */
+  /* Infinite loop */
+  for(;;)
+  {
+    osDelay(1);
+  }
+  /* USER CODE END control_task */
 }
 
 /* Private application code --------------------------------------------------*/
