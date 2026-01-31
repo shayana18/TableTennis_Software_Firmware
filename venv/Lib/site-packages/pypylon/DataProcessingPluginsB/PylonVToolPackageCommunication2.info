@@ -1,0 +1,37 @@
+{
+    "BPVLVersion": 20000,
+    "Copyright": "Copyright (c) 2020-2025 Basler AG",
+    "FirmCode": "6001460",
+    "InfoFileVersion": 20000,
+    "InfoSignature": "af4ab75aaa6b9b30bbdf7878e263557c4b64cf9df4d2a722cd4470a7f1a71ad24d6bbfcd09e21c27bfdfa1e0a2d34adfd3b1f4f870d248e9e8a8f5466e5b1535888c3322e38415b6d9a316212cc842ad83542a9c7dd9dae08f8a52aca1af856a717eb136f7624668e9b07475cad95582550e06951fd4aba0a644dda48bd46563231eb07f850f746992fe46245fcb892a30506b9e0924e8ca07d73663eab3477abfbc52bd655a6bcedf0ae1d314c9128c589a37d689c845632ba7a98da6b0fe50c34d12ea9a466db41f0f0acff186bafbdda91f54ac259ad9097b9e8c144f26fcd78ba66fb342fe25c7c4e02d724c6a350ed93c2cffed67c28b8029e8f4991e6a05840d38b1678d392cd69c2f3f40d5b7700657daacf07aea8e1d34923148df1c86b0e239a1dc46c5f2db85a2f29d54f7eac811fd4144be59c5bc80c23d0abb5c26fbed39e7d8723666f2613d56507ae6564780eafbe594f6acd9b741e73d680680580a7b8a26579d4086b10d9c97d1e2d7929e4ec8edc1814c3e6c36c0688e8f6c15ad60b2c0f8e98f2b27985fd978786db78853a7287de9eca85ff99affd2c9f0e84941eab96dbcee95e101bc9defa4d81486bea8ef0a3d3901c3fa8793c4f17f091b344c2ceb51513c3236cc703a6e0058e55f316f693d58c122c3e8bb30bde5fed85b185f9379e904d6478b2899b418e9578dd3417f1c966c2ed484b5b15c",
+    "LibraryPublicKey": "30820222300d06092a864886f70d01010105000382020f003082020a0282020100a3e71e6067567d2f7ff34cdc2360aa65befd348f6e2bc24648a34c3823edaaaf5516373f25efee3940e3ec00538169cc8b650dd5cbde7d5c8704cc8ccd8802b135de9d67f924371335d3068eb55ad27f9d386a0e4f0b862655badbc1a51cefdd1a27b817329e15cd37176a4b5b15f2ecfbe75f9e579c2f79b68fd685e76977989d3419963925ac36dd1c66a5656dfc8c03ee9fd7cf159b130455eef03d75aab8ca7178a5a85d703376a52758ccd0cd1bc44fdd1bc1758c69776389a1b444ba1e9d81f308e0d7deed66d0c111da93f141939cbc500602e30640aa6d438ba392f4e4658aa420fffd7419e80f55916b2d9e13161e03cf70ff94daf947e08124b0e762c4ee3018fe6f85f6e738b2631f8c45ee95be0aef9ba09e980beaafba4ed0a9250d6fc29045d85e32968e4d6a1c0602c5c6d8f103dd5dad20f7798ce5007d809c05603410b9ab8f681a246bc7c181b83812cb3b260acaa1f3b218603757f8419d180a0c1fe96ca08d591a409445198ba706c3cc84d9043a7cd6595c070eb6f4b1dbb3098f7513a72338dd4f8d24b0a312e6e85cc1ce7b8fed8fe5e09491fa187c6b9b573135578387ad0689f83aac35183a663cf1508b2be481e00ff46b2977d4a55dbdd56b160c01d756a3ff734597baa1904f3754a4818ccc690da811983518c20af8118f4ff2ea2f0694e84fc35b7a34ee894d93ea3df3d43d609ed12b4d0203010001",
+    "LibrarySignature": "03fe1ba49e6645b619ba445a6ce5d146e73ddf8af3f5a8afa8a6c391884a09a2eb22029294a13472060a35f405d655315152bac72944cd10262fd2510165187ca910a59f4283a7516417215dec6cd62eb55bd38bfd2b90a3b159cb5a607f9bd063d5aca1d43059fb1e9dec37db28e8e5c2735c9431e59b89e830b85a7ebe0cf7202b6825365019085d972cec81e88ce3c148f0673744837ffd96045872c11ddc70fed83d8e4819bfd268a0ce5e45f1640a98e471fe52672abbfe3cfb67df7f570a5d6d94ea585b3901fd1c9ae78b459cfb9346f101561c6fb3bb809ee157af98c088694483155280804f9f418fb912ec8ba7addfea4358bb85f90a8f801a1b81c96e88e69246970e06c3c19adb3d2a2d549213b1ef7cba4ec8e28c5c30402fc1b9d1809dbc8efbbdabee551fc35613ba4a3fcaa2331ae722cd1e9932dcb0294989c1319ee48eb009427dcdde88b53bb513e213444bc347979c555cbbe21119b14faab0ec35159974de944fec2764daaca493c8bad87e9ec3ccce901395d6567ea3445b0d5023c24dd454074d1bea1c2da8ec98cad53f9dbf2ef633421de02ef5fc0f7805cdaa97bfd0490fa9ff091287b1811c186e010d118b3dc91de1208c955b11bbd00a9bde87c8a1f903e04aa41c49b343ed25952be11486b2c83b4128bf6c71b01166cf1529cd7e3f6dba712f3ca69f696ea2eb09af03132b47810ee333",
+    "License": "Basler AG internal use only!",
+    "Modules": [
+        {
+            "DetailedDescription": "<!--\n  ~ //-----------------------------------------------------------------------------\n  ~ //  Copyright (c) 2025 Basler AG\n  ~ //  Author: KM\n  ~ //-----------------------------------------------------------------------------\n  -->\n\n<h2><strong>OPC UA Client</strong></h2>\n\n<p>The OPC UA Client vTool allows you to use the data output of other vTools in your recipe as input for the next step in your machine vision environment using the OPC UA standard. You can add as many input pins as you like via the nodemap of the OPC UA Client vTool. The data types of the inputs don't have to be identical (see note below on allowed data types and pin type mapping).\n</p>\n\n<p>\n  <strong>Note:</strong> The OPC UA Client accepts the following data types as input which are mapped to the corresponding OPC UA data types:\n  <ul>\n    <li>Boolean -> Boolean</li>\n    <li>Integer -> Int64</li>\n    <li>Float -> Double</li>\n    <li>String -> String</li>\n  </ul>\n</p>\n\n<h3>\n  Adding Inputs\n</h3>\n<ol>\n  <li>Select the OPC UA Client vTool in the Workbench.</li>\n  <li>Open the <strong>Features - All</strong> pane.</li>\n  <li>Go to the <strong>vTool</strong> group.</li>\n  <li>Execute the <strong>Input Pin Add</strong> command.</li>\n  <li>In the <strong>Input Pin Configuration</strong> field, enter the configuration of the input pin you want to add. Use the following syntax:</li>\n  <i>MyPinName</i>.Type=<i>MyPinType</i>.EndPointNode=<i>'OpcUaNodeIdentifier'</i><br>\n  where:<br>\n  <i>MyPinName</i> = Name of the new input pin<br>\n  <i>MyPinType</i> = Data type of the new input pin (allowed values: Boolean, Float, Integer, and String)<br>\n  <i>OpcUaNodeIdentifier</i> = Name of the node on your OPC UA server\n  <li>Press Enter.</li>\n  The new pin appears in the vTool.\n</ol>\n\n<h4>\n  Configuration Example\n</h4>\n<p>\n  Assume you want to create an input pin with the name <strong>Exposure</strong> and the data type Integer that connects to a node called <strong>ExposureEnd</strong> on your OPC UA server. To do this, enter the following string:<br>Exposure.Type=Integer.EndPointNode='ExposureEnd'\n</p>\n\n<p><br></p>\n<h3>\n  <strong>Configuring the vTool</strong>\n</h3>\n<p>\n  You can configure the vTool via the pylon API and the <strong>Features - All</strong> pane of the pylon Viewer.\n  All parameters listed there can be set via the pylon API. To study the effects of a parameter, change the parameter\n  values in the <strong>Features - All</strong> pane and watch the results in a pin data view when running the recipe.\n  For more details about parameters, select a parameter and check the <strong>Feature Documentation</strong> pane.\n</p>\n\n<p><br></p>\n<p>\n  <a href=\"pylonVToolOpcUaClient\" rel=\"noopener noreferrer\" target=\"_blank\"><u>Get help</u></a>\n</p>",
+            "DisplayName": "OPC UA Client",
+            "MinRequiredFileVersion": "2.0.0",
+            "MinRequiredSoftwareVersion": "2.0.0",
+            "Name": "OpcUaClient",
+            "ObjectVersion": "2.0.0",
+            "ProductCodeDemo": "10000101",
+            "ProductCodeEval": "10000110",
+            "ProductCodeFull": "30005000",
+            "ShortDescription": "Send inputs to OPCUA server",
+            "SupportedUuids": [
+                "3c1b06a5-148b-40b4-bd1f-8926dc45a900"
+            ],
+            "Tags": [
+                "UseCaseIdentifier=DataManagement",
+                "LicenseGroup=Free",
+                "OperationLevelGroup=Low",
+                "AlgorithmTypeGroup=Classical"
+            ],
+            "Type": "VTool",
+            "Uuid": "3c1b06a5-148b-40b4-bd1f-8926dc45a900"
+        }
+    ],
+    "Vendor": "Basler AG",
+    "Version": "2.0.0"
+}
