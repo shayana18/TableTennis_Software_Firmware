@@ -42,7 +42,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from tracking.stereo_triangulator import StereoTriangulator
 
 
-def configure_camera_for_arducam(cap, width=1280, height=800):
+def configure_camera_for_arducam(cap, width=1280, height=720):
     """
     Configure camera for Arducam OV9782 global shutter cameras.
     Forces MJPG codec and specified resolution.
@@ -79,7 +79,7 @@ class TriangulationTester:
         self.thresholds_path = os.path.join(self.script_dir, '..', 'config', 'ball_thresholds.json')
         
         self.frame_width = 1280
-        self.frame_height = 800
+        self.frame_height = 720
         
         self.triangulator = None
         self.measurements = []
@@ -111,7 +111,7 @@ class TriangulationTester:
             self.cam_left_id = config['camera_left']['id']
             self.cam_right_id = config['camera_right']['id']
             self.frame_width = config.get('frame_width', 1280)
-            self.frame_height = config.get('frame_height', 800)
+            self.frame_height = config.get('frame_height', 720)
             print(f"Loaded config: Left=ID{self.cam_left_id}, Right=ID{self.cam_right_id}")
             print(f"  Resolution: {self.frame_width}x{self.frame_height}")
         else:

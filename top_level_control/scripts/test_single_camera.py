@@ -27,7 +27,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from tracking.ball_tracker import EnhancedBallTracker
 
 
-def configure_camera_for_arducam(cap, width=1280, height=800):
+def configure_camera_for_arducam(cap, width=1280, height=720):
     """
     Configure camera for Arducam OV9782 global shutter cameras.
     Forces MJPG codec and specified resolution.
@@ -64,7 +64,7 @@ class SingleCameraTester:
         self.tracker = EnhancedBallTracker()
         
         self.frame_width = 1280
-        self.frame_height = 800
+        self.frame_height = 720
         
         self.show_tuner = False
         self.show_debug = False
@@ -234,7 +234,7 @@ class SingleCameraTester:
                 cv2.putText(vis, "q:quit t:tuner d:debug s:save", (10, vis.shape[0] - 15),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1)
                 
-                display_width = 800
+                display_width = 720
                 display_height = int(display_width * self.frame_height / self.frame_width)
                 vis = cv2.resize(vis, (display_width, display_height))
                 

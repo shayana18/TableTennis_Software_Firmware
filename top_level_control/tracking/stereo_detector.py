@@ -17,7 +17,7 @@ from pathlib import Path
 from .ball_tracker import EnhancedBallTracker
 
 
-def configure_camera_for_arducam(cap, width=1280, height=800):
+def configure_camera_for_arducam(cap, width=1280, height=720):
     """
     Configure camera for Arducam OV9782 global shutter cameras.
     Forces MJPG codec and specified resolution.
@@ -147,7 +147,7 @@ class StereoDetector:
         except Exception as e:
             print(f"[StereoDetector] Warning: Could not load thresholds: {e}")
 
-    def start_cameras(self, width=1280, height=800):
+    def start_cameras(self, width=1280, height=720):
         """
         Open camera streams with Arducam MJPG configuration.
         

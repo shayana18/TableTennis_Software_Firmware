@@ -118,7 +118,7 @@ class ArducamStereoCapture:
         self.cap_left = None
         self.cap_right = None
     
-    def start_cameras(self, width=1280, height=800):
+    def start_cameras(self, width=1280, height=720):
         """Open and configure cameras with MJPG codec."""
         self.cap_left = cv2.VideoCapture(self.cam_left_id)
         self.cap_right = cv2.VideoCapture(self.cam_right_id)
@@ -503,7 +503,7 @@ def main():
         'camera_left': {'id': 1},
         'camera_right': {'id': 2},
         'frame_width': 1280,
-        'frame_height': 800
+        'frame_height': 720
     }
     
     # Load config from file if exists
@@ -514,7 +514,7 @@ def main():
                 config.update(loaded_config)
     
     FRAME_WIDTH = config.get('frame_width', 1280)
-    FRAME_HEIGHT = config.get('frame_height', 800)
+    FRAME_HEIGHT = config.get('frame_height', 720)
     
     print("\n" + "=" * 60)
     print("STEREO DETECTION TEST (Arducam OV9782)")
