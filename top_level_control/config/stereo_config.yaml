@@ -1,18 +1,14 @@
-# Stereo Camera Configuration for Arducam USB Cameras
-# Uses OpenCV VideoCapture
+# Resolution - Basler acA1920-150uc default
+frame_width: 1920
+frame_height: 1200
 
-# Resolution
-frame_width: 1280
-frame_height: 720
-
-# Left camera (Camera 0 in calibration)
+# Left camera (Camera 0 in calibration - world origin)
 camera_left:
-  id: 1  # USB camera device ID
-
+  serial: ""  
 # Right camera (Camera 1 in calibration)
 camera_right:
-  id: 2  # USB camera device ID
+  serial: ""  
 
-# Note: Camera IDs may change depending on USB port order
-# Use test_stereo_detection.py to verify correct camera assignment
-# Left camera should be Camera 0 (world origin in calibration)
+# Note: If serial is empty "", camera will be selected by device index
+# Left camera = index 0, Right camera = index 1
+# Use test_single_camera.py --list to find serial numbers

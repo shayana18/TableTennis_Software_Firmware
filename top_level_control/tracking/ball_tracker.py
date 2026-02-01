@@ -5,6 +5,9 @@ Robust ball detection using HSV + LAB color space fusion.
 - HSV: Good for consistent lighting
 - LAB: Lighting-independent color detection
 - Fusion: 55% HSV + 45% LAB (configurable)
+
+Note: This file is IDENTICAL for Arducam and Basler pipelines.
+      Ball detection is camera-agnostic - it works on any BGR frame.
 """
 
 import cv2

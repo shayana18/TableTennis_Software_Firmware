@@ -4,8 +4,11 @@ Test Single Camera - Threshold Tuning
 Test ball detection on a single camera with HSV + LAB threshold tuning.
 Use this to calibrate detection thresholds for your lighting conditions.
 
-CAMERA: Arducam OV9782 Global Shutter USB Camera
-        1MP, 100fps @ 1280x800 MJPG
+CAMERA: Basler acA1920-150uc USB 3.0
+        2.3MP, 150fps @ 1920x1200
+
+REQUIREMENTS:
+    pip install pypylon
 
 CONTROLS:
     q - Quit
@@ -13,58 +16,147 @@ CONTROLS:
     d - Toggle debug view (show HSV, LAB, fused masks)
     s - Save thresholds to ball_thresholds.json
     p - Print current thresholds
-    c - Cycle camera (0, 1, 2...)
+    c - Cycle camera (by device index)
+    --list - List all connected Basler cameras
 """
 
 import cv2
 import sys
 import os
 import json
+import argparse
 import numpy as np
+
+try:
+    from pypylon import pylon
+except ImportError:
+    print("ERROR: pypylon not installed. Run: pip install pypylon")
+    sys.exit(1)
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from tracking.ball_tracker import EnhancedBallTracker
 
 
-def configure_camera_for_arducam(cap, width=1280, height=800):
-    """
-    Configure camera for Arducam OV9782 global shutter cameras.
-    Forces MJPG codec and specified resolution.
-    """
-    fourcc_mjpg = cv2.VideoWriter_fourcc(*'MJPG')
-    cap.set(cv2.CAP_PROP_FOURCC, fourcc_mjpg)
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-    cap.set(cv2.CAP_PROP_FPS, 100)
-    cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)
+# ============================================================================
+# BASLER CAMERA FUNCTIONS
+# ============================================================================
+
+def list_basler_cameras():
+    """List all connected Basler cameras."""
+    tlFactory = pylon.TlFactory.GetInstance()
+    devices = tlFactory.EnumerateDevices()
     
-    actual_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    actual_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    actual_fps = cap.get(cv2.CAP_PROP_FPS)
-    actual_fourcc_int = int(cap.get(cv2.CAP_PROP_FOURCC))
-    actual_fourcc_str = "".join([chr((actual_fourcc_int >> 8 * i) & 0xFF) for i in range(4)])
+    if len(devices) == 0:
+        print("\nNo Basler cameras found")
+        return []
+    
+    print(f"\nFound {len(devices)} Basler camera(s):")
+    print("-" * 60)
+    cameras = []
+    for i, device in enumerate(devices):
+        serial = device.GetSerialNumber()
+        model = device.GetModelName()
+        print(f"  [{i}] {model} - Serial: {serial}")
+        cameras.append({'index': i, 'serial': serial, 'model': model})
+    print("-" * 60)
+    return cameras
+
+
+def get_basler_camera(serial=None, device_index=0):
+    """Get Basler camera by serial or index."""
+    tlFactory = pylon.TlFactory.GetInstance()
+    devices = tlFactory.EnumerateDevices()
+    
+    if len(devices) == 0:
+        raise RuntimeError("No Basler cameras found")
+    
+    if serial and serial.strip():
+        for device in devices:
+            if device.GetSerialNumber() == serial:
+                return pylon.InstantCamera(tlFactory.CreateDevice(device))
+        raise RuntimeError(f"Camera with serial '{serial}' not found")
+    
+    if device_index >= len(devices):
+        raise RuntimeError(f"Device index {device_index} out of range")
+    
+    return pylon.InstantCamera(tlFactory.CreateDevice(devices[device_index]))
+
+
+def configure_basler_camera(camera, width=1920, height=1200):
+    """Configure Basler camera settings."""
+    camera.Open()
+    
+    # Resolution
+    camera.Width.SetValue(width)
+    camera.Height.SetValue(height)
+    
+    # Center ROI
+    max_w = camera.WidthMax.GetValue()
+    max_h = camera.HeightMax.GetValue()
+    camera.OffsetX.SetValue((max_w - width) // 2)
+    camera.OffsetY.SetValue((max_h - height) // 2)
+    
+    # Exposure and gain
+    camera.ExposureAuto.SetValue("Off")
+    camera.ExposureTime.SetValue(3000)  # 3ms
+    camera.GainAuto.SetValue("Off")
+    camera.Gain.SetValue(0)
+    
+    actual_width = camera.Width.GetValue()
+    actual_height = camera.Height.GetValue()
+    actual_fps = camera.AcquisitionFrameRate.GetValue() if camera.AcquisitionFrameRateEnable.GetValue() else 0
     
     return {
         'actual_width': actual_width,
         'actual_height': actual_height,
         'actual_fps': actual_fps,
-        'actual_fourcc': actual_fourcc_str,
         'settings_match': (actual_width == width and actual_height == height)
     }
 
 
+def create_image_converter():
+    """Create BGR image converter."""
+    converter = pylon.ImageFormatConverter()
+    converter.OutputPixelFormat = pylon.PixelType_BGR8packed
+    converter.OutputBitAlignment = pylon.OutputBitAlignment_MsbAligned
+    return converter
+
+
+def grab_frame(camera, converter):
+    """Grab single frame from Basler camera."""
+    if not camera.IsGrabbing():
+        camera.StartGrabbing(pylon.GrabStrategy_LatestImageOnly)
+    
+    grab_result = camera.RetrieveResult(5000, pylon.TimeoutHandling_ThrowException)
+    
+    if grab_result.GrabSucceeded():
+        image = converter.Convert(grab_result)
+        frame = image.GetArray()
+        grab_result.Release()
+        return frame
+    
+    grab_result.Release()
+    return None
+
+
+# ============================================================================
+# MAIN TESTER CLASS
+# ============================================================================
+
 class SingleCameraTester:
-    def __init__(self):
+    def __init__(self, serial=None, device_index=0):
         self.script_dir = os.path.dirname(os.path.abspath(__file__))
         self.thresholds_path = os.path.join(self.script_dir, '..', 'config', 'ball_thresholds.json')
         
-        self.camera_id = 1  # Default for Arducam
-        self.cap = None
+        self.camera_serial = serial
+        self.camera_index = device_index
+        self.camera = None
+        self.converter = None
         self.tracker = EnhancedBallTracker()
         
-        self.frame_width = 1280
-        self.frame_height = 800
+        self.frame_width = 1920
+        self.frame_height = 1200
         
         self.show_tuner = False
         self.show_debug = False
@@ -166,41 +258,43 @@ class SingleCameraTester:
             pass
     
     def start_camera(self):
-        """Open camera with Arducam configuration."""
-        if self.cap:
-            self.cap.release()
+        """Open camera with Basler configuration."""
+        if self.camera:
+            self.camera.Close()
         
-        self.cap = cv2.VideoCapture(self.camera_id)
-        
-        if not self.cap.isOpened():
-            print(f"Failed to open camera {self.camera_id}")
+        try:
+            self.camera = get_basler_camera(
+                serial=self.camera_serial,
+                device_index=self.camera_index
+            )
+            settings = configure_basler_camera(self.camera, self.frame_width, self.frame_height)
+            self.converter = create_image_converter()
+            
+            serial = self.camera.GetDeviceInfo().GetSerialNumber()
+            print(f"\nCamera opened (Serial: {serial}):")
+            print(f"  Resolution: {settings['actual_width']}x{settings['actual_height']}")
+            
+            if not settings['settings_match']:
+                print("  WARNING: Resolution mismatch!")
+            
+            return True
+        except Exception as e:
+            print(f"Failed to open camera: {e}")
             return False
-        
-        settings = configure_camera_for_arducam(self.cap, self.frame_width, self.frame_height)
-        
-        print(f"\nCamera {self.camera_id} opened:")
-        print(f"  Resolution: {settings['actual_width']}x{settings['actual_height']}")
-        print(f"  FPS: {settings['actual_fps']:.0f}")
-        print(f"  FOURCC: {settings['actual_fourcc']}")
-        
-        if not settings['settings_match']:
-            print("  WARNING: Resolution mismatch!")
-        
-        return True
     
     def run(self):
         """Main loop."""
         print("\n" + "=" * 60)
-        print("SINGLE CAMERA TEST - Threshold Tuning (Arducam OV9782)")
+        print("SINGLE CAMERA TEST - Threshold Tuning (Basler acA1920-150uc)")
         print("=" * 60)
-        print(f"\nResolution: {self.frame_width}x{self.frame_height} (MJPG)")
+        print(f"\nResolution: {self.frame_width}x{self.frame_height}")
         print("\nCONTROLS:")
         print("  q - Quit")
         print("  t - Toggle threshold tuner")
         print("  d - Toggle debug view")
         print("  s - Save thresholds to JSON")
         print("  p - Print current thresholds")
-        print("  c - Cycle camera ID")
+        print("  c - Cycle camera index")
         print("=" * 60)
         
         if not self.start_camera():
@@ -208,8 +302,8 @@ class SingleCameraTester:
         
         try:
             while True:
-                ret, frame = self.cap.read()
-                if not ret:
+                frame = grab_frame(self.camera, self.converter)
+                if frame is None:
                     continue
                 
                 self.update_from_tuner()
@@ -229,12 +323,13 @@ class SingleCameraTester:
                     cv2.putText(vis, "No ball detected", (10, 30),
                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
                 
-                cv2.putText(vis, f"Camera: {self.camera_id}", (10, vis.shape[0] - 40),
+                cv2.putText(vis, f"Camera Index: {self.camera_index}", (10, vis.shape[0] - 40),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
                 cv2.putText(vis, "q:quit t:tuner d:debug s:save", (10, vis.shape[0] - 15),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1)
                 
-                display_width = 800
+                # Resize for display (1920x1200 is large)
+                display_width = 960
                 display_height = int(display_width * self.frame_height / self.frame_width)
                 vis = cv2.resize(vis, (display_width, display_height))
                 
@@ -287,22 +382,36 @@ class SingleCameraTester:
                     self.print_thresholds()
                 
                 elif key == ord('c'):
-                    self.camera_id = (self.camera_id + 1) % 5
-                    self.start_camera()
+                    # Cycle camera index
+                    cameras = list_basler_cameras()
+                    if cameras:
+                        self.camera_index = (self.camera_index + 1) % len(cameras)
+                        self.camera_serial = None  # Use index instead
+                        self.start_camera()
         
         except KeyboardInterrupt:
             pass
         
         finally:
-            if self.cap:
-                self.cap.release()
+            if self.camera:
+                self.camera.Close()
             cv2.destroyAllWindows()
         
         print("\nDone!")
 
 
 def main():
-    tester = SingleCameraTester()
+    parser = argparse.ArgumentParser(description='Test single Basler camera')
+    parser.add_argument('--serial', type=str, help='Camera serial number')
+    parser.add_argument('--index', type=int, default=0, help='Camera device index')
+    parser.add_argument('--list', action='store_true', help='List connected cameras')
+    args = parser.parse_args()
+    
+    if args.list:
+        list_basler_cameras()
+        return
+    
+    tester = SingleCameraTester(serial=args.serial, device_index=args.index)
     tester.run()
 
 

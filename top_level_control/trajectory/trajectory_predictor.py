@@ -1,27 +1,24 @@
 """
-Trajectory Predictor - Main Prediction Class
+Trajectory Predictor
 
-Combines position buffer, velocity estimation, and physics model
-to predict ball trajectory and interception point.
+Main class that combines position buffer, velocity estimator,
+and physics model to predict ball trajectory and interception point.
 
-This is the main class you use in your application.
+Note: This module is camera-agnostic.
 
-Part of trajectory prediction pipeline:
-  position_buffer.py  →  velocity_estimator.py  →  trajectory_predictor.py
-                                                          ↓
-                                                   physics_model.py
-
-Usage:
+USAGE:
     predictor = TrajectoryPredictor()
     
-    # Each frame, add triangulated position:
-    predictor.add_position(X, Y, Z)
+    # In tracking loop:
+    predictor.add_position(x, y, z)
     
-    # Get prediction:
-    result = predictor.predict(target_z=50)  # Where will ball be at Z=50?
-    if result['valid']:
-        print(f"Intercept at X={result['intercept_x']}, Y={result['intercept_y']}")
-        print(f"Time to intercept: {result['time_to_intercept']*1000:.0f} ms")
+    # Get interception point at robot's reach plane:
+    prediction = predictor.predict(target_z=50)
+    
+    if prediction['valid']:
+        robot_x = prediction['intercept_x']
+        robot_y = prediction['intercept_y']
+        time_ms = prediction['time_to_intercept'] * 1000
 """
 
 import time
@@ -29,225 +26,183 @@ import numpy as np
 
 from .position_buffer import PositionBuffer
 from .velocity_estimator import VelocityEstimator
-from .physics_model import PhysicsModel
+from .physics_model import PhysicsModel, GRAVITY_CM_S2
 
 
 class TrajectoryPredictor:
     """
-    Main trajectory prediction class.
+    Predicts ball trajectory and interception point.
     
-    Collects 3D positions, estimates velocity, predicts trajectory.
-    
-    Typical workflow:
-        1. Create predictor
-        2. Each frame: call add_position(x, y, z)
-        3. When ready: call predict(target_z) to get interception point
+    Pipeline:
+        1. Collect positions (PositionBuffer)
+        2. Estimate velocity (VelocityEstimator)
+        3. Predict trajectory with gravity (PhysicsModel)
+        4. Calculate interception point at target Z
     """
-    
-    def __init__(self, 
-                 buffer_size=10,
-                 min_points=3,
-                 velocity_method='regression',
-                 gravity=981.0,
-                 y_down=True):
+
+    def __init__(self, buffer_size=10, min_points=3,
+                 velocity_method='regression', gravity=GRAVITY_CM_S2, y_down=True):
         """
         Initialize trajectory predictor.
-        
+
         Args:
-            buffer_size: Max positions to store (default 10)
-            min_points: Min points needed before prediction (default 3)
-            velocity_method: 'simple' or 'regression' (default 'regression')
-            gravity: Gravity in cm/s² (default 981)
-            y_down: True if +Y is downward in camera coords (default True)
+            buffer_size: Max positions to store
+            min_points: Min positions needed for prediction
+            velocity_method: 'simple' or 'regression'
+            gravity: Gravity in same units as calibration (981 cm/s²)
+            y_down: True if Y increases downward (camera coords)
         """
-        self.buffer_size = buffer_size
         self.min_points = min_points
         
-        # Initialize components
-        self.position_buffer = PositionBuffer(max_size=buffer_size)
+        # Components
+        self.buffer = PositionBuffer(max_size=buffer_size)
         self.velocity_estimator = VelocityEstimator(method=velocity_method)
-        self.physics_model = PhysicsModel(gravity=gravity, y_down=y_down)
+        self.physics = PhysicsModel(gravity=gravity, y_down=y_down)
         
-        # Cached velocity (updated on each add_position)
-        self._current_velocity = None
-        self._velocity_valid = False
-    
-    def add_position(self, x, y, z, timestamp=None):
+        # Cached velocity
+        self._velocity = None
+
+    def add_position(self, x, y, z, t=None):
         """
-        Add a new 3D position from triangulation.
-        
-        Call this every frame when ball is detected.
-        
+        Add a new position measurement.
+
         Args:
-            x, y, z: 3D position (in calibration units, e.g., cm)
-            timestamp: Time in seconds (auto-generated if None)
+            x, y, z: 3D position from triangulation
+            t: Timestamp (auto-generated if None)
         """
-        self.position_buffer.add(x, y, z, timestamp)
+        self.buffer.add(x, y, z, t)
         
-        # Update velocity estimate if enough points
-        if self.position_buffer.is_ready(self.min_points):
-            self._update_velocity()
-    
-    def add_position_tuple(self, position_3d, timestamp=None):
-        """
-        Add position from tuple (convenience method).
-        
-        Args:
-            position_3d: (X, Y, Z) tuple
-            timestamp: Time in seconds (auto-generated if None)
-        """
-        self.add_position(position_3d[0], position_3d[1], position_3d[2], timestamp)
-    
-    def _update_velocity(self):
-        """Update cached velocity estimate."""
-        vel = self.velocity_estimator.estimate_from_buffer(self.position_buffer)
-        self._current_velocity = vel
-        self._velocity_valid = vel['valid']
-    
+        # Update velocity estimate
+        if self.buffer.is_ready(self.min_points):
+            self._velocity = self.velocity_estimator.estimate_from_buffer(self.buffer)
+
+    def is_ready(self):
+        """Check if predictor has enough data."""
+        return self.buffer.is_ready(self.min_points)
+
     def get_velocity(self):
         """
         Get current velocity estimate.
-        
+
         Returns:
             dict with 'vx', 'vy', 'vz', 'speed', 'valid'
         """
-        if self._current_velocity is None:
-            return {'vx': 0, 'vy': 0, 'vz': 0, 'speed': 0, 'valid': False}
-        return self._current_velocity
-    
-    def get_current_position(self):
-        """
-        Get most recent position.
-        
-        Returns:
-            (X, Y, Z) or None if no positions
-        """
-        latest = self.position_buffer.get_latest()
-        if latest is None:
-            return None
-        return (latest['x'], latest['y'], latest['z'])
-    
-    def is_ready(self):
-        """
-        Check if predictor has enough data for prediction.
-        
-        Returns:
-            True if ready to predict
-        """
-        return self.position_buffer.is_ready(self.min_points) and self._velocity_valid
-    
+        if self._velocity is None:
+            return {
+                'vx': 0.0,
+                'vy': 0.0,
+                'vz': 0.0,
+                'speed': 0.0,
+                'valid': False
+            }
+        return self._velocity
+
     def predict(self, target_z):
         """
-        Predict where ball will be when it reaches target_z.
-        
-        This is the main prediction method.
-        
+        Predict interception point at target Z plane.
+
         Args:
-            target_z: Z distance where robot can intercept (e.g., 50 cm)
-        
+            target_z: Z coordinate of interception plane (robot's reach)
+
         Returns:
-            dict with:
-                'valid': True if prediction successful
-                'intercept_x': X position at target_z
-                'intercept_y': Y position at target_z
-                'intercept_z': Should equal target_z
-                'time_to_intercept': Seconds until ball reaches target_z
-                'velocity_at_intercept': (Vx, Vy, Vz) at intercept
-                'current_position': Current (X, Y, Z)
-                'current_velocity': Current (Vx, Vy, Vz)
+            dict with prediction results:
+                'valid': bool - is prediction valid
+                'intercept_x': X at interception
+                'intercept_y': Y at interception
+                'time_to_intercept': seconds until interception
+                'velocity_at_intercept': (vx, vy, vz)
+                'current_position': (x, y, z)
+                'current_velocity': (vx, vy, vz)
         """
         result = {
             'valid': False,
             'intercept_x': None,
             'intercept_y': None,
-            'intercept_z': target_z,
             'time_to_intercept': None,
             'velocity_at_intercept': None,
             'current_position': None,
             'current_velocity': None
         }
         
-        # Check if ready
+        # Need enough points
         if not self.is_ready():
             return result
         
-        # Get current state
-        current_pos = self.get_current_position()
-        current_vel = self.get_velocity()
-        
-        if current_pos is None or not current_vel['valid']:
+        # Need valid velocity
+        vel = self.get_velocity()
+        if not vel['valid']:
             return result
         
-        result['current_position'] = current_pos
-        result['current_velocity'] = (current_vel['vx'], current_vel['vy'], current_vel['vz'])
-        
-        # Use physics model to predict intercept
-        prediction = self.physics_model.position_at_z(
-            position=current_pos,
-            velocity=result['current_velocity'],
-            target_z=target_z
-        )
-        
-        if not prediction['valid']:
+        # Get current position (most recent)
+        latest = self.buffer.latest
+        if latest is None:
             return result
         
-        # Fill result
+        x0, y0, z0 = latest['x'], latest['y'], latest['z']
+        vx, vy, vz = vel['vx'], vel['vy'], vel['vz']
+        
+        result['current_position'] = (x0, y0, z0)
+        result['current_velocity'] = (vx, vy, vz)
+        
+        # Ball must be moving toward target (Vz has correct sign)
+        # If target_z > z0, vz should be positive
+        # If target_z < z0, vz should be negative
+        if (target_z - z0) * vz <= 0:
+            # Ball moving away from target
+            return result
+        
+        # Predict position at target Z
+        pred = self.physics.position_at_z(x0, y0, z0, vx, vy, vz, target_z)
+        
+        if not pred['valid']:
+            return result
+        
         result['valid'] = True
-        result['intercept_x'] = prediction['position'][0]
-        result['intercept_y'] = prediction['position'][1]
-        result['intercept_z'] = prediction['position'][2]
-        result['time_to_intercept'] = prediction['time']
-        result['velocity_at_intercept'] = prediction['velocity']
+        result['intercept_x'] = pred['x']
+        result['intercept_y'] = pred['y']
+        result['time_to_intercept'] = pred['t']
+        result['velocity_at_intercept'] = (pred['vx'], pred['vy'], pred['vz'])
         
         return result
-    
-    def predict_trajectory(self, duration=0.5, dt=0.005):
+
+    def predict_trajectory(self, duration=0.5, dt=0.01):
         """
-        Predict full trajectory for visualization.
-        
+        Generate full trajectory for visualization.
+
         Args:
-            duration: How far into future to predict (seconds)
-            dt: Time step (smaller = smoother, default 5ms)
-        
+            duration: Prediction time (seconds)
+            dt: Time step (seconds)
+
         Returns:
-            List of (X, Y, Z, t) tuples, or empty list if not ready
+            List of (x, y, z, t) tuples
         """
         if not self.is_ready():
             return []
         
-        current_pos = self.get_current_position()
-        current_vel = self.get_velocity()
-        
-        velocity = (current_vel['vx'], current_vel['vy'], current_vel['vz'])
-        
-        return self.physics_model.predict_trajectory(
-            position=current_pos,
-            velocity=velocity,
-            duration=duration,
-            dt=dt
-        )
-    
-    def reset(self):
-        """Clear all position history and reset predictor."""
-        self.position_buffer.clear()
-        self._current_velocity = None
-        self._velocity_valid = False
-    
-    def get_stats(self):
-        """
-        Get current predictor statistics.
-        
-        Returns:
-            dict with buffer stats, velocity info, etc.
-        """
         vel = self.get_velocity()
+        if not vel['valid']:
+            return []
         
+        latest = self.buffer.latest
+        if latest is None:
+            return []
+        
+        return self.physics.predict_trajectory(
+            latest['x'], latest['y'], latest['z'],
+            vel['vx'], vel['vy'], vel['vz'],
+            duration, dt
+        )
+
+    def reset(self):
+        """Clear all data and reset predictor."""
+        self.buffer.clear()
+        self._velocity = None
+
+    def get_stats(self):
+        """Get buffer and velocity stats."""
         return {
-            'buffer_size': len(self.position_buffer),
-            'buffer_max': self.buffer_size,
+            'buffer_size': len(self.buffer),
+            'min_points': self.min_points,
             'is_ready': self.is_ready(),
-            'time_span': self.position_buffer.get_time_span(),
-            'avg_dt': self.position_buffer.get_average_dt(),
-            'velocity_valid': vel['valid'],
-            'speed': vel['speed'] if vel['valid'] else 0.0
+            'velocity': self.get_velocity()
         }

@@ -4,8 +4,11 @@ Test Triangulation - Stereo 3D Ball Tracking
 Tests stereo calibration by detecting the ball in both cameras
 and triangulating to get 3D position.
 
-CAMERA: Arducam OV9782 Global Shutter USB Camera
-        1MP, 100fps @ 1280x800 MJPG
+CAMERA: Basler acA1920-150uc USB 3.0
+        2.3MP, 150fps @ 1920x1200
+
+REQUIREMENTS:
+    pip install pypylon
 
 FEATURES:
 - Loads HSV and LAB thresholds from config/ball_thresholds.json
@@ -36,38 +39,94 @@ import os
 import json
 import yaml
 import numpy as np
-q
+
+try:
+    from pypylon import pylon
+except ImportError:
+    print("ERROR: pypylon not installed. Run: pip install pypylon")
+    sys.exit(1)
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from tracking.stereo_triangulator import StereoTriangulator
 
 
-def configure_camera_for_arducam(cap, width=1280, height=800):
-    """
-    Configure camera for Arducam OV9782 global shutter cameras.
-    Forces MJPG codec and specified resolution.
-    """
-    fourcc_mjpg = cv2.VideoWriter_fourcc(*'MJPG')
-    cap.set(cv2.CAP_PROP_FOURCC, fourcc_mjpg)
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-    cap.set(cv2.CAP_PROP_FPS, 100)
-    cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)
+# ============================================================================
+# BASLER CAMERA FUNCTIONS
+# ============================================================================
+
+def get_basler_camera(serial=None, device_index=0):
+    """Get Basler camera by serial or index."""
+    tlFactory = pylon.TlFactory.GetInstance()
+    devices = tlFactory.EnumerateDevices()
     
-    actual_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    actual_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    actual_fps = cap.get(cv2.CAP_PROP_FPS)
-    actual_fourcc_int = int(cap.get(cv2.CAP_PROP_FOURCC))
-    actual_fourcc_str = "".join([chr((actual_fourcc_int >> 8 * i) & 0xFF) for i in range(4)])
+    if len(devices) == 0:
+        raise RuntimeError("No Basler cameras found")
+    
+    if serial and serial.strip():
+        for device in devices:
+            if device.GetSerialNumber() == serial:
+                return pylon.InstantCamera(tlFactory.CreateDevice(device))
+        raise RuntimeError(f"Camera with serial '{serial}' not found")
+    
+    if device_index >= len(devices):
+        raise RuntimeError(f"Device index {device_index} out of range")
+    
+    return pylon.InstantCamera(tlFactory.CreateDevice(devices[device_index]))
+
+
+def configure_basler_camera(camera, width=1920, height=1200):
+    """Configure Basler camera settings."""
+    camera.Open()
+    
+    camera.Width.SetValue(width)
+    camera.Height.SetValue(height)
+    
+    max_w = camera.WidthMax.GetValue()
+    max_h = camera.HeightMax.GetValue()
+    camera.OffsetX.SetValue((max_w - width) // 2)
+    camera.OffsetY.SetValue((max_h - height) // 2)
+    
+    camera.ExposureAuto.SetValue("Off")
+    camera.ExposureTime.SetValue(3000)
+    camera.GainAuto.SetValue("Off")
+    camera.Gain.SetValue(0)
     
     return {
-        'actual_width': actual_width,
-        'actual_height': actual_height,
-        'actual_fps': actual_fps,
-        'actual_fourcc': actual_fourcc_str,
-        'settings_match': (actual_width == width and actual_height == height)
+        'actual_width': camera.Width.GetValue(),
+        'actual_height': camera.Height.GetValue(),
+        'settings_match': (camera.Width.GetValue() == width and camera.Height.GetValue() == height)
     }
 
+
+def create_image_converter():
+    """Create BGR image converter."""
+    converter = pylon.ImageFormatConverter()
+    converter.OutputPixelFormat = pylon.PixelType_BGR8packed
+    converter.OutputBitAlignment = pylon.OutputBitAlignment_MsbAligned
+    return converter
+
+
+def grab_frame(camera, converter):
+    """Grab single frame from Basler camera."""
+    if not camera.IsGrabbing():
+        camera.StartGrabbing(pylon.GrabStrategy_LatestImageOnly)
+    
+    grab_result = camera.RetrieveResult(5000, pylon.TimeoutHandling_ThrowException)
+    
+    if grab_result.GrabSucceeded():
+        image = converter.Convert(grab_result)
+        frame = image.GetArray()
+        grab_result.Release()
+        return frame
+    
+    grab_result.Release()
+    return None
+
+
+# ============================================================================
+# TRIANGULATION TESTER CLASS
+# ============================================================================
 
 class TriangulationTester:
     """Full-featured triangulation tester with debug and tuning modes."""
@@ -78,10 +137,17 @@ class TriangulationTester:
         self.config_path = os.path.join(self.script_dir, '..', 'config', 'stereo_config.yaml')
         self.thresholds_path = os.path.join(self.script_dir, '..', 'config', 'ball_thresholds.json')
         
-        self.frame_width = 1280
-        self.frame_height = 800
+        self.frame_width = 1920
+        self.frame_height = 1200
+        
+        self.left_serial = None
+        self.right_serial = None
         
         self.triangulator = None
+        self.cam_left = None
+        self.cam_right = None
+        self.converter = None
+        
         self.measurements = []
         self.show_debug = False
         self.show_tuner = False
@@ -104,20 +170,20 @@ class TriangulationTester:
         self.stereo_thresholds = False
         
     def load_config(self):
-        """Load camera IDs and resolution from config."""
+        """Load camera serials and resolution from config."""
         if os.path.exists(self.config_path):
             with open(self.config_path, 'r') as f:
                 config = yaml.safe_load(f)
-            self.cam_left_id = config['camera_left']['id']
-            self.cam_right_id = config['camera_right']['id']
-            self.frame_width = config.get('frame_width', 1280)
-            self.frame_height = config.get('frame_height', 800)
-            print(f"Loaded config: Left=ID{self.cam_left_id}, Right=ID{self.cam_right_id}")
+            self.left_serial = config.get('camera_left', {}).get('serial', '')
+            self.right_serial = config.get('camera_right', {}).get('serial', '')
+            self.frame_width = config.get('frame_width', 1920)
+            self.frame_height = config.get('frame_height', 1200)
+            print(f"Loaded config:")
+            print(f"  Left Serial: {self.left_serial or '(auto)'}")
+            print(f"  Right Serial: {self.right_serial or '(auto)'}")
             print(f"  Resolution: {self.frame_width}x{self.frame_height}")
         else:
-            self.cam_left_id = 1
-            self.cam_right_id = 2
-            print(f"No config found, using defaults: Left=ID{self.cam_left_id}, Right=ID{self.cam_right_id}")
+            print(f"No config found, using defaults")
     
     def load_thresholds(self):
         """Load HSV and LAB thresholds from JSON."""
@@ -225,7 +291,7 @@ class TriangulationTester:
                 print(f"  - {f}")
             print("\nRun calibration first:")
             print("  cd camera_calibration")
-            print("  python calibrate.py calibration_settings.yaml")
+            print("  python calib.py calibration_settings.yaml")
             print("=" * 60)
             return False
         
@@ -325,10 +391,10 @@ class TriangulationTester:
     def print_controls(self):
         """Print control instructions."""
         print("\n" + "=" * 60)
-        print("STEREO TRIANGULATION TEST (Arducam OV9782)")
+        print("STEREO TRIANGULATION TEST (Basler acA1920-150uc)")
         print("=" * 60)
         print("\nVerify calibration by holding ball at known distances.")
-        print(f"Resolution: {self.frame_width}x{self.frame_height} (MJPG)")
+        print(f"Resolution: {self.frame_width}x{self.frame_height}")
         print("\nCONTROLS:")
         print("  q - Quit")
         print("  s - Save current 3D measurement")
@@ -339,26 +405,34 @@ class TriangulationTester:
         print("  w - Save thresholds to JSON file")
         print("=" * 60)
     
-    def start_cameras_with_arducam_config(self):
-        """Start cameras with Arducam OV9782 configuration."""
-        self.triangulator.cap_left = cv2.VideoCapture(self.cam_left_id)
-        self.triangulator.cap_right = cv2.VideoCapture(self.cam_right_id)
+    def start_cameras_with_basler(self):
+        """Start cameras with Basler configuration."""
+        print("\nOpening Basler cameras...")
         
-        if not self.triangulator.cap_left.isOpened():
-            raise RuntimeError(f"Failed to open left camera (ID: {self.cam_left_id})")
-        if not self.triangulator.cap_right.isOpened():
-            raise RuntimeError(f"Failed to open right camera (ID: {self.cam_right_id})")
+        self.cam_left = get_basler_camera(
+            serial=self.left_serial if self.left_serial else None,
+            device_index=0
+        )
+        self.cam_right = get_basler_camera(
+            serial=self.right_serial if self.right_serial else None,
+            device_index=1
+        )
         
-        print("\nConfiguring cameras (Arducam OV9782 MJPG mode):")
-        settings_left = configure_camera_for_arducam(
-            self.triangulator.cap_left, self.frame_width, self.frame_height)
-        settings_right = configure_camera_for_arducam(
-            self.triangulator.cap_right, self.frame_width, self.frame_height)
+        settings_left = configure_basler_camera(self.cam_left, self.frame_width, self.frame_height)
+        settings_right = configure_basler_camera(self.cam_right, self.frame_width, self.frame_height)
+        
+        self.converter = create_image_converter()
         
         print(f"  LEFT:  {settings_left['actual_width']}x{settings_left['actual_height']} "
-              f"@ {settings_left['actual_fps']:.0f}fps ({settings_left['actual_fourcc']})")
+              f"(Serial: {self.cam_left.GetDeviceInfo().GetSerialNumber()})")
         print(f"  RIGHT: {settings_right['actual_width']}x{settings_right['actual_height']} "
-              f"@ {settings_right['actual_fps']:.0f}fps ({settings_right['actual_fourcc']})")
+              f"(Serial: {self.cam_right.GetDeviceInfo().GetSerialNumber()})")
+    
+    def grab_stereo_frames(self):
+        """Grab frames from both cameras."""
+        frame_left = grab_frame(self.cam_left, self.converter)
+        frame_right = grab_frame(self.cam_right, self.converter)
+        return frame_left, frame_right
     
     def run(self):
         """Main run loop."""
@@ -370,11 +444,12 @@ class TriangulationTester:
         if not self.check_calibration():
             return
         
+        # Initialize triangulator (for calibration data and trackers only)
         try:
             self.triangulator = StereoTriangulator(
                 calibration_dir=self.calibration_dir,
-                cam_left_id=self.cam_left_id,
-                cam_right_id=self.cam_right_id
+                cam_left_id=0,  # Not used - we handle cameras directly
+                cam_right_id=1
             )
         except Exception as e:
             print(f"\nERROR initializing triangulator: {e}")
@@ -382,8 +457,9 @@ class TriangulationTester:
         
         self.apply_thresholds()
         
+        # Start Basler cameras directly
         try:
-            self.start_cameras_with_arducam_config()
+            self.start_cameras_with_basler()
             print("\nCameras started successfully!")
         except RuntimeError as e:
             print(f"\nERROR: {e}")
@@ -394,27 +470,71 @@ class TriangulationTester:
         
         try:
             while True:
-                result = self.triangulator.update()
+                # Grab frames from Basler cameras
+                frame_left, frame_right = self.grab_stereo_frames()
                 
-                if result['left_frame'] is None or result['right_frame'] is None:
+                if frame_left is None or frame_right is None:
                     continue
                 
                 self.update_from_tuner()
                 
-                left_vis, right_vis = self.triangulator.draw_results(result)
+                # Detect ball in both frames
+                result_left = self.triangulator.tracker_left.detect(frame_left)
+                result_right = self.triangulator.tracker_right.detect(frame_right)
                 
+                # Triangulate if both found
+                found_3d = False
+                position_3d = None
+                disparity = None
+                
+                if result_left['found'] and result_right['found']:
+                    point_left = result_left['center']
+                    point_right = result_right['center']
+                    
+                    disparity = point_left[0] - point_right[0]
+                    
+                    if disparity > 0:
+                        X, Y, Z = self.triangulator.triangulate(point_left, point_right)
+                        if Z > 0:
+                            found_3d = True
+                            position_3d = (X, Y, Z)
+                
+                # Draw results
+                left_vis = frame_left.copy()
+                right_vis = frame_right.copy()
+                
+                if result_left['found']:
+                    center = result_left['center']
+                    radius = int(result_left['radius'])
+                    cv2.circle(left_vis, center, radius, (0, 255, 0), 2)
+                    cv2.circle(left_vis, center, 3, (0, 0, 255), -1)
+                
+                if result_right['found']:
+                    center = result_right['center']
+                    radius = int(result_right['radius'])
+                    cv2.circle(right_vis, center, radius, (0, 255, 0), 2)
+                    cv2.circle(right_vis, center, 3, (0, 0, 255), -1)
+                
+                if found_3d:
+                    X, Y, Z = position_3d
+                    cv2.putText(left_vis, f"3D: X={X:.1f} Y={Y:.1f} Z={Z:.1f}", (10, 30),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                    cv2.putText(left_vis, f"Disparity: {disparity:.1f}px", (10, 60),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+                
+                # Resize for display
                 display_width = 640
                 display_height = int(display_width * self.frame_height / self.frame_width)
                 left_vis = cv2.resize(left_vis, (display_width, display_height))
                 right_vis = cv2.resize(right_vis, (display_width, display_height))
                 
-                status = "TRACKING" if result['found_3d'] else "SEARCHING..."
-                color = (0, 255, 0) if result['found_3d'] else (0, 0, 255)
+                status = "TRACKING" if found_3d else "SEARCHING..."
+                color = (0, 255, 0) if found_3d else (0, 0, 255)
                 cv2.putText(left_vis, status, (10, display_height - 40),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
                 
-                l_det = "L: OK" if result['left_detection']['found'] else "L: --"
-                r_det = "R: OK" if result['right_detection']['found'] else "R: --"
+                l_det = "L: OK" if result_left['found'] else "L: --"
+                r_det = "R: OK" if result_right['found'] else "R: --"
                 cv2.putText(left_vis, l_det, (10, display_height - 15),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
                 cv2.putText(right_vis, r_det, (10, display_height - 15),
@@ -426,16 +546,14 @@ class TriangulationTester:
                 combined = cv2.hconcat([left_vis, right_vis])
                 
                 if self.show_debug:
-                    debug_view = self.create_debug_view(
-                        result['left_frame'], result['right_frame'])
+                    debug_view = self.create_debug_view(frame_left, frame_right)
                     cv2.imshow('Debug Masks', debug_view)
                 
                 cv2.imshow('Stereo Triangulation', combined)
                 
-                if result['found_3d']:
-                    X, Y, Z = result['position_3d']
-                    disp = result['disparity']
-                    print(f"\r3D: X={X:7.1f}  Y={Y:7.1f}  Z={Z:7.1f}  (disp={disp:5.1f}px)", end='')
+                if found_3d:
+                    X, Y, Z = position_3d
+                    print(f"\r3D: X={X:7.1f}  Y={Y:7.1f}  Z={Z:7.1f}  (disp={disparity:5.1f}px)", end='')
                 
                 key = cv2.waitKey(1) & 0xFF
                 
@@ -443,8 +561,8 @@ class TriangulationTester:
                     break
                 
                 elif key == ord('s'):
-                    if result['found_3d']:
-                        X, Y, Z = result['position_3d']
+                    if found_3d:
+                        X, Y, Z = position_3d
                         self.measurements.append((X, Y, Z))
                         print(f"\n\n[SAVED] #{len(self.measurements)}: X={X:.1f}, Y={Y:.1f}, Z={Z:.1f}")
                     else:
@@ -479,7 +597,10 @@ class TriangulationTester:
             print("\n\nInterrupted by user")
         
         finally:
-            self.triangulator.stop_cameras()
+            if self.cam_left:
+                self.cam_left.Close()
+            if self.cam_right:
+                self.cam_right.Close()
             cv2.destroyAllWindows()
         
         if self.measurements:

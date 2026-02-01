@@ -1,229 +1,185 @@
 """
-Physics Model - Ball Trajectory Physics
+Physics Model
 
-Implements physics equations for table tennis ball trajectory:
-  - Gravity (primary effect)
-  - Air drag (optional, minor effect for short distances)
-  - Bounce detection (optional)
+Kinematic equations for ball trajectory prediction.
+Includes gravity for realistic parabolic motion.
 
-Part of trajectory prediction pipeline:
-  position_buffer.py  →  velocity_estimator.py  →  trajectory_predictor.py
-                                                          ↓
-                                                   physics_model.py
+Note: This module is camera-agnostic.
+
+COORDINATE SYSTEM:
+    X: Horizontal (right positive)
+    Y: Vertical (down positive in camera coords)
+    Z: Depth (away from camera positive)
+
+UNITS:
+    Position: Same as calibration (typically cm)
+    Velocity: cm/s (or mm/s depending on calibration)
+    Gravity: 981 cm/s² (default, adjust for mm)
 """
 
 import numpy as np
 
-
-# Physical constants
-GRAVITY_CM_S2 = 981.0      # Gravity in cm/s² (9.81 m/s² = 981 cm/s²)
-GRAVITY_M_S2 = 9.81        # Gravity in m/s²
+# Gravity constant in cm/s² (9.81 m/s² = 981 cm/s²)
+GRAVITY_CM_S2 = 981.0
 
 
 class PhysicsModel:
     """
-    Physics model for ball trajectory prediction.
+    Physics-based trajectory prediction.
     
-    Coordinate system (matches stereo calibration):
-        X: Horizontal (left/right)
-        Y: Vertical (positive = down in image, but we treat as up physically)
-        Z: Depth (toward ball, positive = further from camera)
-    
-    IMPORTANT: In camera coordinates, +Y is typically DOWN.
-               Gravity acts in +Y direction (pulls ball down = increasing Y)
-               Adjust gravity_sign based on your coordinate system.
-    
-    Usage:
-        model = PhysicsModel(gravity=981, y_down=True)
-        future_pos = model.predict_position(pos, vel, dt=0.1)
+    Uses kinematic equations:
+        X(t) = X₀ + Vx·t
+        Y(t) = Y₀ + Vy·t + ½·g·t²
+        Z(t) = Z₀ + Vz·t
     """
-    
-    def __init__(self, gravity=981.0, y_down=True, enable_drag=False, drag_coefficient=0.5):
+
+    def __init__(self, gravity=GRAVITY_CM_S2, y_down=True):
         """
         Initialize physics model.
-        
+
         Args:
-            gravity: Gravitational acceleration (cm/s² if using cm)
-            y_down: True if +Y is downward (typical camera coords)
-            enable_drag: Include air resistance (usually not needed)
-            drag_coefficient: Air drag coefficient (if enabled)
+            gravity: Gravity acceleration (default 981 cm/s²)
+            y_down: If True, Y increases downward (camera coords)
         """
         self.gravity = gravity
         self.y_down = y_down
-        self.enable_drag = enable_drag
-        self.drag_coefficient = drag_coefficient
         
-        # Gravity direction: +1 if Y increases downward, -1 if Y increases upward
-        self.gravity_sign = 1.0 if y_down else -1.0
-    
-    def predict_position(self, position, velocity, dt):
+        # In camera coordinates, Y typically increases downward
+        # So gravity is positive when y_down=True
+        self.gravity_sign = 1 if y_down else -1
+
+    def predict_position(self, x0, y0, z0, vx, vy, vz, t):
         """
-        Predict position after time dt using kinematic equations.
-        
-        Equations:
-            X(t) = X₀ + Vx × t
-            Y(t) = Y₀ + Vy × t + ½ × g × t²
-            Z(t) = Z₀ + Vz × t
-        
+        Predict position at time t.
+
         Args:
-            position: (X, Y, Z) current position
-            velocity: (Vx, Vy, Vz) current velocity
-            dt: Time step in seconds
-        
+            x0, y0, z0: Initial position
+            vx, vy, vz: Initial velocity
+            t: Time (seconds)
+
         Returns:
-            (X_new, Y_new, Z_new) predicted position
+            (x, y, z) predicted position
         """
-        x0, y0, z0 = position
-        vx, vy, vz = velocity
+        # X: constant velocity (no air resistance)
+        x = x0 + vx * t
         
-        # Basic kinematics
-        x_new = x0 + vx * dt
-        y_new = y0 + vy * dt + 0.5 * self.gravity_sign * self.gravity * dt * dt
-        z_new = z0 + vz * dt
+        # Y: constant velocity + gravity
+        # Y(t) = Y₀ + Vy·t + ½·g·t²
+        g = self.gravity * self.gravity_sign
+        y = y0 + vy * t + 0.5 * g * t * t
         
-        return (x_new, y_new, z_new)
-    
-    def predict_velocity(self, velocity, dt):
+        # Z: constant velocity (no air resistance)
+        z = z0 + vz * t
+        
+        return x, y, z
+
+    def predict_velocity(self, vx, vy, vz, t):
         """
-        Predict velocity after time dt.
-        
-        Equations:
-            Vx(t) = Vx₀           (no horizontal deceleration)
-            Vy(t) = Vy₀ + g × t   (gravity accelerates downward)
-            Vz(t) = Vz₀           (no depth deceleration)
-        
+        Predict velocity at time t.
+
         Args:
-            velocity: (Vx, Vy, Vz) current velocity
-            dt: Time step in seconds
-        
+            vx, vy, vz: Initial velocity
+            t: Time (seconds)
+
         Returns:
-            (Vx_new, Vy_new, Vz_new) predicted velocity
+            (vx, vy, vz) predicted velocity
         """
-        vx, vy, vz = velocity
+        # X, Z: constant (no air resistance)
+        vx_t = vx
+        vz_t = vz
         
-        vx_new = vx
-        vy_new = vy + self.gravity_sign * self.gravity * dt
-        vz_new = vz
+        # Y: affected by gravity
+        # Vy(t) = Vy₀ + g·t
+        g = self.gravity * self.gravity_sign
+        vy_t = vy + g * t
         
-        return (vx_new, vy_new, vz_new)
-    
-    def predict_trajectory(self, position, velocity, duration, dt=0.001):
+        return vx_t, vy_t, vz_t
+
+    def time_to_z(self, z0, vz, target_z):
         """
-        Predict full trajectory over duration.
-        
+        Calculate time to reach target Z.
+
         Args:
-            position: (X, Y, Z) starting position
-            velocity: (Vx, Vy, Vz) starting velocity
-            duration: Total prediction time in seconds
-            dt: Time step for simulation (smaller = more accurate)
-        
+            z0: Current Z position
+            vz: Z velocity
+            target_z: Target Z position
+
         Returns:
-            List of (X, Y, Z, t) tuples representing trajectory
+            Time in seconds (None if unreachable)
         """
-        trajectory = []
-        
-        pos = np.array(position, dtype=float)
-        vel = np.array(velocity, dtype=float)
-        t = 0.0
-        
-        while t <= duration:
-            trajectory.append((pos[0], pos[1], pos[2], t))
-            
-            # Update velocity (gravity)
-            vel[1] += self.gravity_sign * self.gravity * dt
-            
-            # Update position
-            pos += vel * dt
-            
-            t += dt
-        
-        return trajectory
-    
-    def time_to_z(self, position, velocity, target_z):
-        """
-        Calculate time for ball to reach a specific Z distance.
-        
-        Assumes constant Vz (no Z-axis acceleration).
-        
-        Args:
-            position: (X, Y, Z) current position
-            velocity: (Vx, Vy, Vz) current velocity
-            target_z: Target Z value (e.g., robot's reach plane)
-        
-        Returns:
-            Time in seconds, or None if ball won't reach target_z
-        """
-        z0 = position[2]
-        vz = velocity[2]
-        
-        # Z(t) = Z₀ + Vz × t = target_z
-        # t = (target_z - Z₀) / Vz
-        
-        if abs(vz) < 1e-6:
-            # Ball not moving in Z
+        if vz == 0:
             return None
         
         t = (target_z - z0) / vz
         
-        if t < 0:
-            # Target is behind current position
-            return None
-        
-        return t
-    
-    def position_at_z(self, position, velocity, target_z):
+        # Only return positive time (future)
+        if t > 0:
+            return t
+        return None
+
+    def position_at_z(self, x0, y0, z0, vx, vy, vz, target_z):
         """
-        Calculate ball position when it reaches target_z.
-        
+        Calculate position when ball reaches target Z.
+
         Args:
-            position: (X, Y, Z) current position
-            velocity: (Vx, Vy, Vz) current velocity
-            target_z: Target Z value
-        
+            x0, y0, z0: Current position
+            vx, vy, vz: Current velocity
+            target_z: Target Z plane
+
         Returns:
-            dict with:
-                'position': (X, Y, Z) at target_z
-                'time': Time to reach target_z
-                'velocity': (Vx, Vy, Vz) at that time
-                'valid': True if ball will reach target_z
+            dict with 'x', 'y', 'z', 't', 'vx', 'vy', 'vz', 'valid'
         """
         result = {
-            'position': None,
-            'time': None,
-            'velocity': None,
+            'x': None,
+            'y': None,
+            'z': target_z,
+            't': None,
+            'vx': None,
+            'vy': None,
+            'vz': None,
             'valid': False
         }
         
-        t = self.time_to_z(position, velocity, target_z)
+        # Calculate time to reach target Z
+        t = self.time_to_z(z0, vz, target_z)
         
         if t is None:
             return result
         
-        # Predict position and velocity at time t
-        pred_pos = self.predict_position(position, velocity, t)
-        pred_vel = self.predict_velocity(velocity, t)
+        # Predict position and velocity at that time
+        x, y, z = self.predict_position(x0, y0, z0, vx, vy, vz, t)
+        vx_t, vy_t, vz_t = self.predict_velocity(vx, vy, vz, t)
         
-        result['position'] = pred_pos
-        result['time'] = t
-        result['velocity'] = pred_vel
+        result['x'] = x
+        result['y'] = y
+        result['z'] = z
+        result['t'] = t
+        result['vx'] = vx_t
+        result['vy'] = vy_t
+        result['vz'] = vz_t
         result['valid'] = True
         
         return result
 
+    def predict_trajectory(self, x0, y0, z0, vx, vy, vz, duration, dt=0.01):
+        """
+        Generate full trajectory for visualization.
 
-def predict_ball_position(position, velocity, dt, gravity=981.0, y_down=True):
-    """
-    Convenience function for single position prediction.
-    
-    Args:
-        position: (X, Y, Z) current position
-        velocity: (Vx, Vy, Vz) current velocity
-        dt: Time step in seconds
-        gravity: Gravitational acceleration (cm/s²)
-        y_down: True if +Y is downward
-    
-    Returns:
-        (X_new, Y_new, Z_new) predicted position
-    """
-    model = PhysicsModel(gravity=gravity, y_down=y_down)
-    return model.predict_position(position, velocity, dt)
+        Args:
+            x0, y0, z0: Initial position
+            vx, vy, vz: Initial velocity
+            duration: Total time (seconds)
+            dt: Time step (seconds)
+
+        Returns:
+            List of (x, y, z, t) tuples
+        """
+        trajectory = []
+        t = 0
+        
+        while t <= duration:
+            x, y, z = self.predict_position(x0, y0, z0, vx, vy, vz, t)
+            trajectory.append((x, y, z, t))
+            t += dt
+        
+        return trajectory

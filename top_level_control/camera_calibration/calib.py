@@ -1,3 +1,20 @@
+"""
+Stereo Camera Calibration for Basler acA1920-150uc Cameras
+
+Same calibration logic as Arducam version, but uses pypylon SDK for camera access.
+
+CAMERA: Basler acA1920-150uc USB 3.0
+    - Resolution: 1920x1200
+    - Frame Rate: up to 150fps
+    - Global Shutter
+
+REQUIREMENTS:
+    pip install pypylon
+
+USAGE:
+    python calib.py calibration_settings.yaml
+"""
+
 import cv2 as cv
 import glob
 import numpy as np
@@ -5,113 +22,140 @@ import sys
 from scipy import linalg
 import yaml
 import os
-from datetime import datetime
 
-# This will contain the calibration settings from the calibration_settings.yaml file
+try:
+    from pypylon import pylon
+except ImportError:
+    print("ERROR: pypylon not installed. Run: pip install pypylon")
+    sys.exit(1)
+
+
+# Global calibration settings
 calibration_settings = {}
 
-# Store RMSE values for later saving
-calibration_rmse = {
-    'camera0_intrinsic': None,
-    'camera1_intrinsic': None,
-    'stereo': None
-}
+
+# ============================================================================
+# BASLER CAMERA HELPER FUNCTIONS
+# ============================================================================
+
+def get_basler_camera(serial=None, device_index=0):
+    """
+    Get a Basler camera by serial number or device index.
+    
+    Args:
+        serial: Camera serial number (string) - preferred method
+        device_index: Device index if serial not provided
+    
+    Returns:
+        pylon.InstantCamera object
+    """
+    tlFactory = pylon.TlFactory.GetInstance()
+    devices = tlFactory.EnumerateDevices()
+    
+    if len(devices) == 0:
+        raise RuntimeError("No Basler cameras found")
+    
+    # Find by serial
+    if serial and serial.strip():
+        for device in devices:
+            if device.GetSerialNumber() == serial:
+                camera = pylon.InstantCamera(tlFactory.CreateDevice(device))
+                return camera
+        raise RuntimeError(f"Camera with serial '{serial}' not found. "
+                          f"Available: {[d.GetSerialNumber() for d in devices]}")
+    
+    # Find by index
+    if device_index >= len(devices):
+        raise RuntimeError(f"Device index {device_index} out of range. Found {len(devices)} cameras.")
+    
+    camera = pylon.InstantCamera(tlFactory.CreateDevice(devices[device_index]))
+    return camera
 
 
-def configure_camera_for_arducam(cap, width, height):
+def configure_basler_camera(camera, width, height):
     """
-    Configure camera specifically for Arducam OV9782 global shutter cameras.
-    Forces MJPG codec and 1280x800 resolution, then verifies actual settings.
-    Returns dict with actual accepted values.
+    Configure Basler camera settings.
+    
+    Args:
+        camera: pylon.InstantCamera object
+        width: Desired width
+        height: Desired height
     """
-    # First, set the FOURCC to MJPG - this is crucial for getting full framerate
-    fourcc_mjpg = cv.VideoWriter_fourcc(*'MJPG')
-    cap.set(cv.CAP_PROP_FOURCC, fourcc_mjpg)
+    camera.Open()
     
     # Set resolution
-    cap.set(cv.CAP_PROP_FRAME_WIDTH, width)
-    cap.set(cv.CAP_PROP_FRAME_HEIGHT, height)
+    camera.Width.SetValue(width)
+    camera.Height.SetValue(height)
     
-    # Optional: try to set a higher framerate (Arducam supports 120fps at 1280x720 MJPG?)
-    cap.set(cv.CAP_PROP_FPS, 120)
+    # Center ROI
+    max_width = camera.WidthMax.GetValue()
+    max_height = camera.HeightMax.GetValue()
+    offset_x = (max_width - width) // 2
+    offset_y = (max_height - height) // 2
+    camera.OffsetX.SetValue(offset_x)
+    camera.OffsetY.SetValue(offset_y)
     
-    # Now read back the ACTUAL values the camera accepted
-    actual_width = int(cap.get(cv.CAP_PROP_FRAME_WIDTH))
-    actual_height = int(cap.get(cv.CAP_PROP_FRAME_HEIGHT))
-    actual_fps = cap.get(cv.CAP_PROP_FPS)
-    actual_fourcc_int = int(cap.get(cv.CAP_PROP_FOURCC))
+    # Exposure and gain
+    camera.ExposureAuto.SetValue("Off")
+    camera.ExposureTime.SetValue(5000)  # 5ms
+    camera.GainAuto.SetValue("Off")
+    camera.Gain.SetValue(0)
     
-    # Decode FOURCC integer back to string
-    actual_fourcc_str = "".join([chr((actual_fourcc_int >> 8 * i) & 0xFF) for i in range(4)])
-    
-    settings = {
-        'requested_width': width,
-        'requested_height': height,
-        'requested_fourcc': 'MJPG',
-        'actual_width': actual_width,
-        'actual_height': actual_height,
-        'actual_fps': actual_fps,
-        'actual_fourcc': actual_fourcc_str,
-        'settings_match': (actual_width == width and actual_height == height and 'MJPG' in actual_fourcc_str.upper())
-    }
-    
-    return settings
+    # Print actual settings
+    actual_width = camera.Width.GetValue()
+    actual_height = camera.Height.GetValue()
+    print(f"    Resolution: {actual_width}x{actual_height}")
 
 
-def print_camera_settings(camera_name, settings):
+def create_basler_converter():
+    """Create image format converter for BGR output."""
+    converter = pylon.ImageFormatConverter()
+    converter.OutputPixelFormat = pylon.PixelType_BGR8packed
+    converter.OutputBitAlignment = pylon.OutputBitAlignment_MsbAligned
+    return converter
+
+
+def grab_frame_basler(camera, converter):
     """
-    Pretty print camera settings for verification.
-    """
-    print("\n" + "="*60)
-    print(f"CAMERA SETTINGS: {camera_name}")
-    print("="*60)
-    print(f"  Requested Resolution: {settings['requested_width']}x{settings['requested_height']}")
-    print(f"  Actual Resolution:    {settings['actual_width']}x{settings['actual_height']}")
-    print(f"  Requested FOURCC:     {settings['requested_fourcc']}")
-    print(f"  Actual FOURCC:        {settings['actual_fourcc']}")
-    print(f"  Actual FPS:           {settings['actual_fps']}")
+    Grab a single frame from Basler camera.
     
-    if settings['settings_match']:
-        print("  STATUS: ✓ Settings accepted correctly!")
-    else:
-        print("  STATUS: ⚠ WARNING - Settings may not match requested values!")
-        if settings['actual_width'] != settings['requested_width'] or settings['actual_height'] != settings['requested_height']:
-            print(f"           Resolution mismatch!")
-        if 'MJPG' not in settings['actual_fourcc'].upper():
-            print(f"           FOURCC mismatch - may affect framerate!")
-    print("="*60 + "\n")
+    Returns:
+        numpy array (BGR) or None
+    """
+    if not camera.IsGrabbing():
+        camera.StartGrabbing(pylon.GrabStrategy_LatestImageOnly)
     
-    return settings['settings_match']
+    grab_result = camera.RetrieveResult(5000, pylon.TimeoutHandling_ThrowException)
+    
+    if grab_result.GrabSucceeded():
+        image = converter.Convert(grab_result)
+        frame = image.GetArray()
+        grab_result.Release()
+        return frame
+    
+    grab_result.Release()
+    return None
 
 
-def save_rmse_to_file(rmse_value, filepath, description=""):
-    """
-    Save RMSE value to a separate file for easy reference.
-    """
-    with open(filepath, 'w') as f:
-        f.write(f"# {description}\n")
-        f.write(f"# Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-        f.write(f"RMSE: {rmse_value}\n")
-    print(f"  Saved RMSE ({rmse_value:.6f}) to: {filepath}")
+# ============================================================================
+# CALIBRATION FUNCTIONS (Same logic as Arducam version)
+# ============================================================================
 
-
-# Given Projection matrices P1 and P2, and pixel coordinates point1 and point2, return triangulated 3D point.
 def DLT(P1, P2, point1, point2):
+    """Given Projection matrices P1 and P2, and pixel coordinates point1 and point2, return triangulated 3D point."""
     A = [point1[1]*P1[2,:] - P1[1,:],
          P1[0,:] - point1[0]*P1[2,:],
          point2[1]*P2[2,:] - P2[1,:],
          P2[0,:] - point2[0]*P2[2,:]
         ]
     A = np.array(A).reshape((4,4))
-
     B = A.transpose() @ A
-    U, s, Vh = linalg.svd(B, full_matrices = False)
-
+    U, s, Vh = linalg.svd(B, full_matrices=False)
     return Vh[3,0:3]/Vh[3,3]
 
 
-# Open and load the calibration_settings.yaml file
 def parse_calibration_settings_file(filename):
+    """Open and load the calibration_settings.yaml file."""
     global calibration_settings
 
     if not os.path.exists(filename):
@@ -123,60 +167,46 @@ def parse_calibration_settings_file(filename):
     with open(filename) as f:
         calibration_settings = yaml.safe_load(f)
 
-    # Rudimentary check to make sure correct file was loaded
     if 'camera0' not in calibration_settings.keys():
-        print('camera0 key was not found in the settings file. Check if correct calibration_settings.yaml file was passed')
+        print('camera0 key was not found in the settings file.')
         quit()
-    
-    # Print loaded settings for verification
-    print("\n" + "="*60)
-    print("LOADED CALIBRATION SETTINGS")
-    print("="*60)
-    for key, value in calibration_settings.items():
-        print(f"  {key}: {value}")
-    print("="*60 + "\n")
 
 
-# Open camera stream and save frames
 def save_frames_single_camera(camera_name):
-    # Create frames directory
+    """Open camera stream and save calibration frames."""
+    
     if not os.path.exists('frames'):
         os.mkdir('frames')
 
     # Get settings
-    camera_device_id = calibration_settings[camera_name]
+    camera_serial = calibration_settings[camera_name]
     width = calibration_settings['frame_width']
     height = calibration_settings['frame_height']
     number_to_save = calibration_settings['mono_calibration_frames']
     view_resize = calibration_settings['view_resize']
     cooldown_time = calibration_settings['cooldown']
 
-    # Open video stream
-    cap = cv.VideoCapture(camera_device_id)
-    
-    # Configure camera with MJPG and verify settings
-    settings = configure_camera_for_arducam(cap, width, height)
-    settings_ok = print_camera_settings(camera_name, settings)
-    
-    if not settings_ok:
-        print("WARNING: Camera settings don't match requested values.")
-        print("         Calibration may still work but verify image quality.")
-        user_input = input("         Continue anyway? (y/n): ")
-        if user_input.lower() != 'y':
-            cap.release()
-            quit()
+    # Determine device index from camera name
+    device_index = 0 if camera_name == 'camera0' else 1
+
+    # Open Basler camera
+    print(f"\n>>> Opening {camera_name}...")
+    camera = get_basler_camera(serial=camera_serial if camera_serial else None, 
+                                device_index=device_index)
+    configure_basler_camera(camera, width, height)
+    converter = create_basler_converter()
     
     cooldown = cooldown_time
     start = False
     saved_count = 0
 
     while True:
-        ret, frame = cap.read()
-        if ret == False:
+        frame = grab_frame_basler(camera, converter)
+        if frame is None:
             print("No video data received from camera. Exiting...")
             quit()
 
-        frame_small = cv.resize(frame, None, fx = 1/view_resize, fy=1/view_resize)
+        frame_small = cv.resize(frame, None, fx=1/view_resize, fy=1/view_resize)
 
         if not start:
             cv.putText(frame_small, "Press SPACEBAR to start collection frames", (50,50), cv.FONT_HERSHEY_COMPLEX, 1, (0,0,255), 1)
@@ -186,7 +216,6 @@ def save_frames_single_camera(camera_name):
             cv.putText(frame_small, "Cooldown: " + str(cooldown), (50,50), cv.FONT_HERSHEY_COMPLEX, 1, (0,255,0), 1)
             cv.putText(frame_small, "Num frames: " + str(saved_count), (50,100), cv.FONT_HERSHEY_COMPLEX, 1, (0,255,0), 1)
             
-            # Save the frame when cooldown reaches 0
             if cooldown <= 0:
                 savename = os.path.join('frames', camera_name + '_' + str(saved_count) + '.png')
                 cv.imwrite(savename, frame)
@@ -197,6 +226,7 @@ def save_frames_single_camera(camera_name):
         k = cv.waitKey(1)
         
         if k == 27:
+            camera.Close()
             quit()
 
         if k == 32:
@@ -205,44 +235,29 @@ def save_frames_single_camera(camera_name):
         if saved_count == number_to_save:
             break
 
-    cap.release()
+    camera.Close()
     cv.destroyAllWindows()
 
 
-# Calibrate single camera to obtain camera intrinsic parameters from saved frames.
-def calibrate_camera_for_intrinsic_parameters(images_prefix, camera_name="camera"):
-    global calibration_rmse
+def calibrate_camera_for_intrinsic_parameters(images_prefix):
+    """Calibrate single camera to obtain camera intrinsic parameters from saved frames."""
     
     images_names = glob.glob(images_prefix)
-    
-    if len(images_names) == 0:
-        print(f"ERROR: No images found matching pattern: {images_prefix}")
-        quit()
-
-    # Read all frames
     images = [cv.imread(imname, 1) for imname in images_names]
-    
-    print(f"\nCalibrating {camera_name} with {len(images)} images...")
 
-    # Criteria used by checkerboard pattern detector
     criteria = (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 100, 0.001)
 
     rows = calibration_settings['checkerboard_rows']
     columns = calibration_settings['checkerboard_columns']
     world_scaling = calibration_settings['checkerboard_box_size_scale']
 
-    # Coordinates of squares in the checkerboard world space
     objp = np.zeros((rows*columns,3), np.float32)
     objp[:,:2] = np.mgrid[0:rows,0:columns].T.reshape(-1,2)
     objp = world_scaling * objp
 
-    # Frame dimensions
     width = images[0].shape[1]
     height = images[0].shape[0]
-    
-    print(f"  Image dimensions: {width}x{height}")
 
-    # Pixel coordinates of checkerboards
     imgpoints = []
     objpoints = []
 
@@ -260,41 +275,24 @@ def calibrate_camera_for_intrinsic_parameters(images_prefix, camera_name="camera
             k = cv.waitKey(0)
 
             if k & 0xFF == ord('s'):
-                print(f'  Skipping frame {i}')
+                print('skipping')
                 continue
 
             objpoints.append(objp)
             imgpoints.append(corners)
-        else:
-            print(f"  WARNING: Could not find checkerboard in frame {i}")
 
     cv.destroyAllWindows()
-    
-    if len(objpoints) < 3:
-        print("ERROR: Not enough valid calibration frames (need at least 3)")
-        quit()
-    
-    print(f"  Using {len(objpoints)} valid frames for calibration...")
-    
     ret, cmtx, dist, rvecs, tvecs = cv.calibrateCamera(objpoints, imgpoints, (width, height), None, None)
+    print('rmse:', ret)
+    print('camera matrix:\n', cmtx)
+    print('distortion coeffs:', dist)
+
+    return cmtx, dist
+
+
+def save_camera_intrinsics(camera_matrix, distortion_coefs, camera_name):
+    """Save camera intrinsic parameters to file."""
     
-    # Store RMSE for later
-    if 'camera0' in camera_name:
-        calibration_rmse['camera0_intrinsic'] = ret
-    elif 'camera1' in camera_name:
-        calibration_rmse['camera1_intrinsic'] = ret
-    
-    print(f'\n  {camera_name} Intrinsic Calibration Results:')
-    print(f'  RMSE: {ret:.6f}')
-    print(f'  Camera matrix:\n{cmtx}')
-    print(f'  Distortion coeffs: {dist}')
-
-    return cmtx, dist, ret
-
-
-# Save camera intrinsic parameters to file
-def save_camera_intrinsics(camera_matrix, distortion_coefs, camera_name, rmse_value):
-    # Create folder if it does not exist
     if not os.path.exists('camera_parameters'):
         os.mkdir('camera_parameters')
 
@@ -311,58 +309,42 @@ def save_camera_intrinsics(camera_matrix, distortion_coefs, camera_name, rmse_va
     for en in distortion_coefs[0]:
         outf.write(str(en) + ' ')
     outf.write('\n')
-    outf.close()
-    
-    print(f"  Saved intrinsics to: {out_filename}")
-    
-    # Save RMSE to separate file
-    rmse_filename = os.path.join('camera_parameters', camera_name + '_intrinsics_rmse.dat')
-    save_rmse_to_file(rmse_value, rmse_filename, f"{camera_name} Intrinsic Calibration RMSE")
 
 
-# Open both cameras and take calibration frames
 def save_frames_two_cams(camera0_name, camera1_name):
-    # Create frames directory
+    """Open both cameras and take calibration frames."""
+    
     if not os.path.exists('frames_pair'):
         os.mkdir('frames_pair')
 
-    # Settings for taking data
     view_resize = calibration_settings['view_resize']
     cooldown_time = calibration_settings['cooldown']    
     number_to_save = calibration_settings['stereo_calibration_frames']
-
-    # Open the video streams
-    cap0 = cv.VideoCapture(calibration_settings[camera0_name])
-    cap1 = cv.VideoCapture(calibration_settings[camera1_name])
-
     width = calibration_settings['frame_width']
     height = calibration_settings['frame_height']
     
-    # Configure both cameras with MJPG and verify settings
-    print("\nConfiguring cameras for stereo frame capture...")
-    settings0 = configure_camera_for_arducam(cap0, width, height)
-    settings1 = configure_camera_for_arducam(cap1, width, height)
+    serial0 = calibration_settings[camera0_name]
+    serial1 = calibration_settings[camera1_name]
+
+    # Open both Basler cameras
+    print("\n>>> Opening cameras for stereo capture...")
+    cam0 = get_basler_camera(serial=serial0 if serial0 else None, device_index=0)
+    cam1 = get_basler_camera(serial=serial1 if serial1 else None, device_index=1)
     
-    settings0_ok = print_camera_settings(camera0_name, settings0)
-    settings1_ok = print_camera_settings(camera1_name, settings1)
+    configure_basler_camera(cam0, width, height)
+    configure_basler_camera(cam1, width, height)
     
-    if not (settings0_ok and settings1_ok):
-        print("WARNING: One or both camera settings don't match requested values.")
-        user_input = input("         Continue anyway? (y/n): ")
-        if user_input.lower() != 'y':
-            cap0.release()
-            cap1.release()
-            quit()
+    converter = create_basler_converter()
 
     cooldown = cooldown_time
     start = False
     saved_count = 0
     
     while True:
-        ret0, frame0 = cap0.read()
-        ret1, frame1 = cap1.read()
+        frame0 = grab_frame_basler(cam0, converter)
+        frame1 = grab_frame_basler(cam1, converter)
 
-        if not ret0 or not ret1:
+        if frame0 is None or frame1 is None:
             print('Cameras not returning video data. Exiting...')
             quit()
 
@@ -404,52 +386,38 @@ def save_frames_two_cams(camera0_name, camera1_name):
         if saved_count == number_to_save:
             break
 
-    cap0.release()
-    cap1.release()
+    cam0.Close()
+    cam1.Close()
     cv.destroyAllWindows()
 
 
-# Open paired calibration frames and stereo calibrate for cam0 to cam1 coordinate transformations
 def stereo_calibrate(mtx0, dist0, mtx1, dist1, frames_prefix_c0, frames_prefix_c1):
-    global calibration_rmse
+    """Open paired calibration frames and stereo calibrate for cam0 to cam1 coordinate transformations."""
     
-    # Read the synched frames
     c0_images_names = sorted(glob.glob(frames_prefix_c0))
     c1_images_names = sorted(glob.glob(frames_prefix_c1))
-    
-    if len(c0_images_names) == 0 or len(c1_images_names) == 0:
-        print("ERROR: No stereo calibration images found!")
-        quit()
 
-    # Open images
     c0_images = [cv.imread(imname, 1) for imname in c0_images_names]
     c1_images = [cv.imread(imname, 1) for imname in c1_images_names]
-    
-    print(f"\nStereo calibrating with {len(c0_images)} image pairs...")
 
-    # Criteria for calibration
     criteria = (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 100, 0.001)
 
-    # Calibration pattern settings
     rows = calibration_settings['checkerboard_rows']
     columns = calibration_settings['checkerboard_columns']
     world_scaling = calibration_settings['checkerboard_box_size_scale']
 
-    # Coordinates of squares in the checkerboard world space
     objp = np.zeros((rows*columns,3), np.float32)
     objp[:,:2] = np.mgrid[0:rows,0:columns].T.reshape(-1,2)
     objp = world_scaling * objp
 
-    # Frame dimensions
     width = c0_images[0].shape[1]
     height = c0_images[0].shape[0]
 
-    # Pixel coordinates of checkerboards
     imgpoints_left = []
     imgpoints_right = []
     objpoints = []
 
-    for i, (frame0, frame1) in enumerate(zip(c0_images, c1_images)):
+    for frame0, frame1 in zip(c0_images, c1_images):
         gray1 = cv.cvtColor(frame0, cv.COLOR_BGR2GRAY)
         gray2 = cv.cvtColor(frame1, cv.COLOR_BGR2GRAY)
         c_ret1, corners1 = cv.findChessboardCorners(gray1, (rows, columns), None)
@@ -472,45 +440,24 @@ def stereo_calibrate(mtx0, dist0, mtx1, dist1, frames_prefix_c0, frames_prefix_c
             k = cv.waitKey(0)
 
             if k & 0xFF == ord('s'):
-                print(f'  Skipping frame pair {i}')
+                print('skipping')
                 continue
 
             objpoints.append(objp)
             imgpoints_left.append(corners1)
             imgpoints_right.append(corners2)
-        else:
-            print(f"  WARNING: Could not find checkerboard in frame pair {i}")
 
-    cv.destroyAllWindows()
-    
-    if len(objpoints) < 3:
-        print("ERROR: Not enough valid stereo calibration frame pairs (need at least 3)")
-        quit()
-    
-    print(f"  Using {len(objpoints)} valid frame pairs for stereo calibration...")
-    
     stereocalibration_flags = cv.CALIB_FIX_INTRINSIC
-    ret, CM1, dist0, CM2, dist1, R, T, E, F = cv.stereoCalibrate(
-        objpoints, imgpoints_left, imgpoints_right, 
-        mtx0, dist0, mtx1, dist1, 
-        (width, height), 
-        criteria=criteria, 
-        flags=stereocalibration_flags
-    )
-    
-    # Store RMSE
-    calibration_rmse['stereo'] = ret
+    ret, CM1, dist0, CM2, dist1, R, T, E, F = cv.stereoCalibrate(objpoints, imgpoints_left, imgpoints_right, mtx0, dist0,
+                                                                 mtx1, dist1, (width, height), criteria=criteria, flags=stereocalibration_flags)
 
-    print(f'\n  Stereo Calibration Results:')
-    print(f'  RMSE: {ret:.6f}')
-    print(f'  Rotation matrix R:\n{R}')
-    print(f'  Translation vector T:\n{T.flatten()}')
-    
-    return R, T, ret
+    print('rmse:', ret)
+    cv.destroyAllWindows()
+    return R, T
 
 
-# Converts Rotation matrix R and Translation vector T into a homogeneous representation matrix
 def _make_homogeneous_rep_matrix(R, t):
+    """Converts Rotation matrix R and Translation vector T into a homogeneous representation matrix."""
     P = np.zeros((4,4))
     P[:3,:3] = R
     P[:3, 3] = t.reshape(3)
@@ -518,14 +465,15 @@ def _make_homogeneous_rep_matrix(R, t):
     return P
 
 
-# Turn camera calibration data into projection matrix
 def get_projection_matrix(cmtx, R, T):
+    """Turn camera calibration data into projection matrix."""
     P = cmtx @ _make_homogeneous_rep_matrix(R, T)[:3,:]
     return P
 
 
-# After calibrating, we can see shifted coordinate axes in the video feeds directly
-def check_calibration(camera0_name, camera0_data, camera1_name, camera1_data, _zshift = 50.):
+def check_calibration(camera0_name, camera0_data, camera1_name, camera1_data, _zshift=50.):
+    """After calibrating, we can see shifted coordinate axes in the video feeds directly."""
+    
     cmtx0 = np.array(camera0_data[0])
     dist0 = np.array(camera0_data[1])
     R0 = np.array(camera0_data[2])
@@ -538,7 +486,6 @@ def check_calibration(camera0_name, camera0_data, camera1_name, camera1_data, _z
     P0 = get_projection_matrix(cmtx0, R0, T0)
     P1 = get_projection_matrix(cmtx1, R1, T1)
 
-    # Define coordinate axes in 3D space
     coordinate_points = np.array([[0.,0.,0.],
                                   [1.,0.,0.],
                                   [0.,1.,0.],
@@ -546,7 +493,6 @@ def check_calibration(camera0_name, camera0_data, camera1_name, camera1_data, _z
     z_shift = np.array([0.,0.,_zshift]).reshape((1, 3))
     draw_axes_points = 5 * coordinate_points + z_shift
 
-    # Project 3D points to each camera view
     pixel_points_camera0 = []
     pixel_points_camera1 = []
     for _p in draw_axes_points:
@@ -563,27 +509,23 @@ def check_calibration(camera0_name, camera0_data, camera1_name, camera1_data, _z
     pixel_points_camera0 = np.array(pixel_points_camera0)
     pixel_points_camera1 = np.array(pixel_points_camera1)
 
-    # Open the video streams
-    cap0 = cv.VideoCapture(calibration_settings[camera0_name])
-    cap1 = cv.VideoCapture(calibration_settings[camera1_name])
-
+    # Open Basler cameras
     width = calibration_settings['frame_width']
     height = calibration_settings['frame_height']
+    serial0 = calibration_settings[camera0_name]
+    serial1 = calibration_settings[camera1_name]
     
-    # Configure cameras with MJPG
-    settings0 = configure_camera_for_arducam(cap0, width, height)
-    settings1 = configure_camera_for_arducam(cap1, width, height)
-    print_camera_settings(camera0_name + " (verification)", settings0)
-    print_camera_settings(camera1_name + " (verification)", settings1)
-
-    print("\nShowing calibration verification - press ESC to exit")
-    print("RGB axes should appear correctly oriented in both views")
+    cam0 = get_basler_camera(serial=serial0 if serial0 else None, device_index=0)
+    cam1 = get_basler_camera(serial=serial1 if serial1 else None, device_index=1)
+    configure_basler_camera(cam0, width, height)
+    configure_basler_camera(cam1, width, height)
+    converter = create_basler_converter()
 
     while True:
-        ret0, frame0 = cap0.read()
-        ret1, frame1 = cap1.read()
+        frame0 = grab_frame_basler(cam0, converter)
+        frame1 = grab_frame_basler(cam1, converter)
 
-        if not ret0 or not ret1:
+        if frame0 is None or frame1 is None:
             print('Video stream not returning frame data')
             quit()
 
@@ -606,71 +548,14 @@ def check_calibration(camera0_name, camera0_data, camera1_name, camera1_data, _z
         if k == 27:
             break
 
-    cap0.release()
-    cap1.release()
+    cam0.Close()
+    cam1.Close()
     cv.destroyAllWindows()
 
 
-def get_world_space_origin(cmtx, dist, img_path):
-    frame = cv.imread(img_path, 1)
-
-    rows = calibration_settings['checkerboard_rows']
-    columns = calibration_settings['checkerboard_columns']
-    world_scaling = calibration_settings['checkerboard_box_size_scale']
-
-    objp = np.zeros((rows*columns,3), np.float32)
-    objp[:,:2] = np.mgrid[0:rows,0:columns].T.reshape(-1,2)
-    objp = world_scaling * objp
-
-    gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
-    ret, corners = cv.findChessboardCorners(gray, (rows, columns), None)
-
-    cv.drawChessboardCorners(frame, (rows,columns), corners, ret)
-    cv.putText(frame, "If you don't see detected points, try with a different image", (50,50), cv.FONT_HERSHEY_COMPLEX, 1, (0,0,255), 1)
-    cv.imshow('img', frame)
-    cv.waitKey(0)
-
-    ret, rvec, tvec = cv.solvePnP(objp, corners, cmtx, dist)
-    R, _ = cv.Rodrigues(rvec)
-
-    return R, tvec
-
-
-def get_cam1_to_world_transforms(cmtx0, dist0, R_W0, T_W0, 
-                                 cmtx1, dist1, R_01, T_01,
-                                 image_path0,
-                                 image_path1):
-    frame0 = cv.imread(image_path0, 1)
-    frame1 = cv.imread(image_path1, 1)
-
-    unitv_points = 5 * np.array([[0,0,0], [1,0,0], [0,1,0], [0,0,1]], dtype = 'float32').reshape((4,1,3))
-    colors = [(0,0,255), (0,255,0), (255,0,0)]
-
-    points, _ = cv.projectPoints(unitv_points, R_W0, T_W0, cmtx0, dist0)
-    points = points.reshape((4,2)).astype(np.int32)
-    origin = tuple(points[0])
-    for col, _p in zip(colors, points[1:]):
-        _p = tuple(_p.astype(np.int32))
-        cv.line(frame0, origin, _p, col, 2)
-
-    R_W1 = R_01 @ R_W0
-    T_W1 = R_01 @ T_W0 + T_01
-    points, _ = cv.projectPoints(unitv_points, R_W1, T_W1, cmtx1, dist1)
-    points = points.reshape((4,2)).astype(np.int32)
-    origin = tuple(points[0])
-    for col, _p in zip(colors, points[1:]):
-        _p = tuple(_p.astype(np.int32))
-        cv.line(frame1, origin, _p, col, 2)
-
-    cv.imshow('frame0', frame0)
-    cv.imshow('frame1', frame1)
-    cv.waitKey(0)
-
-    return R_W1, T_W1
-
-
-def save_extrinsic_calibration_parameters(R0, T0, R1, T1, stereo_rmse=None, prefix=''):
-    # Create folder if it does not exist
+def save_extrinsic_calibration_parameters(R0, T0, R1, T1, prefix=''):
+    """Save extrinsic calibration parameters."""
+    
     if not os.path.exists('camera_parameters'):
         os.mkdir('camera_parameters')
 
@@ -689,8 +574,6 @@ def save_extrinsic_calibration_parameters(R0, T0, R1, T1, stereo_rmse=None, pref
             outf.write(str(en) + ' ')
         outf.write('\n')
     outf.close()
-    
-    print(f"  Saved extrinsics to: {camera0_rot_trans_filename}")
 
     camera1_rot_trans_filename = os.path.join('camera_parameters', prefix + 'camera1_rot_trans.dat')
     outf = open(camera1_rot_trans_filename, 'w')
@@ -707,70 +590,46 @@ def save_extrinsic_calibration_parameters(R0, T0, R1, T1, stereo_rmse=None, pref
             outf.write(str(en) + ' ')
         outf.write('\n')
     outf.close()
-    
-    print(f"  Saved extrinsics to: {camera1_rot_trans_filename}")
-    
-    # Save stereo RMSE to separate file
-    if stereo_rmse is not None:
-        rmse_filename = os.path.join('camera_parameters', prefix + 'stereo_calibration_rmse.dat')
-        save_rmse_to_file(stereo_rmse, rmse_filename, "Stereo Calibration RMSE")
 
     return R0, T0, R1, T1
 
 
 if __name__ == '__main__':
+
     if len(sys.argv) != 2:
-        print('Call with settings filename: "python3 calibrate.py calibration_settings.yaml"')
+        print('Call with settings filename: "python calib.py calibration_settings.yaml"')
         quit()
     
-    print("\n" + "="*60)
-    print("STEREO CAMERA CALIBRATION PIPELINE")
-    print("Optimized for Arducam OV9782 Global Shutter Cameras")
-    print("="*60)
-    
-    # Open and parse the settings file
     parse_calibration_settings_file(sys.argv[1])
 
     """Step1. Save calibration frames for single cameras"""
-    print("\n>>> STEP 1: Capturing mono calibration frames")
     save_frames_single_camera('camera0')
     save_frames_single_camera('camera1')
 
     """Step2. Obtain camera intrinsic matrices and save them"""
-    print("\n>>> STEP 2: Computing intrinsic parameters")
-    # Camera0 intrinsics
     images_prefix = os.path.join('frames', 'camera0*')
-    cmtx0, dist0, rmse0 = calibrate_camera_for_intrinsic_parameters(images_prefix, 'camera0') 
-    save_camera_intrinsics(cmtx0, dist0, 'camera0', rmse0)
+    cmtx0, dist0 = calibrate_camera_for_intrinsic_parameters(images_prefix) 
+    save_camera_intrinsics(cmtx0, dist0, 'camera0')
     
-    # Camera1 intrinsics
     images_prefix = os.path.join('frames', 'camera1*')
-    cmtx1, dist1, rmse1 = calibrate_camera_for_intrinsic_parameters(images_prefix, 'camera1')
-    save_camera_intrinsics(cmtx1, dist1, 'camera1', rmse1)
+    cmtx1, dist1 = calibrate_camera_for_intrinsic_parameters(images_prefix)
+    save_camera_intrinsics(cmtx1, dist1, 'camera1')
 
     """Step3. Save calibration frames for both cameras simultaneously"""
-    print("\n>>> STEP 3: Capturing stereo calibration frames")
     save_frames_two_cams('camera0', 'camera1')
 
     """Step4. Use paired calibration pattern frames to obtain camera0 to camera1 rotation and translation"""
-    print("\n>>> STEP 4: Computing stereo calibration (extrinsics)")
     frames_prefix_c0 = os.path.join('frames_pair', 'camera0*')
     frames_prefix_c1 = os.path.join('frames_pair', 'camera1*')
-    R, T, stereo_rmse = stereo_calibrate(cmtx0, dist0, cmtx1, dist1, frames_prefix_c0, frames_prefix_c1)
+    R, T = stereo_calibrate(cmtx0, dist0, cmtx1, dist1, frames_prefix_c0, frames_prefix_c1)
 
     """Step5. Save calibration data where camera0 defines the world space origin."""
-    print("\n>>> STEP 5: Saving calibration parameters")
     R0 = np.eye(3, dtype=np.float32)
     T0 = np.array([0., 0., 0.]).reshape((3, 1))
 
-    save_extrinsic_calibration_parameters(R0, T0, R, T, stereo_rmse)
-    R1 = R
-    T1 = T
+    save_extrinsic_calibration_parameters(R0, T0, R, T)
+    R1 = R; T1 = T
     
-    # Check calibration visually
-    print(">>> STEP 6: Visual verification")
     camera0_data = [cmtx0, dist0, R0, T0]
     camera1_data = [cmtx1, dist1, R1, T1]
-    check_calibration('camera0', camera0_data, 'camera1', camera1_data, _zshift = 60.)
-
-    print("\nCalibration complete! Files saved to 'camera_parameters/' directory.")
+    check_calibration('camera0', camera0_data, 'camera1', camera1_data, _zshift=60.)

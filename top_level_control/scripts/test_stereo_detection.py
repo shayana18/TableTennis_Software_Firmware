@@ -5,8 +5,11 @@ Test ball tracking on both cameras with INDEPENDENT thresholds.
 Each camera can have different HSV and LAB thresholds to handle
 different lighting conditions.
 
-CAMERA: Arducam OV9782 Global Shutter USB Camera
-        1MP, 100fps @ 1280x800 MJPG
+CAMERA: Basler acA1920-150uc USB 3.0
+        2.3MP, 150fps @ 1920x1200
+
+REQUIREMENTS:
+    pip install pypylon
 
 CONTROLS:
     q - Quit
@@ -35,151 +38,174 @@ import json
 import numpy as np
 import yaml
 
+try:
+    from pypylon import pylon
+except ImportError:
+    print("ERROR: pypylon not installed. Run: pip install pypylon")
+    sys.exit(1)
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from tracking.ball_tracker import EnhancedBallTracker
 
 
-def configure_camera_for_arducam(cap, width=1280, height=720):
-    """
-    Configure camera for Arducam OV9782 global shutter cameras.
-    Forces MJPG codec and specified resolution, then verifies actual settings.
+# ============================================================================
+# BASLER CAMERA FUNCTIONS
+# ============================================================================
+
+def get_basler_camera(serial=None, device_index=0):
+    """Get Basler camera by serial or index."""
+    tlFactory = pylon.TlFactory.GetInstance()
+    devices = tlFactory.EnumerateDevices()
     
-    Args:
-        cap: cv2.VideoCapture object
-        width: Desired width (default 1280)
-        height: Desired height (default 800)
+    if len(devices) == 0:
+        raise RuntimeError("No Basler cameras found")
     
-    Returns:
-        dict with actual accepted values
-    """
-    # Set FOURCC to MJPG first - critical for getting full framerate on Arducam
-    fourcc_mjpg = cv2.VideoWriter_fourcc(*'MJPG')
-    cap.set(cv2.CAP_PROP_FOURCC, fourcc_mjpg)
+    if serial and serial.strip():
+        for device in devices:
+            if device.GetSerialNumber() == serial:
+                return pylon.InstantCamera(tlFactory.CreateDevice(device))
+        raise RuntimeError(f"Camera with serial '{serial}' not found")
     
-    # Set resolution
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+    if device_index >= len(devices):
+        raise RuntimeError(f"Device index {device_index} out of range")
     
-    # Try to set higher framerate (Arducam OV9782 supports 100fps at 1280x800 MJPG)
-    cap.set(cv2.CAP_PROP_FPS, 120)
+    return pylon.InstantCamera(tlFactory.CreateDevice(devices[device_index]))
+
+
+def configure_basler_camera(camera, width=1920, height=1200):
+    """Configure Basler camera settings."""
+    camera.Open()
     
-    # Disable auto-exposure for consistent detection
-    cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)
+    camera.Width.SetValue(width)
+    camera.Height.SetValue(height)
     
-    # Read back actual values
-    actual_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    actual_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    actual_fps = cap.get(cv2.CAP_PROP_FPS)
-    actual_fourcc_int = int(cap.get(cv2.CAP_PROP_FOURCC))
+    max_w = camera.WidthMax.GetValue()
+    max_h = camera.HeightMax.GetValue()
+    camera.OffsetX.SetValue((max_w - width) // 2)
+    camera.OffsetY.SetValue((max_h - height) // 2)
     
-    # Decode FOURCC integer to string
-    actual_fourcc_str = "".join([chr((actual_fourcc_int >> 8 * i) & 0xFF) for i in range(4)])
+    camera.ExposureAuto.SetValue("Off")
+    camera.ExposureTime.SetValue(3000)
+    camera.GainAuto.SetValue("Off")
+    camera.Gain.SetValue(0)
     
-    settings = {
-        'requested_width': width,
-        'requested_height': height,
-        'requested_fourcc': 'MJPG',
-        'actual_width': actual_width,
-        'actual_height': actual_height,
-        'actual_fps': actual_fps,
-        'actual_fourcc': actual_fourcc_str,
-        'settings_match': (actual_width == width and actual_height == height)
+    return {
+        'actual_width': camera.Width.GetValue(),
+        'actual_height': camera.Height.GetValue(),
+        'settings_match': (camera.Width.GetValue() == width and camera.Height.GetValue() == height)
     }
-    
-    return settings
 
 
-def print_camera_settings(camera_name, settings):
-    """Pretty print camera settings for verification."""
-    print(f"\n  {camera_name}:")
-    print(f"    Resolution: {settings['actual_width']}x{settings['actual_height']} "
-          f"(requested {settings['requested_width']}x{settings['requested_height']})")
-    print(f"    FOURCC: {settings['actual_fourcc']} (requested {settings['requested_fourcc']})")
-    print(f"    FPS: {settings['actual_fps']}")
-    
-    if settings['settings_match']:
-        print(f"    Status: ✓ OK")
-        return True
-    else:
-        print(f"    Status: ⚠ WARNING - Settings mismatch!")
-        return False
+def create_image_converter():
+    """Create BGR image converter."""
+    converter = pylon.ImageFormatConverter()
+    converter.OutputPixelFormat = pylon.PixelType_BGR8packed
+    converter.OutputBitAlignment = pylon.OutputBitAlignment_MsbAligned
+    return converter
 
 
-class ArducamStereoCapture:
-    """
-    Stereo camera capture optimized for Arducam OV9782 cameras.
-    Uses MJPG codec for full framerate at 1280x800.
-    """
+def grab_frame(camera, converter):
+    """Grab single frame from Basler camera."""
+    if not camera.IsGrabbing():
+        camera.StartGrabbing(pylon.GrabStrategy_LatestImageOnly)
     
-    def __init__(self, cam_left_id=0, cam_right_id=1):
-        self.cam_left_id = cam_left_id
-        self.cam_right_id = cam_right_id
-        self.cap_left = None
-        self.cap_right = None
+    grab_result = camera.RetrieveResult(5000, pylon.TimeoutHandling_ThrowException)
     
-    def start_cameras(self, width=1280, height=800):
-        """Open and configure cameras with MJPG codec."""
-        self.cap_left = cv2.VideoCapture(self.cam_left_id)
-        self.cap_right = cv2.VideoCapture(self.cam_right_id)
+    if grab_result.GrabSucceeded():
+        image = converter.Convert(grab_result)
+        frame = image.GetArray()
+        grab_result.Release()
+        return frame
+    
+    grab_result.Release()
+    return None
+
+
+# ============================================================================
+# BASLER STEREO CAPTURE CLASS
+# ============================================================================
+
+class BaslerStereoCapture:
+    """Stereo camera capture for Basler cameras."""
+    
+    def __init__(self, left_serial=None, right_serial=None, left_index=0, right_index=1):
+        self.left_serial = left_serial
+        self.right_serial = right_serial
+        self.left_index = left_index
+        self.right_index = right_index
         
-        if not self.cap_left.isOpened():
-            raise RuntimeError(f"Failed to open left camera (ID: {self.cam_left_id})")
-        if not self.cap_right.isOpened():
-            raise RuntimeError(f"Failed to open right camera (ID: {self.cam_right_id})")
+        self.cam_left = None
+        self.cam_right = None
+        self.converter = None
+    
+    def start_cameras(self, width=1920, height=1200):
+        """Open and configure cameras."""
+        print("\nOpening Basler cameras...")
         
-        # Configure both cameras for Arducam OV9782
-        print("\nConfiguring cameras (Arducam OV9782 MJPG mode):")
-        settings_left = configure_camera_for_arducam(self.cap_left, width, height)
-        settings_right = configure_camera_for_arducam(self.cap_right, width, height)
+        self.cam_left = get_basler_camera(serial=self.left_serial, device_index=self.left_index)
+        self.cam_right = get_basler_camera(serial=self.right_serial, device_index=self.right_index)
         
-        ok_left = print_camera_settings("LEFT Camera", settings_left)
-        ok_right = print_camera_settings("RIGHT Camera", settings_right)
+        settings_left = configure_basler_camera(self.cam_left, width, height)
+        settings_right = configure_basler_camera(self.cam_right, width, height)
         
-        if not (ok_left and ok_right):
-            print("\n  ⚠ Some camera settings don't match requested values.")
-            print("    Detection may still work, but verify image quality.")
+        self.converter = create_image_converter()
         
-        print(f"\nCameras started: Left=ID{self.cam_left_id}, Right=ID{self.cam_right_id}")
+        print(f"\n  LEFT Camera:")
+        print(f"    Serial: {self.cam_left.GetDeviceInfo().GetSerialNumber()}")
+        print(f"    Resolution: {settings_left['actual_width']}x{settings_left['actual_height']}")
+        print(f"    Status: {'OK' if settings_left['settings_match'] else 'WARNING - mismatch'}")
+        
+        print(f"\n  RIGHT Camera:")
+        print(f"    Serial: {self.cam_right.GetDeviceInfo().GetSerialNumber()}")
+        print(f"    Resolution: {settings_right['actual_width']}x{settings_right['actual_height']}")
+        print(f"    Status: {'OK' if settings_right['settings_match'] else 'WARNING - mismatch'}")
+        
+        print("\nCameras started")
     
     def read(self):
         """Read frames from both cameras."""
-        ret_left, frame_left = self.cap_left.read()
-        ret_right, frame_right = self.cap_right.read()
+        frame_left = grab_frame(self.cam_left, self.converter)
+        frame_right = grab_frame(self.cam_right, self.converter)
+        
+        ret_left = frame_left is not None
+        ret_right = frame_right is not None
+        
         return ret_left, frame_left, ret_right, frame_right
     
     def stop_cameras(self):
         """Release cameras."""
-        if self.cap_left:
-            self.cap_left.release()
-        if self.cap_right:
-            self.cap_right.release()
+        if self.cam_left:
+            self.cam_left.Close()
+        if self.cam_right:
+            self.cam_right.Close()
         print("Cameras stopped")
 
+
+# ============================================================================
+# HELPER CLASSES (Same as Arducam version)
+# ============================================================================
 
 class StereoDetectorIndependent:
     """Stereo detector with independent thresholds per camera."""
     
     def __init__(self, config):
-        """
-        Initialize detector.
-        
-        Args:
-            config: Dictionary with camera configuration
-        """
         self.config = config
         self.capture = None
-        
-        # Independent trackers with their own thresholds
         self.tracker_left = EnhancedBallTracker()
         self.tracker_right = EnhancedBallTracker()
     
     def start_cameras(self, width, height):
         """Start cameras."""
-        cam_left_id = self.config.get('camera_left', {}).get('id', 0)
-        cam_right_id = self.config.get('camera_right', {}).get('id', 1)
+        left_serial = self.config.get('camera_left', {}).get('serial', '')
+        right_serial = self.config.get('camera_right', {}).get('serial', '')
         
-        self.capture = ArducamStereoCapture(cam_left_id, cam_right_id)
+        self.capture = BaslerStereoCapture(
+            left_serial=left_serial if left_serial else None,
+            right_serial=right_serial if right_serial else None,
+            left_index=0,
+            right_index=1
+        )
         self.capture.start_cameras(width, height)
     
     def read_frames(self):
@@ -260,10 +286,9 @@ class StereoThresholdTuner:
     
     def __init__(self, detector):
         self.detector = detector
-        self.active_camera = 'left'  # 'left' or 'right'
+        self.active_camera = 'left'
         self.tuner_open = False
         
-        # Store thresholds for each camera
         self.thresholds = {
             'left': {
                 'hsv_lower': [0, 78, 69],
@@ -286,21 +311,18 @@ class StereoThresholdTuner:
                 data = json.load(f)
             
             if 'left' in data and 'right' in data:
-                # Stereo format
                 for cam in ['left', 'right']:
                     for key in ['hsv_lower', 'hsv_upper', 'lab_lower', 'lab_upper']:
                         if key in data[cam]:
                             self.thresholds[cam][key] = data[cam][key]
                 print(f"Loaded STEREO thresholds from {filepath}")
             else:
-                # Single format - apply to both
                 for key in ['hsv_lower', 'hsv_upper', 'lab_lower', 'lab_upper']:
                     if key in data:
                         self.thresholds['left'][key] = data[key]
                         self.thresholds['right'][key] = data[key].copy()
                 print(f"Loaded single thresholds from {filepath}")
             
-            # Apply to trackers
             self._apply_thresholds()
             
         except Exception as e:
@@ -317,7 +339,6 @@ class StereoThresholdTuner:
     
     def _apply_thresholds(self):
         """Apply current thresholds to trackers."""
-        # Left
         self.detector.tracker_left.set_hsv_thresholds(
             self.thresholds['left']['hsv_lower'],
             self.thresholds['left']['hsv_upper']
@@ -327,7 +348,6 @@ class StereoThresholdTuner:
             self.thresholds['left']['lab_upper']
         )
         
-        # Right
         self.detector.tracker_right.set_hsv_thresholds(
             self.thresholds['right']['hsv_lower'],
             self.thresholds['right']['hsv_upper']
@@ -357,7 +377,6 @@ class StereoThresholdTuner:
         cv2.namedWindow('Threshold Tuner', cv2.WINDOW_NORMAL)
         cv2.resizeWindow('Threshold Tuner', 400, 500)
         
-        # Create trackbars
         t = self.thresholds[self.active_camera]
         
         cv2.createTrackbar('H Low', 'Threshold Tuner', t['hsv_lower'][0], 179, lambda x: None)
@@ -456,7 +475,6 @@ def create_debug_view(frame_left, frame_right, tracker_left, tracker_right):
     """Create debug visualization showing masks for both cameras."""
     h, w = 120, 160
     
-    # Get masks from both trackers
     result_left = tracker_left.detect(frame_left, return_debug=True)
     result_right = tracker_right.detect(frame_right, return_debug=True)
     
@@ -492,37 +510,40 @@ def create_debug_view(frame_left, frame_right, tracker_left, tracker_right):
     return None
 
 
+# ============================================================================
+# MAIN
+# ============================================================================
+
 def main():
     script_dir = os.path.dirname(os.path.abspath(__file__))
     config_path = os.path.join(script_dir, '..', 'config', 'stereo_config.yaml')
     thresholds_path = os.path.join(script_dir, '..', 'config', 'ball_thresholds_stereo.json')
     thresholds_single_path = os.path.join(script_dir, '..', 'config', 'ball_thresholds.json')
     
-    # Default config for Arducam OV9782
+    # Default config for Basler
     config = {
-        'camera_left': {'id': 1},
-        'camera_right': {'id': 2},
-        'frame_width': 1280,
-        'frame_height': 800
+        'camera_left': {'serial': ''},
+        'camera_right': {'serial': ''},
+        'frame_width': 1920,
+        'frame_height': 1200
     }
     
-    # Load config from file if exists
     if os.path.exists(config_path):
         with open(config_path, 'r') as f:
             loaded_config = yaml.safe_load(f)
             if loaded_config:
                 config.update(loaded_config)
     
-    FRAME_WIDTH = config.get('frame_width', 1280)
-    FRAME_HEIGHT = config.get('frame_height', 800)
+    FRAME_WIDTH = config.get('frame_width', 1920)
+    FRAME_HEIGHT = config.get('frame_height', 1200)
     
     print("\n" + "=" * 60)
-    print("STEREO DETECTION TEST (Arducam OV9782)")
+    print("STEREO DETECTION TEST (Basler acA1920-150uc)")
     print("=" * 60)
-    print(f"\nCamera: Arducam OV9782 Global Shutter")
-    print(f"  Left ID:  {config.get('camera_left', {}).get('id', 1)}")
-    print(f"  Right ID: {config.get('camera_right', {}).get('id', 2)}")
-    print(f"\nResolution: {FRAME_WIDTH}x{FRAME_HEIGHT} (MJPG)")
+    print(f"\nCamera: Basler acA1920-150uc USB 3.0")
+    print(f"  Left Serial:  {config.get('camera_left', {}).get('serial', '') or '(auto)'}")
+    print(f"  Right Serial: {config.get('camera_right', {}).get('serial', '') or '(auto)'}")
+    print(f"\nResolution: {FRAME_WIDTH}x{FRAME_HEIGHT}")
     
     print("\nCONTROLS:")
     print("  q - Quit")
@@ -536,12 +557,10 @@ def main():
     print("  s/w - Save thresholds to JSON")
     print("=" * 60)
     
-    # Initialize detector
     detector = StereoDetectorIndependent(config)
     tuner = StereoThresholdTuner(detector)
     lighting = LightingNormalizer()
     
-    # Load thresholds (try stereo first, then single)
     if os.path.exists(thresholds_path):
         tuner.load_thresholds(thresholds_path)
     elif os.path.exists(thresholds_single_path):
@@ -549,7 +568,6 @@ def main():
     else:
         print("\nUsing default thresholds")
     
-    # Start cameras
     try:
         detector.start_cameras(FRAME_WIDTH, FRAME_HEIGHT)
     except Exception as e:
@@ -560,29 +578,23 @@ def main():
     
     try:
         while True:
-            # Capture frames
             ret_left, frame_left_raw, ret_right, frame_right_raw = detector.read_frames()
             
             if not ret_left or not ret_right:
                 continue
             
-            # Apply lighting normalization
             frame_left = lighting.normalize(frame_left_raw)
             frame_right = lighting.normalize(frame_right_raw)
             
-            # Update thresholds from tuner
             if tuner.tuner_open:
                 tuner.update_from_trackbars()
             
-            # Detect ball
             result_left = detector.tracker_left.detect(frame_left)
             result_right = detector.tracker_right.detect(frame_right)
             
-            # Draw on frames
             left_vis = frame_left.copy()
             right_vis = frame_right.copy()
             
-            # Left detection
             if result_left['found']:
                 center = result_left['center']
                 radius = int(result_left['radius'])
@@ -594,7 +606,6 @@ def main():
                 cv2.putText(left_vis, "L: No ball", (10, 30),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
             
-            # Right detection
             if result_right['found']:
                 center = result_right['center']
                 radius = int(result_right['radius'])
@@ -606,28 +617,24 @@ def main():
                 cv2.putText(right_vis, "R: No ball", (10, 30),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
             
-            # Status
             both_found = result_left['found'] and result_right['found']
             status = "BOTH DETECTED" if both_found else "Need both cameras"
             color = (0, 255, 0) if both_found else (0, 0, 255)
             cv2.putText(left_vis, status, (10, left_vis.shape[0] - 40),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
             
-            # Show tuner status and active camera
             if tuner.tuner_open:
                 active = tuner.active_camera.upper()
                 cv2.putText(left_vis, f"Tuning: {active} (1=L, 2=R)", (10, 60),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
             
-            # Lighting mode
             cv2.putText(left_vis, f"Light: {lighting.get_mode_name()}", (10, left_vis.shape[0] - 15),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
             
-            # Controls hint
             cv2.putText(right_vis, "q:quit t:tuner d:debug s:save", (10, right_vis.shape[0] - 15),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1)
             
-            # Combine and show (resize for display)
+            # Resize for display (1920x1200 is large)
             display_width = 640
             display_height = int(display_width * FRAME_HEIGHT / FRAME_WIDTH)
             left_small = cv2.resize(left_vis, (display_width, display_height))
@@ -635,7 +642,6 @@ def main():
             combined = cv2.hconcat([left_small, right_small])
             cv2.imshow('Stereo Detection', combined)
             
-            # Debug view
             if show_debug:
                 debug_view = create_debug_view(
                     frame_left, frame_right,
@@ -644,40 +650,31 @@ def main():
                 if debug_view is not None:
                     cv2.imshow('Debug Masks', debug_view)
             
-            # Handle keys
             key = cv2.waitKey(1) & 0xFF
             
             if key == ord('q'):
                 break
-            
             elif key == ord('l'):
                 mode = lighting.cycle_mode()
                 print(f"[LIGHTING] {mode}")
-            
             elif key == ord('d'):
                 show_debug = not show_debug
                 if not show_debug:
                     cv2.destroyWindow('Debug Masks')
                 print(f"[DEBUG] {'ON' if show_debug else 'OFF'}")
-            
             elif key == ord('t'):
                 if tuner.tuner_open:
                     tuner.close_tuner()
                 else:
                     tuner.open_tuner()
-            
             elif key == ord('1'):
                 tuner.set_active_camera('left')
-            
             elif key == ord('2'):
                 tuner.set_active_camera('right')
-            
             elif key == ord('c'):
                 tuner.copy_left_to_right()
-            
             elif key == ord('p'):
                 tuner.print_thresholds()
-            
             elif key == ord('s') or key == ord('w'):
                 tuner.save_thresholds(thresholds_path)
     

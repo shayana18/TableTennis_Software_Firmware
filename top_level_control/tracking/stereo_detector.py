@@ -1,214 +1,155 @@
 """
-Stereo Ball Detector - Arducam Edition
-======================================
-Detects ball in two cameras simultaneously.
-Optimized for Arducam OV9782 Global Shutter USB cameras.
-NO triangulation - just detection in both views.
+Stereo Detector for Basler Cameras
 
-CAMERA: Arducam OV9782 Global Shutter USB Camera
-        1MP, 100fps @ 1280x800 MJPG
+Detects ball in both cameras (no 3D triangulation).
+Use this for testing detection before triangulation.
+
+CAMERA: Basler acA1920-150uc USB 3.0
+        2.3MP, 150fps @ 1920x1200
+
+REQUIREMENTS:
+    pip install pypylon
 """
 
 import cv2
 import numpy as np
-import json
-import yaml
-from pathlib import Path
+
+try:
+    from pypylon import pylon
+    PYPYLON_AVAILABLE = True
+except ImportError:
+    PYPYLON_AVAILABLE = False
+
 from .ball_tracker import EnhancedBallTracker
 
 
-def configure_camera_for_arducam(cap, width=1280, height=800):
-    """
-    Configure camera for Arducam OV9782 global shutter cameras.
-    Forces MJPG codec and specified resolution.
-    
-    Args:
-        cap: cv2.VideoCapture object
-        width: Desired width (default 1280)
-        height: Desired height (default 800)
-    
-    Returns:
-        dict with actual accepted values
-    """
-    # Set FOURCC to MJPG first - critical for getting full framerate on Arducam
-    fourcc_mjpg = cv2.VideoWriter_fourcc(*'MJPG')
-    cap.set(cv2.CAP_PROP_FOURCC, fourcc_mjpg)
-    
-    # Set resolution
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-    
-    # Try to set higher framerate (Arducam OV9782 supports 100fps at 1280x800 MJPG)
-    cap.set(cv2.CAP_PROP_FPS, 100)
-    
-    # Disable auto-exposure for consistent detection
-    cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)
-    
-    # Read back actual values
-    actual_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    actual_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    actual_fps = cap.get(cv2.CAP_PROP_FPS)
-    actual_fourcc_int = int(cap.get(cv2.CAP_PROP_FOURCC))
-    
-    # Decode FOURCC integer to string
-    actual_fourcc_str = "".join([chr((actual_fourcc_int >> 8 * i) & 0xFF) for i in range(4)])
-    
-    return {
-        'requested_width': width,
-        'requested_height': height,
-        'requested_fourcc': 'MJPG',
-        'actual_width': actual_width,
-        'actual_height': actual_height,
-        'actual_fps': actual_fps,
-        'actual_fourcc': actual_fourcc_str,
-        'settings_match': (actual_width == width and actual_height == height)
-    }
-
-
 class StereoDetector:
-    """Detect ball in stereo camera pair. No 3D calculations."""
+    """
+    Stereo ball detector for Basler cameras.
+    
+    Detects ball in both cameras independently.
+    Does NOT perform 3D triangulation (use StereoTriangulator for that).
+    """
 
-    def __init__(self, cam_left_id=None, cam_right_id=None, thresholds_file=None, config_path=None):
+    def __init__(self, left_serial=None, right_serial=None,
+                 left_index=0, right_index=1):
         """
         Initialize stereo detector.
 
         Args:
-            cam_left_id: Device ID for left camera
-            cam_right_id: Device ID for right camera
-            thresholds_file: Optional path to ball_thresholds.json
-            config_path: Optional path to stereo_config.yaml
+            left_serial: Left camera serial number (preferred)
+            right_serial: Right camera serial number (preferred)
+            left_index: Left camera device index (fallback if no serial)
+            right_index: Right camera device index (fallback if no serial)
         """
-        # Load configuration
-        if config_path is None:
-            config_path = Path(__file__).parent.parent / 'config' / 'stereo_config.yaml'
-        
-        self.config = {}
-        
-        if config_path and Path(config_path).exists():
-            with open(config_path, 'r') as f:
-                self.config = yaml.safe_load(f)
-            
-            # Get camera IDs from config
-            cam_left_id = cam_left_id if cam_left_id is not None else self.config.get('camera_left', {}).get('id', 1)
-            cam_right_id = cam_right_id if cam_right_id is not None else self.config.get('camera_right', {}).get('id', 2)
-        else:
-            cam_left_id = cam_left_id if cam_left_id is not None else 1
-            cam_right_id = cam_right_id if cam_right_id is not None else 2
+        if not PYPYLON_AVAILABLE:
+            raise RuntimeError("pypylon not installed. Run: pip install pypylon")
 
-        self.cam_left_id = cam_left_id
-        self.cam_right_id = cam_right_id
+        self.left_serial = left_serial
+        self.right_serial = right_serial
+        self.left_index = left_index
+        self.right_index = right_index
 
-        # Camera objects
-        self.cap_left = None
-        self.cap_right = None
+        # Cameras
+        self.cam_left = None
+        self.cam_right = None
+        self.converter = None
 
-        # Ball trackers for each camera (independent thresholds)
+        # Ball trackers (independent thresholds)
         self.tracker_left = EnhancedBallTracker()
         self.tracker_right = EnhancedBallTracker()
-        
-        # Load custom thresholds if provided
-        if thresholds_file:
-            self.load_thresholds(thresholds_file)
 
-    def load_thresholds(self, filepath):
-        """Load HSV and LAB thresholds from JSON file."""
-        try:
-            with open(filepath, 'r') as f:
-                thresholds = json.load(f)
-            
-            # Check for stereo format (separate left/right thresholds)
-            if 'left' in thresholds and 'right' in thresholds:
-                # Stereo format
-                left_th = thresholds['left']
-                right_th = thresholds['right']
-                
-                if 'hsv_lower' in left_th:
-                    self.tracker_left.set_hsv_thresholds(left_th['hsv_lower'], left_th['hsv_upper'])
-                if 'lab_lower' in left_th:
-                    self.tracker_left.set_lab_thresholds(left_th['lab_lower'], left_th['lab_upper'])
-                    
-                if 'hsv_lower' in right_th:
-                    self.tracker_right.set_hsv_thresholds(right_th['hsv_lower'], right_th['hsv_upper'])
-                if 'lab_lower' in right_th:
-                    self.tracker_right.set_lab_thresholds(right_th['lab_lower'], right_th['lab_upper'])
-                
-                print(f"[StereoDetector] Loaded STEREO thresholds from {filepath}")
-            else:
-                # Legacy single format - apply to both
-                if 'hsv_lower' in thresholds:
-                    self.tracker_left.set_hsv_thresholds(thresholds['hsv_lower'], thresholds['hsv_upper'])
-                    self.tracker_right.set_hsv_thresholds(thresholds['hsv_lower'], thresholds['hsv_upper'])
-                
-                if 'lab_lower' in thresholds:
-                    self.tracker_left.set_lab_thresholds(thresholds['lab_lower'], thresholds['lab_upper'])
-                    self.tracker_right.set_lab_thresholds(thresholds['lab_lower'], thresholds['lab_upper'])
-                
-                print(f"[StereoDetector] Loaded thresholds from {filepath}")
-        except Exception as e:
-            print(f"[StereoDetector] Warning: Could not load thresholds: {e}")
+    def _get_camera(self, serial=None, device_index=0):
+        """Get Basler camera by serial or index."""
+        tlFactory = pylon.TlFactory.GetInstance()
+        devices = tlFactory.EnumerateDevices()
 
-    def start_cameras(self, width=1280, height=800):
-        """
-        Open camera streams with Arducam MJPG configuration.
-        
-        Args:
-            width: Frame width (default 1280 for OV9782)
-            height: Frame height (default 800 for OV9782)
-        """
-        self.cap_left = cv2.VideoCapture(self.cam_left_id)
-        self.cap_right = cv2.VideoCapture(self.cam_right_id)
+        if len(devices) == 0:
+            raise RuntimeError("No Basler cameras found")
 
-        if not self.cap_left.isOpened():
-            raise RuntimeError(f"Failed to open left camera (ID: {self.cam_left_id})")
-        if not self.cap_right.isOpened():
-            raise RuntimeError(f"Failed to open right camera (ID: {self.cam_right_id})")
+        if serial and serial.strip():
+            for device in devices:
+                if device.GetSerialNumber() == serial:
+                    return pylon.InstantCamera(tlFactory.CreateDevice(device))
+            raise RuntimeError(f"Camera with serial '{serial}' not found")
 
-        # Configure for Arducam OV9782 with MJPG
-        print("\n[StereoDetector] Configuring cameras (Arducam OV9782 MJPG mode):")
-        settings_left = configure_camera_for_arducam(self.cap_left, width, height)
-        settings_right = configure_camera_for_arducam(self.cap_right, width, height)
-        
-        print(f"  LEFT:  {settings_left['actual_width']}x{settings_left['actual_height']} "
-              f"@ {settings_left['actual_fps']:.0f}fps ({settings_left['actual_fourcc']})")
-        print(f"  RIGHT: {settings_right['actual_width']}x{settings_right['actual_height']} "
-              f"@ {settings_right['actual_fps']:.0f}fps ({settings_right['actual_fourcc']})")
-        
-        if not settings_left['settings_match'] or not settings_right['settings_match']:
-            print("  WARNING: Some camera settings don't match requested values")
-        
-        print("[StereoDetector] Cameras started successfully!")
-        return True
+        if device_index >= len(devices):
+            raise RuntimeError(f"Device index {device_index} out of range")
+
+        return pylon.InstantCamera(tlFactory.CreateDevice(devices[device_index]))
+
+    def _configure_camera(self, camera, width, height):
+        """Configure Basler camera."""
+        camera.Open()
+
+        camera.Width.SetValue(width)
+        camera.Height.SetValue(height)
+
+        max_w = camera.WidthMax.GetValue()
+        max_h = camera.HeightMax.GetValue()
+        camera.OffsetX.SetValue((max_w - width) // 2)
+        camera.OffsetY.SetValue((max_h - height) // 2)
+
+        camera.ExposureAuto.SetValue("Off")
+        camera.ExposureTime.SetValue(3000)
+        camera.GainAuto.SetValue("Off")
+        camera.Gain.SetValue(0)
+
+    def start_cameras(self, width=1920, height=1200):
+        """Open and configure cameras."""
+        print("[StereoDetector] Opening cameras...")
+
+        self.cam_left = self._get_camera(
+            serial=self.left_serial if self.left_serial else None,
+            device_index=self.left_index
+        )
+        self.cam_right = self._get_camera(
+            serial=self.right_serial if self.right_serial else None,
+            device_index=self.right_index
+        )
+
+        self._configure_camera(self.cam_left, width, height)
+        self._configure_camera(self.cam_right, width, height)
+
+        # Image converter
+        self.converter = pylon.ImageFormatConverter()
+        self.converter.OutputPixelFormat = pylon.PixelType_BGR8packed
+        self.converter.OutputBitAlignment = pylon.OutputBitAlignment_MsbAligned
+
+        print(f"  Left:  {self.cam_left.GetDeviceInfo().GetSerialNumber()}")
+        print(f"  Right: {self.cam_right.GetDeviceInfo().GetSerialNumber()}")
+        print("[StereoDetector] Cameras ready")
 
     def stop_cameras(self):
-        """Release camera streams."""
-        if self.cap_left:
-            self.cap_left.release()
-        if self.cap_right:
-            self.cap_right.release()
+        """Close cameras."""
+        if self.cam_left:
+            self.cam_left.Close()
+        if self.cam_right:
+            self.cam_right.Close()
         print("[StereoDetector] Cameras stopped")
 
-    def read_frames(self):
-        """
-        Read frames from both cameras.
-        
-        Returns:
-            (ret_left, frame_left, ret_right, frame_right)
-        """
-        ret_left, frame_left = self.cap_left.read()
-        ret_right, frame_right = self.cap_right.read()
-        return ret_left, frame_left, ret_right, frame_right
+    def _grab_frame(self, camera):
+        """Grab single frame from camera."""
+        if not camera.IsGrabbing():
+            camera.StartGrabbing(pylon.GrabStrategy_LatestImageOnly)
+
+        grab_result = camera.RetrieveResult(5000, pylon.TimeoutHandling_ThrowException)
+
+        if grab_result.GrabSucceeded():
+            image = self.converter.Convert(grab_result)
+            frame = image.GetArray()
+            grab_result.Release()
+            return frame
+
+        grab_result.Release()
+        return None
 
     def detect(self):
         """
         Capture frames and detect ball in both cameras.
 
         Returns:
-            dict with:
-                - 'left_frame': Left camera image
-                - 'right_frame': Right camera image
-                - 'left_detection': Detection result from left camera
-                - 'right_detection': Detection result from right camera
-                - 'both_found': True if ball found in BOTH cameras
+            dict with detection results
         """
         result = {
             'left_frame': None,
@@ -218,91 +159,62 @@ class StereoDetector:
             'both_found': False
         }
 
-        # Capture frames
-        ret_left, frame_left, ret_right, frame_right = self.read_frames()
+        # Grab frames
+        frame_left = self._grab_frame(self.cam_left)
+        frame_right = self._grab_frame(self.cam_right)
 
-        if not ret_left or not ret_right:
+        if frame_left is None or frame_right is None:
             return result
 
         result['left_frame'] = frame_left
         result['right_frame'] = frame_right
 
-        # Detect ball in each camera
+        # Detect ball
         result['left_detection'] = self.tracker_left.detect(frame_left)
         result['right_detection'] = self.tracker_right.detect(frame_right)
 
-        # Check if found in both
-        left_found = result['left_detection']['found']
-        right_found = result['right_detection']['found']
-        result['both_found'] = left_found and right_found
+        result['both_found'] = (
+            result['left_detection']['found'] and
+            result['right_detection']['found']
+        )
 
         return result
 
-    def detect_from_frames(self, frame_left, frame_right, return_debug=False):
-        """
-        Detect ball from provided frames.
+    def load_thresholds(self, filepath):
+        """Load ball detection thresholds from JSON file."""
+        import json
+        try:
+            with open(filepath, 'r') as f:
+                thresholds = json.load(f)
 
-        Args:
-            frame_left: Image from left camera
-            frame_right: Image from right camera
-            return_debug: If True, return debug masks
+            if 'left' in thresholds and 'right' in thresholds:
+                self.tracker_left.set_hsv_thresholds(
+                    thresholds['left']['hsv_lower'], thresholds['left']['hsv_upper'])
+                self.tracker_left.set_lab_thresholds(
+                    thresholds['left']['lab_lower'], thresholds['left']['lab_upper'])
 
-        Returns:
-            Same dict as detect()
-        """
-        result = {
-            'left_frame': frame_left,
-            'right_frame': frame_right,
-            'left_detection': self.tracker_left.detect(frame_left, return_debug=return_debug),
-            'right_detection': self.tracker_right.detect(frame_right, return_debug=return_debug),
-            'both_found': False
-        }
+                self.tracker_right.set_hsv_thresholds(
+                    thresholds['right']['hsv_lower'], thresholds['right']['hsv_upper'])
+                self.tracker_right.set_lab_thresholds(
+                    thresholds['right']['lab_lower'], thresholds['right']['lab_upper'])
 
-        result['both_found'] = (result['left_detection']['found'] and 
-                                result['right_detection']['found'])
+                print(f"[StereoDetector] Loaded STEREO thresholds")
+            else:
+                if 'hsv_lower' in thresholds:
+                    self.tracker_left.set_hsv_thresholds(
+                        thresholds['hsv_lower'], thresholds['hsv_upper'])
+                    self.tracker_right.set_hsv_thresholds(
+                        thresholds['hsv_lower'], thresholds['hsv_upper'])
 
-        return result
+                if 'lab_lower' in thresholds:
+                    self.tracker_left.set_lab_thresholds(
+                        thresholds['lab_lower'], thresholds['lab_upper'])
+                    self.tracker_right.set_lab_thresholds(
+                        thresholds['lab_lower'], thresholds['lab_upper'])
 
-    def draw_detections(self, result):
-        """
-        Draw ball detections on frames.
-
-        Args:
-            result: Result dict from detect()
-
-        Returns:
-            (annotated_left, annotated_right) frames
-        """
-        left_out = result['left_frame'].copy()
-        right_out = result['right_frame'].copy()
-
-        # Draw left detection
-        if result['left_detection'] and result['left_detection']['found']:
-            det = result['left_detection']
-            center = det['center']
-            radius = int(det['radius'])
-            cv2.circle(left_out, center, radius, (0, 255, 0), 2)
-            cv2.circle(left_out, center, 3, (0, 0, 255), -1)
-            cv2.putText(left_out, f"L: ({center[0]}, {center[1]})", (10, 30),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-        else:
-            cv2.putText(left_out, "LEFT: No ball", (10, 30),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-
-        # Draw right detection
-        if result['right_detection'] and result['right_detection']['found']:
-            det = result['right_detection']
-            center = det['center']
-            radius = int(det['radius'])
-            cv2.circle(right_out, center, radius, (0, 255, 0), 2)
-            cv2.circle(right_out, center, 3, (0, 0, 255), -1)
-            cv2.putText(right_out, f"R: ({center[0]}, {center[1]})", (10, 30),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-        else:
-            cv2.putText(right_out, "RIGHT: No ball", (10, 30),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-
-        return left_out, right_out
+                print(f"[StereoDetector] Loaded single thresholds")
+        except Exception as e:
+            print(f"[StereoDetector] Warning: Could not load thresholds: {e}")
 
     def set_hsv_thresholds(self, lower, upper):
         """Update HSV thresholds for both trackers."""
@@ -312,20 +224,4 @@ class StereoDetector:
     def set_lab_thresholds(self, lower, upper):
         """Update LAB thresholds for both trackers."""
         self.tracker_left.set_lab_thresholds(lower, upper)
-        self.tracker_right.set_lab_thresholds(lower, upper)
-
-    def set_hsv_thresholds_left(self, lower, upper):
-        """Update HSV thresholds for left tracker only."""
-        self.tracker_left.set_hsv_thresholds(lower, upper)
-
-    def set_hsv_thresholds_right(self, lower, upper):
-        """Update HSV thresholds for right tracker only."""
-        self.tracker_right.set_hsv_thresholds(lower, upper)
-
-    def set_lab_thresholds_left(self, lower, upper):
-        """Update LAB thresholds for left tracker only."""
-        self.tracker_left.set_lab_thresholds(lower, upper)
-
-    def set_lab_thresholds_right(self, lower, upper):
-        """Update LAB thresholds for right tracker only."""
         self.tracker_right.set_lab_thresholds(lower, upper)

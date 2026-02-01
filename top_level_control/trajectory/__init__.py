@@ -1,65 +1,84 @@
 """
-Trajectory Prediction Module
+Trajectory Module
 
-Predicts ball trajectory using physics-based model with gravity.
+Ball trajectory prediction using physics-based modeling.
 
 COMPONENTS:
-    PositionBuffer      - Stores timestamped 3D positions (circular buffer)
+    PositionBuffer      - Stores timestamped 3D positions
     VelocityEstimator   - Calculates velocity from position history
     PhysicsModel        - Kinematic equations with gravity
-    TrajectoryPredictor - Main class that combines all components
+    TrajectoryPredictor - Main class combining all components
+
+Note: This module is camera-agnostic.
+      Works with any stereo triangulation output (Arducam, Basler, etc.)
 
 USAGE:
     from trajectory import TrajectoryPredictor
     
-    # Create predictor
-    predictor = TrajectoryPredictor(
-        buffer_size=10,      # Store last 10 positions
-        min_points=3,        # Need 3+ points to predict
-        gravity=981.0,       # cm/s² (use 9810 for mm/s²)
-        y_down=True          # +Y is downward in camera coords
-    )
+    predictor = TrajectoryPredictor()
     
-    # In your tracking loop:
-    while tracking:
-        result = triangulator.update()
-        
-        if result['found_3d']:
-            x, y, z = result['position_3d']
-            predictor.add_position(x, y, z)
-        
-        # Predict where ball will be at Z = robot_reach
-        prediction = predictor.predict(target_z=50)
-        
-        if prediction['valid']:
-            robot_x = prediction['intercept_x']
-            robot_y = prediction['intercept_y']
-            time_ms = prediction['time_to_intercept'] * 1000
-            
-            # Send to robot!
-            robot.move_to(robot_x, robot_y, time_ms)
-
-PHYSICS:
-    The predictor uses basic kinematics with gravity:
-        X(t) = X₀ + Vx × t           (constant horizontal velocity)
-        Y(t) = Y₀ + Vy × t + ½g×t²   (gravity accelerates downward)
-        Z(t) = Z₀ + Vz × t           (constant depth velocity)
+    # In tracking loop:
+    predictor.add_position(x, y, z)
     
-    Gravity = 981 cm/s² = 9.81 m/s²
+    # Get interception point:
+    prediction = predictor.predict(target_z=50)
+    
+    if prediction['valid']:
+        robot_x = prediction['intercept_x']
+        robot_y = prediction['intercept_y']
+        time_ms = prediction['time_to_intercept'] * 1000
 """
 
 from .position_buffer import PositionBuffer
-from .velocity_estimator import VelocityEstimator, estimate_velocity
-from .physics_model import PhysicsModel, predict_ball_position
+from .velocity_estimator import VelocityEstimator
+from .physics_model import PhysicsModel, GRAVITY_CM_S2
 from .trajectory_predictor import TrajectoryPredictor
 
 __all__ = [
     'PositionBuffer',
     'VelocityEstimator',
-    'estimate_velocity',
     'PhysicsModel',
-    'predict_ball_position',
-    'TrajectoryPredictor'
+    'TrajectoryPredictor',
+    'GRAVITY_CM_S2'
 ]
 
 __version__ = '1.0.0'
+
+
+# Convenience functions
+def estimate_velocity(positions, times, method='regression'):
+    """
+    Quick velocity estimation.
+    
+    Args:
+        positions: List of (x, y, z) tuples
+        times: List of timestamps
+        method: 'simple' or 'regression'
+    
+    Returns:
+        dict with 'vx', 'vy', 'vz', 'speed', 'valid'
+    """
+    import numpy as np
+    estimator = VelocityEstimator(method=method)
+    x = np.array([p[0] for p in positions])
+    y = np.array([p[1] for p in positions])
+    z = np.array([p[2] for p in positions])
+    t = np.array(times)
+    return estimator.estimate(x, y, z, t)
+
+
+def predict_ball_position(x0, y0, z0, vx, vy, vz, t, gravity=981.0):
+    """
+    Quick position prediction.
+    
+    Args:
+        x0, y0, z0: Initial position
+        vx, vy, vz: Initial velocity
+        t: Time (seconds)
+        gravity: Gravity in cm/s² (default 981)
+    
+    Returns:
+        (x, y, z) predicted position
+    """
+    physics = PhysicsModel(gravity=gravity)
+    return physics.predict_position(x0, y0, z0, vx, vy, vz, t)

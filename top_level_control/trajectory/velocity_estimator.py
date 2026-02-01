@@ -1,11 +1,10 @@
 """
-Velocity Estimator - Calculate Ball Velocity from Position History
+Velocity Estimator
 
-Computes velocity vector (Vx, Vy, Vz) from timestamped positions.
-Uses linear regression for noise-robust estimation.
+Calculates ball velocity from position history.
+Supports simple (last-first) and regression methods.
 
-Part of trajectory prediction pipeline:
-  position_buffer.py  →  velocity_estimator.py  →  trajectory_predictor.py
+Note: This module is camera-agnostic.
 """
 
 import numpy as np
@@ -13,95 +12,68 @@ import numpy as np
 
 class VelocityEstimator:
     """
-    Estimate ball velocity from position history.
+    Estimates velocity from position history.
     
     Methods:
-        - Simple: (last - first) / dt
-        - Linear regression: Fit line to all points (more robust)
-    
-    Usage:
-        estimator = VelocityEstimator()
-        velocity = estimator.estimate(positions, timestamps)
-        # velocity = {'vx': ..., 'vy': ..., 'vz': ..., 'speed': ...}
+        'simple': (last - first) / dt  (fast, noisy)
+        'regression': Linear fit (slower, noise-robust)
     """
-    
+
     def __init__(self, method='regression'):
         """
         Initialize velocity estimator.
-        
+
         Args:
             method: 'simple' or 'regression'
-                    - simple: (P_last - P_first) / dt
-                    - regression: Linear fit (recommended, noise-robust)
         """
         self.method = method
-    
-    def estimate_simple(self, positions, timestamps):
+
+    def estimate_simple(self, positions, times):
         """
-        Simple velocity: (last position - first position) / time.
+        Simple velocity: (last - first) / dt
         
-        Args:
-            positions: np.array shape (N, 3)
-            timestamps: np.array shape (N,)
-        
-        Returns:
-            (vx, vy, vz) velocity in units/second
+        Fast but sensitive to noise.
         """
         if len(positions) < 2:
-            return (0.0, 0.0, 0.0)
+            return None
         
-        dt = timestamps[-1] - timestamps[0]
-        
+        dt = times[-1] - times[0]
         if dt <= 0:
-            return (0.0, 0.0, 0.0)
+            return None
         
-        dp = positions[-1] - positions[0]
-        velocity = dp / dt
-        
-        return tuple(velocity)
-    
-    def estimate_regression(self, positions, timestamps):
+        return (positions[-1] - positions[0]) / dt
+
+    def estimate_regression(self, positions, times):
         """
-        Linear regression velocity: Fit line to positions vs time.
+        Regression velocity: Linear fit slope.
         
-        More robust to noise than simple method.
-        
-        Args:
-            positions: np.array shape (N, 3)
-            timestamps: np.array shape (N,)
-        
-        Returns:
-            (vx, vy, vz) velocity in units/second
+        More robust to noise.
         """
         if len(positions) < 2:
-            return (0.0, 0.0, 0.0)
+            return None
         
-        # Normalize timestamps to start at 0
-        t = timestamps - timestamps[0]
+        # Normalize time for numerical stability
+        t0 = times[0]
+        t_norm = times - t0
         
-        # Linear regression for each axis: position = velocity * t + offset
-        # Using numpy polyfit (degree 1 = linear)
-        vx = np.polyfit(t, positions[:, 0], 1)[0]
-        vy = np.polyfit(t, positions[:, 1], 1)[0]
-        vz = np.polyfit(t, positions[:, 2], 1)[0]
-        
-        return (vx, vy, vz)
-    
-    def estimate(self, positions, timestamps):
+        # Linear fit: position = velocity * t + offset
+        try:
+            coeffs = np.polyfit(t_norm, positions, 1)
+            velocity = coeffs[0]  # Slope
+            return velocity
+        except:
+            return None
+
+    def estimate(self, x_arr, y_arr, z_arr, t_arr):
         """
-        Estimate velocity using configured method.
-        
+        Estimate velocity for all axes.
+
         Args:
-            positions: np.array shape (N, 3) - [[x,y,z], ...]
-            timestamps: np.array shape (N,) - [t1, t2, ...]
-        
+            x_arr, y_arr, z_arr: Position arrays
+            t_arr: Time array
+
         Returns:
-            dict with:
-                'vx': X velocity (units/sec)
-                'vy': Y velocity (units/sec)
-                'vz': Z velocity (units/sec)
-                'speed': Total speed (units/sec)
-                'valid': True if estimation succeeded
+            dict with 'vx', 'vy', 'vz', 'speed', 'valid'
         """
         result = {
             'vx': 0.0,
@@ -110,54 +82,42 @@ class VelocityEstimator:
             'speed': 0.0,
             'valid': False
         }
-        
-        # Need at least 2 points
-        if len(positions) < 2:
+
+        if len(t_arr) < 2:
             return result
-        
-        # Estimate velocity
+
+        # Choose estimation method
         if self.method == 'simple':
-            vx, vy, vz = self.estimate_simple(positions, timestamps)
+            vx = self.estimate_simple(x_arr, t_arr)
+            vy = self.estimate_simple(y_arr, t_arr)
+            vz = self.estimate_simple(z_arr, t_arr)
         else:
-            vx, vy, vz = self.estimate_regression(positions, timestamps)
-        
-        # Calculate speed (magnitude)
-        speed = np.sqrt(vx**2 + vy**2 + vz**2)
-        
-        result['vx'] = float(vx)
-        result['vy'] = float(vy)
-        result['vz'] = float(vz)
-        result['speed'] = float(speed)
+            vx = self.estimate_regression(x_arr, t_arr)
+            vy = self.estimate_regression(y_arr, t_arr)
+            vz = self.estimate_regression(z_arr, t_arr)
+
+        if vx is None or vy is None or vz is None:
+            return result
+
+        result['vx'] = vx
+        result['vy'] = vy
+        result['vz'] = vz
+        result['speed'] = np.sqrt(vx**2 + vy**2 + vz**2)
         result['valid'] = True
-        
+
         return result
-    
-    def estimate_from_buffer(self, position_buffer, n_points=None):
+
+    def estimate_from_buffer(self, buffer):
         """
-        Estimate velocity directly from PositionBuffer.
-        
+        Convenience method to estimate from PositionBuffer.
+
         Args:
-            position_buffer: PositionBuffer instance
-            n_points: Number of recent points to use (None = all)
-        
+            buffer: PositionBuffer instance
+
         Returns:
-            dict with 'vx', 'vy', 'vz', 'speed', 'valid'
+            dict with velocity info
         """
-        positions, timestamps = position_buffer.get_as_arrays(n_points)
-        return self.estimate(positions, timestamps)
-
-
-def estimate_velocity(positions, timestamps, method='regression'):
-    """
-    Convenience function to estimate velocity.
-    
-    Args:
-        positions: np.array shape (N, 3)
-        timestamps: np.array shape (N,)
-        method: 'simple' or 'regression'
-    
-    Returns:
-        dict with 'vx', 'vy', 'vz', 'speed', 'valid'
-    """
-    estimator = VelocityEstimator(method=method)
-    return estimator.estimate(positions, timestamps)
+        arrays = buffer.get_as_arrays()
+        return self.estimate(
+            arrays['x'], arrays['y'], arrays['z'], arrays['t']
+        )
