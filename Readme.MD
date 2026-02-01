@@ -1,161 +1,238 @@
 # Table Tennis Robot - Vision System
 
-Stereo vision system for autonomous table tennis robot ball tracking.
+Stereo vision system for real-time ball tracking and trajectory prediction.
+
+---
+
+## System Overview
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        VISION PIPELINE                                   │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│   CAMERAS          DETECTION         TRIANGULATION      PREDICTION       │
+│                                                                          │
+│  ┌───────┐        ┌─────────┐        ┌───────────┐     ┌────────────┐   │
+│  │ Left  │───────▶│  Ball   │───────▶│           │     │            │   │
+│  │Camera │        │Detector │        │    3D     │────▶│ Trajectory │   │
+│  └───────┘        │(HSV+LAB)│        │Triangulate│     │ Predictor  │   │
+│                   └─────────┘        │           │     │            │   │
+│  ┌───────┐        ┌─────────┐        │  (X,Y,Z)  │     │ Intercept  │   │
+│  │ Right │───────▶│  Ball   │───────▶│           │────▶│   Point    │   │
+│  │Camera │        │Detector │        └───────────┘     └────────────┘   │
+│  └───────┘        └─────────┘                                 │          │
+│                                                               ▼          │
+│                                                         ┌──────────┐    │
+│                                                         │  ROBOT   │    │
+│                                                         │ CONTROL  │    │
+│                                                         └──────────┘    │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Hardware
+
+**Cameras:** Arducam OV9782 Global Shutter USB (x2)
+- Resolution: 1280 x 720
+- Frame Rate: 120 fps
+- Global shutter eliminates motion blur
+
+---
 
 ## Project Structure
 
 ```
 top_level_control/
-├── calibration/                  # Camera calibration
-│   ├── calib.py                  # Calibration script (intrinsic + extrinsic)
-│   ├── calibration_settings.yaml # Settings for calibration
-│   └── camera_parameters/        # Generated calibration data (after running calib.py)
+├── camera_calibration/           # Calibration tools & output
+│   ├── calibration_settings.yaml
+│   ├── calibrate.py
+│   ├── calib_extrinsic_only.py
+│   └── camera_parameters/        # Generated .dat files
 │
-├── config/
-│   └── stereo_config.yaml        # Stereo camera configuration
+├── config/                       # Runtime configuration
+│   ├── stereo_config.yaml
+│   ├── ball_thresholds.json
+│   └── ball_thresholds_stereo.json
 │
-├── tracking/                     # Ball tracking modules
-│   ├── ball_tracker.py           # Single camera ball detection (HSV-based)
-│   ├── stereo_detector.py        # Detect ball in both cameras (no 3D)
-│   └── stereo_triangulator.py    # Full 3D tracking with triangulation
+├── tracking/                     # Detection & triangulation
+│   ├── ball_tracker.py
+│   ├── stereo_detector.py
+│   └── stereo_triangulator.py
 │
-└── scripts/                      # Test scripts
-    ├── test_single_camera.py     # Test detection on one camera
-    ├── test_stereo_detection.py  # Test detection on both cameras
-    └── test_triangulation.py     # Test 3D triangulation (verify calibration!)
+├── trajectory/                   # Prediction module
+│   ├── position_buffer.py
+│   ├── velocity_estimator.py
+│   ├── physics_model.py
+│   └── trajectory_predictor.py
+│
+└── tests/                        # Verification scripts
+    ├── test_single_camera.py
+    ├── test_stereo_detection.py
+    ├── test_triangulation.py
+    └── verify_triangulation.py
 ```
+
+---
+
+## Pipeline Stages
+
+### Stage 1: Camera Calibration
+
+**Purpose:** Determine camera properties and spatial relationship.
+
+**Process:**
+1. Capture checkerboard images from each camera
+2. Calculate intrinsic parameters (focal length, distortion)
+3. Capture synchronized stereo pairs
+4. Calculate extrinsic parameters (rotation, translation between cameras)
+
+**Output:** Calibration files in `camera_parameters/`
+
+**Quality Target:** RMSE < 0.3 (excellent), < 0.5 (acceptable)
+
+---
+
+### Stage 2: Ball Detection
+
+**Purpose:** Find the ball's pixel position in each camera frame.
+
+**Process:**
+1. Normalize lighting using CLAHE
+2. Detect orange color in HSV color space
+3. Detect orange color in LAB color space
+4. Fuse both masks (55% HSV + 45% LAB)
+5. Filter by shape (circularity, solidity, area)
+6. Return center (x, y) and radius in pixels
+
+**Output:** Ball center coordinates for left and right camera
+
+---
+
+### Stage 3: 3D Triangulation
+
+**Purpose:** Calculate the ball's real-world 3D position.
+
+**Process:**
+1. Get ball pixel coordinates from both cameras
+2. Apply calibration parameters (projection matrices)
+3. Use Direct Linear Transform (DLT) to solve for 3D point
+4. Output position in calibration units (cm)
+
+**Output:** (X, Y, Z) position relative to left camera origin
+
+**Coordinate System:**
+```
+        Y (up)
+        │
+        │
+        │
+Left ───┼─────── Right
+Camera  │        Camera
+        │
+        └──────── X (right)
+       /
+      /
+     Z (depth toward ball)
+```
+
+---
+
+### Stage 4: Trajectory Prediction
+
+**Purpose:** Predict where the ball will be in the future.
+
+**Process:**
+1. **Collect:** Store recent 3D positions with timestamps
+2. **Velocity:** Calculate ball velocity from position history using linear regression
+3. **Physics:** Apply kinematic equations with gravity
+   - X and Z: Constant velocity (no air resistance)
+   - Y: Accelerates downward at 981 cm/s²
+4. **Intercept:** Find where ball crosses robot's reach plane
+
+**Output:** Interception point (X, Y) and time until arrival
+
+---
 
 ## Setup Workflow
 
-### Step 1: Camera Calibration
+### 1. Calibrate Cameras
 
-Run calibration to get intrinsic and extrinsic parameters:
-
-```bash
-cd calibration
-python calib.py calibration_settings.yaml
+Print a checkerboard pattern and run calibration:
+```
+cd camera_calibration
+python calibrate.py calibration_settings.yaml
 ```
 
-This will:
-1. Capture calibration frames for each camera (checkerboard)
-2. Calculate intrinsic parameters (camera matrix, distortion)
-3. Capture stereo pairs
-4. Calculate extrinsic parameters (R, T between cameras)
+Move the checkerboard to various positions and angles. The script will:
+- Capture individual camera frames (intrinsic calibration)
+- Capture synchronized stereo frames (extrinsic calibration)
+- Save parameters to `camera_parameters/`
 
-**Goal: RMS error < 0.5 is good, < 0.3 is excellent**
+### 2. Tune Ball Detection
 
-### Step 2: Test Single Camera Detection
-
-Make sure ball detection works on each camera:
-
-```bash
-cd scripts
+Adjust color thresholds for your lighting conditions:
+```
+cd tests
 python test_single_camera.py
 ```
 
-Controls:
-- `q` - Quit
-- `t` - Open HSV tuner (adjust if ball not detected)
-- `m` - Show mask
-- `0-9` - Switch camera ID
+Use the threshold tuner to find HSV/LAB values where the ball appears white in the mask. Save thresholds to `config/ball_thresholds_stereo.json`.
 
-### Step 3: Test Stereo Detection
+### 3. Verify Triangulation
 
-Test that ball is detected in BOTH cameras simultaneously:
-
-```bash
-python test_stereo_detection.py
+Test that 3D measurements are accurate:
+```
+python verify_triangulation.py
 ```
 
-Both cameras must detect the ball before triangulation will work!
+Place the ball at known distances (measure with tape) and compare against displayed Z values. Accuracy should be within 5%.
 
-### Step 4: Test Triangulation (Verify Calibration!)
+### 4. Test Trajectory Prediction
 
-This is the key test to verify your calibration works:
-
-```bash
-python test_triangulation.py
+Run the full pipeline:
+```
+python -m trajectory.test_trajectory_prediction
 ```
 
-**How to verify:**
-1. Hold ball at a known distance (measure with ruler/tape)
-2. Check if displayed Z (depth) matches your measurement
-3. Test at multiple distances: 500mm, 1000mm, 1500mm
-4. If Z is way off, recalibrate!
+Throw the ball toward the cameras and verify:
+- Velocity values are reasonable (200-800 cm/s for typical throws)
+- Predicted intercept point updates smoothly
+- Time-to-intercept decreases as ball approaches
 
-Controls:
-- `q` - Quit
-- `s` - Save measurement
-- `r` - Reset measurements
-
-## Module Usage
-
-### BallTracker (single camera)
-```python
-from tracking import BallTracker
-
-tracker = BallTracker()
-result = tracker.detect(frame)
-
-if result['found']:
-    center = result['center']  # (x, y) pixels
-    radius = result['radius']  # pixels
-```
-
-### StereoDetector (both cameras, no 3D)
-```python
-from tracking import StereoDetector
-
-detector = StereoDetector(cam_left_id=0, cam_right_id=1)
-detector.start_cameras()
-
-result = detector.detect()
-if result['both_found']:
-    # Ready for triangulation!
-    left_pt = result['left_detection']['center']
-    right_pt = result['right_detection']['center']
-
-detector.stop_cameras()
-```
-
-### StereoTriangulator (full 3D tracking)
-```python
-from tracking import StereoTriangulator
-
-triangulator = StereoTriangulator(
-    calibration_dir='calibration/camera_parameters',
-    cam_left_id=0,
-    cam_right_id=1
-)
-triangulator.start_cameras()
-
-result = triangulator.update()
-if result['found_3d']:
-    X, Y, Z = result['position_3d']  # millimeters
-    print(f"Ball at: ({X}, {Y}, {Z}) mm")
-
-triangulator.stop_cameras()
-```
+---
 
 ## Troubleshooting
 
-### Ball not detected
-- Run `test_single_camera.py` with HSV tuner (`t` key)
-- Adjust H, S, V ranges until ball shows white in mask
-- Update `DEFAULT_COLOR_LOWER/UPPER` in `ball_tracker.py`
+| Problem | Solution |
+|---------|----------|
+| Ball not detected | Tune HSV/LAB thresholds with test_single_camera.py |
+| Z depth is wrong | Recalibrate cameras, verify checkerboard square size |
+| Cameras won't open | Check USB connections, try different camera IDs |
+| Low frame rate | Ensure MJPG codec is active, use DirectShow backend |
+| Erratic predictions | Check calibration accuracy, increase min_points |
+| Ball detected in only one camera | Adjust thresholds separately for each camera |
 
-### Z (depth) is wrong
-- Recalibrate! Make sure checkerboard is detected clearly
-- Verify checkerboard size in `calibration_settings.yaml`
-- Use more calibration frames (15-20 is good)
-- Make sure checkerboard is at various angles/distances
+---
 
-### Cameras not found
-- Check camera IDs (try 0, 1, 2, etc.)
-- On Windows: Device Manager > Cameras
-- On Linux: `ls /dev/video*`
+## Key Parameters
 
-### Large Y difference between detections
-- Cameras may not be level/aligned
-- Recalibrate with cameras in final position
-- Check `max_y_diff` parameter (default 50px)
+| Parameter | Location | Description |
+|-----------|----------|-------------|
+| `checkerboard_box_size_scale` | calibration_settings.yaml | Square size in cm (e.g., 3.17) |
+| `frame_width/height` | stereo_config.yaml | Camera resolution (1280x720) |
+| `camera_left/right id` | stereo_config.yaml | USB camera device IDs |
+| `robot_z` | trajectory test | Z distance where robot intercepts |
+| `min_points` | trajectory_predictor | Points needed before prediction (3) |
+| `gravity` | physics_model | 981 cm/s² (or 9810 mm/s²) |
+
+---
+
+## Units
+
+All 3D measurements use the same units as `checkerboard_box_size_scale`:
+- If checkerboard squares are 3.17 **cm** → outputs are in **cm**
+- If checkerboard squares are 31.7 **mm** → outputs are in **mm**
+
+Typical table tennis table is ~274 cm long. Robot should intercept at Z ≈ 30-80 cm from cameras depending on setup.
