@@ -23,6 +23,14 @@ CONTROLS:
     s - Save thresholds to ball_thresholds_stereo.json
     w - Same as 's' (write/save)
 
+    Camera Controls:
+    e - Increase exposure (+500us)
+    E - Decrease exposure (-500us)
+    g - Increase gain (+1)
+    G - Decrease gain (-1)
+    a - Auto exposure (once)
+    b - Auto white balance (once)
+
 THRESHOLD FILE:
     Saves to config/ball_thresholds_stereo.json with format:
     {
@@ -37,6 +45,7 @@ import os
 import json
 import numpy as np
 import yaml
+from concurrent.futures import ThreadPoolExecutor
 
 try:
     from pypylon import pylon
@@ -73,26 +82,83 @@ def get_basler_camera(serial=None, device_index=0):
     return pylon.InstantCamera(tlFactory.CreateDevice(devices[device_index]))
 
 
-def configure_basler_camera(camera, width=1920, height=1200):
-    """Configure Basler camera settings."""
+def configure_basler_camera(camera, width=1920, height=1200, exposure_us=2000):
+    """
+    Configure Basler camera settings optimized for high-speed ball tracking.
+
+    Basler acA1920-150uc features used:
+    - Resolution/ROI: Configurable for frame rate vs. field of view tradeoff
+    - Exposure: Short exposure (2000μs default) to minimize motion blur
+    - Bandwidth limiting: Prevents USB conflicts when using 2 cameras
+    - Light source preset: Optimizes color processing for consistent detection
+    - Chunk timestamps: Enables accurate frame timing for velocity calculation
+    """
     camera.Open()
-    
+
+    # === RESOLUTION & ROI ===
     camera.Width.SetValue(width)
     camera.Height.SetValue(height)
-    
+
     max_w = camera.WidthMax.GetValue()
     max_h = camera.HeightMax.GetValue()
     camera.OffsetX.SetValue((max_w - width) // 2)
     camera.OffsetY.SetValue((max_h - height) // 2)
-    
+
+    # === EXPOSURE SETTINGS ===
+    # Short exposure reduces motion blur on fast-moving ball
+    # 2000μs = 2ms, allows up to 500fps theoretical (limited by sensor to 150fps)
     camera.ExposureAuto.SetValue("Off")
-    camera.ExposureTime.SetValue(3000)
+    camera.ExposureTime.SetValue(exposure_us)
+
+    # === GAIN SETTINGS ===
     camera.GainAuto.SetValue("Off")
-    camera.Gain.SetValue(0)
-    
+    camera.Gain.SetValue(0)  # Start with no gain (less noise)
+
+    # === BANDWIDTH LIMITING ===
+    # Critical for dual USB cameras - prevents bandwidth conflicts
+    # USB 3.0 = 5Gbps = ~400MB/s, split between 2 cameras = 200MB/s each
+    try:
+        camera.DeviceLinkThroughputLimitMode.SetValue("On")
+        camera.DeviceLinkThroughputLimit.SetValue(200000000)  # 200 MB/s per camera
+    except Exception:
+        pass  # Not all cameras support this
+
+    # === LIGHT SOURCE PRESET ===
+    # Optimizes white balance for consistent color detection
+    # Use Daylight5000K for typical indoor lighting, Daylight6500K for bright white LEDs
+    try:
+        camera.BslLightSourcePreset.SetValue("Daylight5000K")
+    except Exception:
+        try:
+            camera.LightSourcePreset.SetValue("Daylight5000K")
+        except Exception:
+            pass  # Older cameras may not support this
+
+    # === CHUNK DATA (TIMESTAMPS) ===
+    # Enable timestamp chunks for accurate frame timing
+    # Critical for velocity calculation in trajectory prediction
+    try:
+        camera.ChunkModeActive.SetValue(True)
+        camera.ChunkSelector.SetValue("Timestamp")
+        camera.ChunkEnable.SetValue(True)
+    except Exception:
+        pass  # Chunk mode not available on all cameras
+
+    # === AUTO FUNCTION PROFILE ===
+    # When auto exposure is triggered, prioritize short exposure over low gain
+    # This reduces motion blur at the cost of slightly more noise
+    try:
+        camera.AutoFunctionProfile.SetValue("MinimizeExposureTime")
+    except Exception:
+        try:
+            camera.BslAutoFunctionProfile.SetValue("MinimizeExposureTime")
+        except Exception:
+            pass
+
     return {
         'actual_width': camera.Width.GetValue(),
         'actual_height': camera.Height.GetValue(),
+        'exposure_us': camera.ExposureTime.GetValue(),
         'settings_match': (camera.Width.GetValue() == width and camera.Height.GetValue() == height)
     }
 
@@ -106,20 +172,36 @@ def create_image_converter():
 
 
 def grab_frame(camera, converter):
-    """Grab single frame from Basler camera."""
+    """
+    Grab single frame from Basler camera.
+
+    Returns:
+        tuple: (frame, timestamp_ns) or (None, None) if failed
+               timestamp_ns is camera hardware timestamp in nanoseconds (if available)
+    """
     if not camera.IsGrabbing():
         camera.StartGrabbing(pylon.GrabStrategy_LatestImageOnly)
-    
-    grab_result = camera.RetrieveResult(5000, pylon.TimeoutHandling_ThrowException)
-    
+
+    grab_result = camera.RetrieveResult(500, pylon.TimeoutHandling_ThrowException)
+
     if grab_result.GrabSucceeded():
         image = converter.Convert(grab_result)
         frame = image.GetArray()
+
+        # Extract hardware timestamp from chunk data if available
+        # This provides more accurate timing than software timestamps
+        timestamp_ns = None
+        try:
+            if grab_result.ChunkTimestamp.IsReadable():
+                timestamp_ns = grab_result.ChunkTimestamp.Value
+        except Exception:
+            pass
+
         grab_result.Release()
-        return frame
-    
+        return frame, timestamp_ns
+
     grab_result.Release()
-    return None
+    return None, None
 
 
 # ============================================================================
@@ -128,53 +210,78 @@ def grab_frame(camera, converter):
 
 class BaslerStereoCapture:
     """Stereo camera capture for Basler cameras."""
-    
+
     def __init__(self, left_serial=None, right_serial=None, left_index=0, right_index=1):
         self.left_serial = left_serial
         self.right_serial = right_serial
         self.left_index = left_index
         self.right_index = right_index
-        
+
         self.cam_left = None
         self.cam_right = None
-        self.converter = None
-    
+        self.converter_left = None
+        self.converter_right = None
+        self.executor = ThreadPoolExecutor(max_workers=2)
+
     def start_cameras(self, width=1920, height=1200):
         """Open and configure cameras."""
         print("\nOpening Basler cameras...")
-        
+
         self.cam_left = get_basler_camera(serial=self.left_serial, device_index=self.left_index)
         self.cam_right = get_basler_camera(serial=self.right_serial, device_index=self.right_index)
-        
+
         settings_left = configure_basler_camera(self.cam_left, width, height)
         settings_right = configure_basler_camera(self.cam_right, width, height)
-        
-        self.converter = create_image_converter()
-        
+
+        self.converter_left = create_image_converter()
+        self.converter_right = create_image_converter()
+
         print(f"\n  LEFT Camera:")
         print(f"    Serial: {self.cam_left.GetDeviceInfo().GetSerialNumber()}")
         print(f"    Resolution: {settings_left['actual_width']}x{settings_left['actual_height']}")
         print(f"    Status: {'OK' if settings_left['settings_match'] else 'WARNING - mismatch'}")
-        
+
         print(f"\n  RIGHT Camera:")
         print(f"    Serial: {self.cam_right.GetDeviceInfo().GetSerialNumber()}")
         print(f"    Resolution: {settings_right['actual_width']}x{settings_right['actual_height']}")
         print(f"    Status: {'OK' if settings_right['settings_match'] else 'WARNING - mismatch'}")
-        
+
         print("\nCameras started")
-    
+
     def read(self):
-        """Read frames from both cameras."""
-        frame_left = grab_frame(self.cam_left, self.converter)
-        frame_right = grab_frame(self.cam_right, self.converter)
-        
+        """
+        Read frames from both cameras in parallel.
+
+        Returns:
+            tuple: (ret_left, frame_left, ret_right, frame_right, timestamps)
+                   timestamps is dict with 'left' and 'right' hardware timestamps (ns)
+        """
+        future_left = self.executor.submit(grab_frame, self.cam_left, self.converter_left)
+        future_right = self.executor.submit(grab_frame, self.cam_right, self.converter_right)
+
+        frame_left, ts_left = None, None
+        frame_right, ts_right = None, None
+
+        try:
+            frame_left, ts_left = future_left.result(timeout=0.5)
+        except Exception:
+            pass
+
+        try:
+            frame_right, ts_right = future_right.result(timeout=0.5)
+        except Exception:
+            pass
+
         ret_left = frame_left is not None
         ret_right = frame_right is not None
-        
-        return ret_left, frame_left, ret_right, frame_right
-    
+
+        timestamps = {'left': ts_left, 'right': ts_right}
+
+        return ret_left, frame_left, ret_right, frame_right, timestamps
+
     def stop_cameras(self):
         """Release cameras."""
+        self.executor.shutdown(wait=False)
         if self.cam_left:
             self.cam_left.Close()
         if self.cam_right:
@@ -555,6 +662,11 @@ def main():
     print("  c - Copy LEFT thresholds to RIGHT")
     print("  p - Print current thresholds")
     print("  s/w - Save thresholds to JSON")
+    print("\n  Camera Controls:")
+    print("  e/E - Increase/Decrease exposure")
+    print("  g/G - Increase/Decrease gain")
+    print("  a   - Auto exposure (once)")
+    print("  b   - Auto white balance (once)")
     print("=" * 60)
     
     detector = StereoDetectorIndependent(config)
@@ -578,11 +690,11 @@ def main():
     
     try:
         while True:
-            ret_left, frame_left_raw, ret_right, frame_right_raw = detector.read_frames()
-            
+            ret_left, frame_left_raw, ret_right, frame_right_raw, timestamps = detector.read_frames()
+
             if not ret_left or not ret_right:
                 continue
-            
+
             frame_left = lighting.normalize(frame_left_raw)
             frame_right = lighting.normalize(frame_right_raw)
             
@@ -677,7 +789,35 @@ def main():
                 tuner.print_thresholds()
             elif key == ord('s') or key == ord('w'):
                 tuner.save_thresholds(thresholds_path)
-    
+            elif key == ord('e'):  # Increase exposure
+                for cam in [detector.capture.cam_left, detector.capture.cam_right]:
+                    current = cam.ExposureTime.GetValue()
+                    cam.ExposureTime.SetValue(min(current + 500, 100000))
+                print(f"[EXPOSURE] {detector.capture.cam_left.ExposureTime.GetValue():.0f}us")
+            elif key == ord('E'):  # Decrease exposure
+                for cam in [detector.capture.cam_left, detector.capture.cam_right]:
+                    current = cam.ExposureTime.GetValue()
+                    cam.ExposureTime.SetValue(max(current - 500, 100))
+                print(f"[EXPOSURE] {detector.capture.cam_left.ExposureTime.GetValue():.0f}us")
+            elif key == ord('g'):  # Increase gain
+                for cam in [detector.capture.cam_left, detector.capture.cam_right]:
+                    current = cam.Gain.GetValue()
+                    cam.Gain.SetValue(min(current + 1, 20))
+                print(f"[GAIN] {detector.capture.cam_left.Gain.GetValue():.1f}")
+            elif key == ord('G'):  # Decrease gain
+                for cam in [detector.capture.cam_left, detector.capture.cam_right]:
+                    current = cam.Gain.GetValue()
+                    cam.Gain.SetValue(max(current - 1, 0))
+                print(f"[GAIN] {detector.capture.cam_left.Gain.GetValue():.1f}")
+            elif key == ord('a'):  # Auto exposure once
+                for cam in [detector.capture.cam_left, detector.capture.cam_right]:
+                    cam.ExposureAuto.SetValue("Once")
+                print("[AUTO EXPOSURE] Running...")
+            elif key == ord('b'):  # Auto white balance once
+                for cam in [detector.capture.cam_left, detector.capture.cam_right]:
+                    cam.BalanceWhiteAuto.SetValue("Once")
+                print("[AUTO WHITE BALANCE] Running...")
+
     except KeyboardInterrupt:
         print("\n\nInterrupted")
     

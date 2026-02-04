@@ -39,6 +39,7 @@ import os
 import json
 import yaml
 import numpy as np
+from concurrent.futures import ThreadPoolExecutor
 
 try:
     from pypylon import pylon
@@ -75,23 +76,53 @@ def get_basler_camera(serial=None, device_index=0):
     return pylon.InstantCamera(tlFactory.CreateDevice(devices[device_index]))
 
 
-def configure_basler_camera(camera, width=1920, height=1200):
-    """Configure Basler camera settings."""
+def configure_basler_camera(camera, width=1920, height=1200, exposure_us=2000):
+    """
+    Configure Basler camera with optimized settings for ball tracking.
+
+    Features: Short exposure, bandwidth limiting, light source preset, chunk timestamps.
+    """
     camera.Open()
-    
+
+    # Resolution & ROI
     camera.Width.SetValue(width)
     camera.Height.SetValue(height)
-    
+
     max_w = camera.WidthMax.GetValue()
     max_h = camera.HeightMax.GetValue()
     camera.OffsetX.SetValue((max_w - width) // 2)
     camera.OffsetY.SetValue((max_h - height) // 2)
-    
+
+    # Exposure - short to reduce motion blur
     camera.ExposureAuto.SetValue("Off")
-    camera.ExposureTime.SetValue(3000)
+    camera.ExposureTime.SetValue(exposure_us)
     camera.GainAuto.SetValue("Off")
     camera.Gain.SetValue(0)
-    
+
+    # Bandwidth limiting for dual USB cameras
+    try:
+        camera.DeviceLinkThroughputLimitMode.SetValue("On")
+        camera.DeviceLinkThroughputLimit.SetValue(200000000)
+    except Exception:
+        pass
+
+    # Light source preset for color consistency
+    try:
+        camera.BslLightSourcePreset.SetValue("Daylight5000K")
+    except Exception:
+        try:
+            camera.LightSourcePreset.SetValue("Daylight5000K")
+        except Exception:
+            pass
+
+    # Enable chunk timestamps
+    try:
+        camera.ChunkModeActive.SetValue(True)
+        camera.ChunkSelector.SetValue("Timestamp")
+        camera.ChunkEnable.SetValue(True)
+    except Exception:
+        pass
+
     return {
         'actual_width': camera.Width.GetValue(),
         'actual_height': camera.Height.GetValue(),
@@ -108,18 +139,18 @@ def create_image_converter():
 
 
 def grab_frame(camera, converter):
-    """Grab single frame from Basler camera."""
+    """Grab single frame from Basler camera with reduced timeout."""
     if not camera.IsGrabbing():
         camera.StartGrabbing(pylon.GrabStrategy_LatestImageOnly)
-    
-    grab_result = camera.RetrieveResult(5000, pylon.TimeoutHandling_ThrowException)
-    
+
+    grab_result = camera.RetrieveResult(500, pylon.TimeoutHandling_ThrowException)
+
     if grab_result.GrabSucceeded():
         image = converter.Convert(grab_result)
         frame = image.GetArray()
         grab_result.Release()
         return frame
-    
+
     grab_result.Release()
     return None
 
@@ -146,7 +177,9 @@ class TriangulationTester:
         self.triangulator = None
         self.cam_left = None
         self.cam_right = None
-        self.converter = None
+        self.converter_left = None
+        self.converter_right = None
+        self.executor = None
         
         self.measurements = []
         self.show_debug = False
@@ -317,10 +350,10 @@ class TriangulationTester:
         cv2.createTrackbar('B High', 'Threshold Tuner', self.lab_upper[2], 255, lambda x: None)
     
     def update_from_tuner(self):
-        """Read values from threshold tuner and apply to trackers."""
+        """Read values from threshold tuner and apply to BOTH trackers."""
         if not self.show_tuner:
             return
-        
+
         try:
             self.hsv_lower = [
                 cv2.getTrackbarPos('H Low', 'Threshold Tuner'),
@@ -342,10 +375,19 @@ class TriangulationTester:
                 cv2.getTrackbarPos('A High', 'Threshold Tuner'),
                 cv2.getTrackbarPos('B High', 'Threshold Tuner')
             ]
-            
-            self.triangulator.set_hsv_thresholds(self.hsv_lower, self.hsv_upper)
-            self.triangulator.set_lab_thresholds(self.lab_lower, self.lab_upper)
-        except:
+
+            # Update both left and right copies (tuner applies same to both)
+            self.hsv_lower_left = self.hsv_lower_right = self.hsv_lower
+            self.hsv_upper_left = self.hsv_upper_right = self.hsv_upper
+            self.lab_lower_left = self.lab_lower_right = self.lab_lower
+            self.lab_upper_left = self.lab_upper_right = self.lab_upper
+
+            # Apply to both trackers individually
+            self.triangulator.tracker_left.set_hsv_thresholds(self.hsv_lower, self.hsv_upper)
+            self.triangulator.tracker_left.set_lab_thresholds(self.lab_lower, self.lab_upper)
+            self.triangulator.tracker_right.set_hsv_thresholds(self.hsv_lower, self.hsv_upper)
+            self.triangulator.tracker_right.set_lab_thresholds(self.lab_lower, self.lab_upper)
+        except Exception:
             pass
     
     def create_debug_view(self, frame_left, frame_right):
@@ -406,9 +448,9 @@ class TriangulationTester:
         print("=" * 60)
     
     def start_cameras_with_basler(self):
-        """Start cameras with Basler configuration."""
+        """Start cameras with optimized Basler configuration."""
         print("\nOpening Basler cameras...")
-        
+
         self.cam_left = get_basler_camera(
             serial=self.left_serial if self.left_serial else None,
             device_index=0
@@ -417,21 +459,37 @@ class TriangulationTester:
             serial=self.right_serial if self.right_serial else None,
             device_index=1
         )
-        
+
         settings_left = configure_basler_camera(self.cam_left, self.frame_width, self.frame_height)
         settings_right = configure_basler_camera(self.cam_right, self.frame_width, self.frame_height)
-        
-        self.converter = create_image_converter()
-        
+
+        # Separate converters for parallel capture
+        self.converter_left = create_image_converter()
+        self.converter_right = create_image_converter()
+
+        # Thread executor for parallel frame capture
+        self.executor = ThreadPoolExecutor(max_workers=2)
+
         print(f"  LEFT:  {settings_left['actual_width']}x{settings_left['actual_height']} "
               f"(Serial: {self.cam_left.GetDeviceInfo().GetSerialNumber()})")
         print(f"  RIGHT: {settings_right['actual_width']}x{settings_right['actual_height']} "
               f"(Serial: {self.cam_right.GetDeviceInfo().GetSerialNumber()})")
     
     def grab_stereo_frames(self):
-        """Grab frames from both cameras."""
-        frame_left = grab_frame(self.cam_left, self.converter)
-        frame_right = grab_frame(self.cam_right, self.converter)
+        """Grab frames from both cameras in parallel."""
+        future_left = self.executor.submit(grab_frame, self.cam_left, self.converter_left)
+        future_right = self.executor.submit(grab_frame, self.cam_right, self.converter_right)
+
+        try:
+            frame_left = future_left.result(timeout=0.5)
+        except Exception:
+            frame_left = None
+
+        try:
+            frame_right = future_right.result(timeout=0.5)
+        except Exception:
+            frame_right = None
+
         return frame_left, frame_right
     
     def run(self):
@@ -486,18 +544,22 @@ class TriangulationTester:
                 found_3d = False
                 position_3d = None
                 disparity = None
-                
+
                 if result_left['found'] and result_right['found']:
                     point_left = result_left['center']
                     point_right = result_right['center']
-                    
+
                     disparity = point_left[0] - point_right[0]
-                    
+
                     if disparity > 0:
-                        X, Y, Z = self.triangulator.triangulate(point_left, point_right)
-                        if Z > 0:
-                            found_3d = True
-                            position_3d = (X, Y, Z)
+                        tri_result = self.triangulator.triangulate(point_left, point_right)
+                        # triangulate() now returns None for invalid cases
+                        if tri_result is not None:
+                            X, Y, Z = tri_result
+                            # Validate 3D position is physically plausible
+                            if (Z > 5 and Z < 500 and abs(X) < 200 and abs(Y) < 200):
+                                found_3d = True
+                                position_3d = (X, Y, Z)
                 
                 # Draw results
                 left_vis = frame_left.copy()
@@ -597,6 +659,8 @@ class TriangulationTester:
             print("\n\nInterrupted by user")
         
         finally:
+            if self.executor:
+                self.executor.shutdown(wait=False)
             if self.cam_left:
                 self.cam_left.Close()
             if self.cam_right:
