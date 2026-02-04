@@ -11,4 +11,9 @@ top_level_control/*env*/
 .metadata/
 __pycache__/
 .cache/
+venv/
+.venv/
+__pycache__/
+*.pyc
+
 

@@ -3,8 +3,8 @@
 
 # Camera serial numbers (find using pylon Viewer or test_single_camera.py --list)
 # Leave empty string "" to auto-select by device index (0 for camera0, 1 for camera1)
-camera0: ""  
-camera1: ""  
+camera0: "40042704"  
+camera1: "40042702"  
 
 # Resolution - Basler acA1920-150uc default
 frame_width: 1920

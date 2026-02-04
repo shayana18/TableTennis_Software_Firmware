@@ -282,17 +282,17 @@ def calibrate_camera_for_intrinsic_parameters(images_prefix):
             imgpoints.append(corners)
 
     cv.destroyAllWindows()
-    ret, cmtx, dist, rvecs, tvecs = cv.calibrateCamera(objpoints, imgpoints, (width, height), None, None)
-    print('rmse:', ret)
+    rmse, cmtx, dist, rvecs, tvecs = cv.calibrateCamera(objpoints, imgpoints, (width, height), None, None)
+    print('rmse:', rmse)
     print('camera matrix:\n', cmtx)
     print('distortion coeffs:', dist)
 
-    return cmtx, dist
+    return cmtx, dist, rmse
 
 
-def save_camera_intrinsics(camera_matrix, distortion_coefs, camera_name):
-    """Save camera intrinsic parameters to file."""
-    
+def save_camera_intrinsics(camera_matrix, distortion_coefs, camera_name, rmse=None):
+    """Save camera intrinsic parameters and RMSE to file."""
+
     if not os.path.exists('camera_parameters'):
         os.mkdir('camera_parameters')
 
@@ -309,6 +309,20 @@ def save_camera_intrinsics(camera_matrix, distortion_coefs, camera_name):
     for en in distortion_coefs[0]:
         outf.write(str(en) + ' ')
     outf.write('\n')
+
+    if rmse is not None:
+        outf.write('reprojection error:\n')
+        outf.write(str(rmse) + '\n')
+
+    outf.close()
+
+    # Also save RMSE to separate file for easy access
+    rmse_filename = os.path.join('camera_parameters', camera_name + '_intrinsics_rmse.dat')
+    with open(rmse_filename, 'w') as f:
+        f.write(f'rmse: {rmse}\n' if rmse else 'rmse: N/A\n')
+        if rmse is not None:
+            quality = "excellent" if rmse < 0.5 else "good" if rmse < 1.0 else "acceptable" if rmse < 2.0 else "poor"
+            f.write(f'quality: {quality}\n')
 
 
 def save_frames_two_cams(camera0_name, camera1_name):
@@ -608,12 +622,12 @@ if __name__ == '__main__':
 
     """Step2. Obtain camera intrinsic matrices and save them"""
     images_prefix = os.path.join('frames', 'camera0*')
-    cmtx0, dist0 = calibrate_camera_for_intrinsic_parameters(images_prefix) 
-    save_camera_intrinsics(cmtx0, dist0, 'camera0')
-    
+    cmtx0, dist0, rmse0 = calibrate_camera_for_intrinsic_parameters(images_prefix)
+    save_camera_intrinsics(cmtx0, dist0, 'camera0', rmse0)
+
     images_prefix = os.path.join('frames', 'camera1*')
-    cmtx1, dist1 = calibrate_camera_for_intrinsic_parameters(images_prefix)
-    save_camera_intrinsics(cmtx1, dist1, 'camera1')
+    cmtx1, dist1, rmse1 = calibrate_camera_for_intrinsic_parameters(images_prefix)
+    save_camera_intrinsics(cmtx1, dist1, 'camera1', rmse1)
 
     """Step3. Save calibration frames for both cameras simultaneously"""
     save_frames_two_cams('camera0', 'camera1')

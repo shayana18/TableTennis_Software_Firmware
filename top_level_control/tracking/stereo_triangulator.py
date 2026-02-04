@@ -12,12 +12,22 @@ REQUIREMENTS:
 
 UNITS: All outputs are in the same units as checkerboard_box_size_scale
        (typically cm if you used cm, or mm if you used mm)
+
+BASLER FEATURES USED:
+    - Parallel frame capture with ThreadPoolExecutor
+    - Bandwidth limiting (200MB/s per camera) for dual USB operation
+    - Short exposure (2000μs) to minimize motion blur
+    - Light source preset (Daylight5000K) for color consistency
+    - Chunk timestamps for accurate frame timing
+    - LatestImageOnly grab strategy for real-time tracking
+    - Auto function profile (MinimizeExposureTime) when auto-exposure triggered
 """
 
 import cv2
 import numpy as np
 import json
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 
 try:
     from pypylon import pylon
@@ -60,7 +70,9 @@ class StereoTriangulator:
         # Basler cameras
         self.cam_left = None
         self.cam_right = None
-        self.converter = None
+        self.converter_left = None
+        self.converter_right = None
+        self.executor = None  # For parallel frame capture
 
         # Ball trackers (independent thresholds per camera)
         self.tracker_left = EnhancedBallTracker()
@@ -194,10 +206,19 @@ class StereoTriangulator:
 
         return pylon.InstantCamera(tlFactory.CreateDevice(devices[device_index]))
 
-    def _configure_camera(self, camera, width, height):
-        """Configure Basler camera."""
+    def _configure_camera(self, camera, width, height, exposure_us=2000):
+        """
+        Configure Basler camera optimized for high-speed ball tracking.
+
+        Features used:
+        - Short exposure (2000μs) to minimize motion blur
+        - Bandwidth limiting for dual USB camera operation
+        - Light source preset for consistent color detection
+        - Chunk timestamps for accurate frame timing
+        """
         camera.Open()
 
+        # Resolution & ROI
         camera.Width.SetValue(width)
         camera.Height.SetValue(height)
 
@@ -206,26 +227,75 @@ class StereoTriangulator:
         camera.OffsetX.SetValue((max_w - width) // 2)
         camera.OffsetY.SetValue((max_h - height) // 2)
 
+        # Exposure - short to reduce motion blur
         camera.ExposureAuto.SetValue("Off")
-        camera.ExposureTime.SetValue(3000)
+        camera.ExposureTime.SetValue(exposure_us)
         camera.GainAuto.SetValue("Off")
         camera.Gain.SetValue(0)
 
-    def _grab_frame(self, camera):
-        """Grab single frame from Basler camera."""
+        # Bandwidth limiting - critical for dual USB cameras
+        try:
+            camera.DeviceLinkThroughputLimitMode.SetValue("On")
+            camera.DeviceLinkThroughputLimit.SetValue(200000000)  # 200 MB/s
+        except Exception:
+            pass
+
+        # Light source preset for color consistency
+        try:
+            camera.BslLightSourcePreset.SetValue("Daylight5000K")
+        except Exception:
+            try:
+                camera.LightSourcePreset.SetValue("Daylight5000K")
+            except Exception:
+                pass
+
+        # Enable chunk timestamps for accurate timing
+        try:
+            camera.ChunkModeActive.SetValue(True)
+            camera.ChunkSelector.SetValue("Timestamp")
+            camera.ChunkEnable.SetValue(True)
+        except Exception:
+            pass
+
+        # Auto function profile - minimize exposure when auto is triggered
+        try:
+            camera.AutoFunctionProfile.SetValue("MinimizeExposureTime")
+        except Exception:
+            pass
+
+    def _grab_frame(self, camera, converter):
+        """
+        Grab single frame from Basler camera.
+
+        Args:
+            camera: pylon.InstantCamera instance
+            converter: pylon.ImageFormatConverter instance
+
+        Returns:
+            tuple: (frame, timestamp_ns) or (None, None) if failed
+        """
         if not camera.IsGrabbing():
             camera.StartGrabbing(pylon.GrabStrategy_LatestImageOnly)
 
-        grab_result = camera.RetrieveResult(5000, pylon.TimeoutHandling_ThrowException)
+        grab_result = camera.RetrieveResult(500, pylon.TimeoutHandling_ThrowException)
 
         if grab_result.GrabSucceeded():
-            image = self.converter.Convert(grab_result)
+            image = converter.Convert(grab_result)
             frame = image.GetArray()
+
+            # Extract hardware timestamp if available
+            timestamp_ns = None
+            try:
+                if grab_result.ChunkTimestamp.IsReadable():
+                    timestamp_ns = grab_result.ChunkTimestamp.Value
+            except Exception:
+                pass
+
             grab_result.Release()
-            return frame
+            return frame, timestamp_ns
 
         grab_result.Release()
-        return None
+        return None, None
 
     def load_thresholds(self, filepath):
         """Load ball detection thresholds from JSON file."""
@@ -266,7 +336,7 @@ class StereoTriangulator:
             print(f"[StereoTriangulator] Warning: Could not load thresholds: {e}")
 
     def start_cameras(self, width=1920, height=1200):
-        """Open and configure Basler cameras."""
+        """Open and configure Basler cameras with optimized settings."""
         print("[StereoTriangulator] Opening cameras...")
 
         self.cam_left = self._get_camera(
@@ -281,10 +351,17 @@ class StereoTriangulator:
         self._configure_camera(self.cam_left, width, height)
         self._configure_camera(self.cam_right, width, height)
 
-        # Image converter
-        self.converter = pylon.ImageFormatConverter()
-        self.converter.OutputPixelFormat = pylon.PixelType_BGR8packed
-        self.converter.OutputBitAlignment = pylon.OutputBitAlignment_MsbAligned
+        # Separate image converters for parallel capture
+        self.converter_left = pylon.ImageFormatConverter()
+        self.converter_left.OutputPixelFormat = pylon.PixelType_BGR8packed
+        self.converter_left.OutputBitAlignment = pylon.OutputBitAlignment_MsbAligned
+
+        self.converter_right = pylon.ImageFormatConverter()
+        self.converter_right.OutputPixelFormat = pylon.PixelType_BGR8packed
+        self.converter_right.OutputBitAlignment = pylon.OutputBitAlignment_MsbAligned
+
+        # Thread executor for parallel frame capture
+        self.executor = ThreadPoolExecutor(max_workers=2)
 
         print(f"  Left:  {self.cam_left.GetDeviceInfo().GetSerialNumber()}")
         print(f"  Right: {self.cam_right.GetDeviceInfo().GetSerialNumber()}")
@@ -292,6 +369,8 @@ class StereoTriangulator:
 
     def stop_cameras(self):
         """Close camera streams."""
+        if self.executor:
+            self.executor.shutdown(wait=False)
         if self.cam_left:
             self.cam_left.Close()
         if self.cam_right:
@@ -307,7 +386,7 @@ class StereoTriangulator:
             point_right: (x, y) pixel coordinates in right image
 
         Returns:
-            (X, Y, Z) 3D coordinates (same units as calibration)
+            (X, Y, Z) 3D coordinates (same units as calibration), or None if invalid
         """
         # DLT triangulation
         A = np.array([
@@ -319,16 +398,64 @@ class StereoTriangulator:
 
         _, _, Vh = np.linalg.svd(A)
         X = Vh[-1]
+
+        # Check for degenerate case (point at infinity)
+        if abs(X[3]) < 1e-10:
+            return None
+
         X = X[:3] / X[3]  # Convert from homogeneous
 
+        # Validate result (check for inf/nan)
+        if not np.all(np.isfinite(X)):
+            return None
+
         return X
+
+    def compute_reprojection_error(self, point_3d, point_left, point_right):
+        """
+        Compute reprojection error for triangulation quality assessment.
+
+        Args:
+            point_3d: (X, Y, Z) triangulated 3D point
+            point_left: (x, y) original detection in left image
+            point_right: (x, y) original detection in right image
+
+        Returns:
+            dict with 'left_error', 'right_error', 'mean_error' in pixels
+        """
+        X, Y, Z = point_3d
+        point_3d_h = np.array([X, Y, Z, 1.0])  # Homogeneous
+
+        # Reproject to left camera
+        proj_left = self.P0 @ point_3d_h
+        proj_left = proj_left[:2] / proj_left[2]
+
+        # Reproject to right camera
+        proj_right = self.P1 @ point_3d_h
+        proj_right = proj_right[:2] / proj_right[2]
+
+        # Compute pixel errors
+        left_error = np.sqrt((proj_left[0] - point_left[0])**2 + (proj_left[1] - point_left[1])**2)
+        right_error = np.sqrt((proj_right[0] - point_right[0])**2 + (proj_right[1] - point_right[1])**2)
+
+        return {
+            'left_error': float(left_error),
+            'right_error': float(right_error),
+            'mean_error': float((left_error + right_error) / 2)
+        }
 
     def update(self):
         """
         Capture frames, detect ball, and triangulate.
 
         Returns:
-            dict with detection and triangulation results
+            dict with detection and triangulation results including:
+            - left_frame, right_frame: captured images
+            - left_detection, right_detection: ball detection results
+            - found_3d: whether 3D position was computed
+            - position_3d: (X, Y, Z) coordinates
+            - disparity: pixel disparity between cameras
+            - timestamps: hardware timestamps for both cameras (ns)
         """
         result = {
             'left_frame': None,
@@ -337,12 +464,26 @@ class StereoTriangulator:
             'right_detection': None,
             'found_3d': False,
             'position_3d': None,
-            'disparity': None
+            'disparity': None,
+            'timestamps': {'left': None, 'right': None},
+            'reprojection_error': None
         }
 
-        # Capture frames from Basler cameras
-        frame_left = self._grab_frame(self.cam_left)
-        frame_right = self._grab_frame(self.cam_right)
+        # Capture frames from Basler cameras in parallel
+        future_left = self.executor.submit(self._grab_frame, self.cam_left, self.converter_left)
+        future_right = self.executor.submit(self._grab_frame, self.cam_right, self.converter_right)
+
+        try:
+            frame_left, ts_left = future_left.result(timeout=0.5)
+        except Exception:
+            frame_left, ts_left = None, None
+
+        try:
+            frame_right, ts_right = future_right.result(timeout=0.5)
+        except Exception:
+            frame_right, ts_right = None, None
+
+        result['timestamps'] = {'left': ts_left, 'right': ts_right}
 
         if frame_left is None or frame_right is None:
             return result
@@ -367,10 +508,23 @@ class StereoTriangulator:
             result['disparity'] = disparity
 
             if disparity > 0:
-                X, Y, Z = self.triangulate(point_left, point_right)
-                if Z > 0:
-                    result['found_3d'] = True
-                    result['position_3d'] = (X, Y, Z)
+                tri_result = self.triangulate(point_left, point_right)
+                if tri_result is not None:
+                    X, Y, Z = tri_result
+                    # Validate 3D position is physically plausible
+                    # Z > 5cm (not behind cameras), Z < 500cm (reasonable range)
+                    # X, Y within reasonable bounds (200cm lateral range)
+                    if (Z > 5 and Z < 500 and
+                        abs(X) < 200 and abs(Y) < 200):
+                        # Compute reprojection error for quality check
+                        reproj_error = self.compute_reprojection_error(
+                            (X, Y, Z), point_left, point_right)
+                        result['reprojection_error'] = reproj_error
+
+                        # Only accept if reprojection error is reasonable (< 5 pixels)
+                        if reproj_error['mean_error'] < 5.0:
+                            result['found_3d'] = True
+                            result['position_3d'] = (X, Y, Z)
 
         return result
 

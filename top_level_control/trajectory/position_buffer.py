@@ -15,19 +15,21 @@ from collections import deque
 class PositionBuffer:
     """
     Circular buffer for storing timestamped 3D positions.
-    
+
     Used by TrajectoryPredictor to maintain position history
     for velocity calculation.
     """
 
-    def __init__(self, max_size=10):
+    def __init__(self, max_size=10, max_gap_seconds=0.5):
         """
         Initialize position buffer.
 
         Args:
             max_size: Maximum number of positions to store
+            max_gap_seconds: Maximum time gap before clearing buffer (tracking loss detection)
         """
         self.max_size = max_size
+        self.max_gap_seconds = max_gap_seconds
         self.buffer = deque(maxlen=max_size)
 
     def add(self, x, y, z, t=None):
@@ -37,16 +39,32 @@ class PositionBuffer:
         Args:
             x, y, z: 3D coordinates
             t: Timestamp (auto-generated if None)
+
+        Returns:
+            bool: True if position was added, False if rejected
         """
         if t is None:
             t = time.perf_counter()
-        
+
+        # Validate timestamp is increasing
+        if len(self.buffer) > 0:
+            last_t = self.buffer[-1]['t']
+            if t <= last_t:
+                # Timestamp not increasing - reject
+                return False
+
+            # Check for large time gaps (likely tracking loss)
+            if t - last_t > self.max_gap_seconds:
+                # Clear buffer and start fresh after tracking loss
+                self.buffer.clear()
+
         self.buffer.append({
             'x': x,
             'y': y,
             'z': z,
             't': t
         })
+        return True
 
     def get_recent(self, n=None):
         """

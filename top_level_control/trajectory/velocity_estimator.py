@@ -46,22 +46,23 @@ class VelocityEstimator:
     def estimate_regression(self, positions, times):
         """
         Regression velocity: Linear fit slope.
-        
+
         More robust to noise.
         """
         if len(positions) < 2:
             return None
-        
+
         # Normalize time for numerical stability
         t0 = times[0]
         t_norm = times - t0
-        
+
         # Linear fit: position = velocity * t + offset
         try:
             coeffs = np.polyfit(t_norm, positions, 1)
             velocity = coeffs[0]  # Slope
             return velocity
-        except:
+        except (np.linalg.LinAlgError, ValueError, RuntimeError) as e:
+            print(f"[VelocityEstimator] Regression failed: {e}")
             return None
 
     def estimate(self, x_arr, y_arr, z_arr, t_arr):

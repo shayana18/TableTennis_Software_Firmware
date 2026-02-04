@@ -41,7 +41,8 @@ class TrajectoryPredictor:
     """
 
     def __init__(self, buffer_size=10, min_points=3,
-                 velocity_method='regression', gravity=GRAVITY_CM_S2, y_down=True):
+                 velocity_method='regression', gravity=GRAVITY_CM_S2, y_down=True,
+                 max_gap_seconds=0.5):
         """
         Initialize trajectory predictor.
 
@@ -51,11 +52,12 @@ class TrajectoryPredictor:
             velocity_method: 'simple' or 'regression'
             gravity: Gravity in same units as calibration (981 cm/s²)
             y_down: True if Y increases downward (camera coords)
+            max_gap_seconds: Max time gap before resetting buffer (tracking loss)
         """
         self.min_points = min_points
-        
+
         # Components
-        self.buffer = PositionBuffer(max_size=buffer_size)
+        self.buffer = PositionBuffer(max_size=buffer_size, max_gap_seconds=max_gap_seconds)
         self.velocity_estimator = VelocityEstimator(method=velocity_method)
         self.physics = PhysicsModel(gravity=gravity, y_down=y_down)
         
@@ -147,8 +149,12 @@ class TrajectoryPredictor:
         # Ball must be moving toward target (Vz has correct sign)
         # If target_z > z0, vz should be positive
         # If target_z < z0, vz should be negative
-        if (target_z - z0) * vz <= 0:
+        if (target_z - z0) * vz < 0:
             # Ball moving away from target
+            return result
+
+        # Handle zero velocity case (ball not moving in Z)
+        if abs(vz) < 1e-6:
             return result
         
         # Predict position at target Z

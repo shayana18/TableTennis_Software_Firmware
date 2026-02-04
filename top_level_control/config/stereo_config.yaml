@@ -4,10 +4,10 @@ frame_height: 1200
 
 # Left camera (Camera 0 in calibration - world origin)
 camera_left:
-  serial: ""  
+  serial: "40042704"  
 # Right camera (Camera 1 in calibration)
 camera_right:
-  serial: ""  
+  serial: "40042702"  
 
 # Note: If serial is empty "", camera will be selected by device index
 # Left camera = index 0, Right camera = index 1
