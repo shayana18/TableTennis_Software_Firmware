@@ -917,7 +917,7 @@ Discarded input sections
  .debug_macro   0x0000000000000000       0xa6 CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_usart_ex.c.obj
  .debug_macro   0x0000000000000000      0x3a9 CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_usart_ex.c.obj
  .debug_line    0x0000000000000000      0x733 CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_usart_ex.c.obj
- .debug_str     0x0000000000000000    0x785da CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_usart_ex.c.obj
+ .debug_str     0x0000000000000000    0x785e2 CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_usart_ex.c.obj
  .comment       0x0000000000000000       0x4a CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_usart_ex.c.obj
  .ARM.attributes
                 0x0000000000000000       0x2c CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_usart_ex.c.obj
@@ -1505,7 +1505,7 @@ Discarded input sections
  .debug_macro   0x0000000000000000       0xa6 CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_flash.c.obj
  .debug_macro   0x0000000000000000      0x3a9 CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_flash.c.obj
  .debug_line    0x0000000000000000      0xa98 CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_flash.c.obj
- .debug_str     0x0000000000000000    0x78916 CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_flash.c.obj
+ .debug_str     0x0000000000000000    0x7891e CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_flash.c.obj
  .comment       0x0000000000000000       0x4a CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_flash.c.obj
  .debug_frame   0x0000000000000000      0x1d4 CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_flash.c.obj
  .ARM.attributes
@@ -1648,7 +1648,7 @@ Discarded input sections
  .debug_macro   0x0000000000000000       0xa6 CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_flash_ex.c.obj
  .debug_macro   0x0000000000000000      0x3a9 CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_flash_ex.c.obj
  .debug_line    0x0000000000000000      0xc03 CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_flash_ex.c.obj
- .debug_str     0x0000000000000000    0x78aa7 CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_flash_ex.c.obj
+ .debug_str     0x0000000000000000    0x78aaf CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_flash_ex.c.obj
  .comment       0x0000000000000000       0x4a CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_flash_ex.c.obj
  .debug_frame   0x0000000000000000      0x2e8 CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_flash_ex.c.obj
  .ARM.attributes
@@ -1878,7 +1878,7 @@ Discarded input sections
  .debug_macro   0x0000000000000000       0xa6 CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_dma.c.obj
  .debug_macro   0x0000000000000000      0x3a9 CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_dma.c.obj
  .debug_line    0x0000000000000000      0xd93 CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_dma.c.obj
- .debug_str     0x0000000000000000    0x78b8a CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_dma.c.obj
+ .debug_str     0x0000000000000000    0x78b92 CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_dma.c.obj
  .comment       0x0000000000000000       0x4a CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_dma.c.obj
  .debug_frame   0x0000000000000000      0x1f0 CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_dma.c.obj
  .ARM.attributes
@@ -1985,7 +1985,7 @@ Discarded input sections
  .debug_macro   0x0000000000000000       0xa6 CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_dma_ex.c.obj
  .debug_macro   0x0000000000000000      0x3a9 CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_dma_ex.c.obj
  .debug_line    0x0000000000000000      0x8ed CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_dma_ex.c.obj
- .debug_str     0x0000000000000000    0x78a5b CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_dma_ex.c.obj
+ .debug_str     0x0000000000000000    0x78a63 CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_dma_ex.c.obj
  .comment       0x0000000000000000       0x4a CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_dma_ex.c.obj
  .debug_frame   0x0000000000000000       0xb0 CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_dma_ex.c.obj
  .ARM.attributes
@@ -2102,7 +2102,7 @@ Discarded input sections
  .debug_macro   0x0000000000000000       0xa6 CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_pwr.c.obj
  .debug_macro   0x0000000000000000      0x3a9 CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_pwr.c.obj
  .debug_line    0x0000000000000000      0x83f CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_pwr.c.obj
- .debug_str     0x0000000000000000    0x78880 CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_pwr.c.obj
+ .debug_str     0x0000000000000000    0x78888 CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_pwr.c.obj
  .comment       0x0000000000000000       0x4a CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_pwr.c.obj
  .debug_frame   0x0000000000000000      0x138 CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_pwr.c.obj
  .ARM.attributes
@@ -2233,7 +2233,7 @@ Discarded input sections
  .debug_macro   0x0000000000000000       0xa6 CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_pwr_ex.c.obj
  .debug_macro   0x0000000000000000      0x3a9 CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_pwr_ex.c.obj
  .debug_line    0x0000000000000000      0x8f6 CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_pwr_ex.c.obj
- .debug_str     0x0000000000000000    0x788be CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_pwr_ex.c.obj
+ .debug_str     0x0000000000000000    0x788c6 CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_pwr_ex.c.obj
  .comment       0x0000000000000000       0x4a CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_pwr_ex.c.obj
  .debug_frame   0x0000000000000000      0x19c CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_pwr_ex.c.obj
  .ARM.attributes
@@ -3210,7 +3210,7 @@ Discarded input sections
  .debug_macro   0x0000000000000000       0xa6 CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_usart.c.obj
  .debug_macro   0x0000000000000000      0x3a9 CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_usart.c.obj
  .debug_line    0x0000000000000000      0x730 CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_usart.c.obj
- .debug_str     0x0000000000000000    0x785d7 CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_usart.c.obj
+ .debug_str     0x0000000000000000    0x785df CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_usart.c.obj
  .comment       0x0000000000000000       0x4a CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_usart.c.obj
  .ARM.attributes
                 0x0000000000000000       0x2c CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_usart.c.obj
@@ -3460,7 +3460,7 @@ Discarded input sections
  .debug_macro   0x0000000000000000       0x16 CMakeFiles/motor_control.dir/Core/Src/syscalls.c.obj
  .debug_macro   0x0000000000000000       0xce CMakeFiles/motor_control.dir/Core/Src/syscalls.c.obj
  .debug_line    0x0000000000000000      0x55a CMakeFiles/motor_control.dir/Core/Src/syscalls.c.obj
- .debug_str     0x0000000000000000     0x84b0 CMakeFiles/motor_control.dir/Core/Src/syscalls.c.obj
+ .debug_str     0x0000000000000000     0x84b8 CMakeFiles/motor_control.dir/Core/Src/syscalls.c.obj
  .comment       0x0000000000000000       0x4a CMakeFiles/motor_control.dir/Core/Src/syscalls.c.obj
  .debug_frame   0x0000000000000000      0x244 CMakeFiles/motor_control.dir/Core/Src/syscalls.c.obj
  .ARM.attributes
@@ -4615,42 +4615,42 @@ LOAD /usr/local/bin/../lib/gcc/arm-none-eabi/10.3.1/thumb/v6-m/nofp/libgcc.a
  .debug_line    0x00000000000125a7      0x250 CMakeFiles/motor_control.dir/Core/Src/sysmem.c.obj
  .debug_line    0x00000000000127f7       0xd2 CMakeFiles/motor_control.dir/startup_stm32c031xx.s.obj
 
-.debug_str      0x0000000000000000    0x82b46
- .debug_str     0x0000000000000000    0x7e8f3 CMakeFiles/motor_control.dir/Core/Src/main.c.obj
-                                      0x7f045 (size before relaxing)
- .debug_str     0x000000000007e8f3       0xf8 CMakeFiles/motor_control.dir/Core/Src/stm32c0xx_it.c.obj
-                                      0x7cdc4 (size before relaxing)
- .debug_str     0x000000000007e9eb      0x1d1 CMakeFiles/motor_control.dir/Core/Src/stm32c0xx_hal_msp.c.obj
-                                      0x7d264 (size before relaxing)
- .debug_str     0x000000000007ebbc       0xf3 CMakeFiles/motor_control.dir/Core/Src/stm32c0xx_hal_timebase_tim.c.obj
-                                      0x78ed4 (size before relaxing)
- .debug_str     0x000000000007ecaf      0x38e CMakeFiles/motor_control.dir/Drivers/BSP/STM32C0xx_Nucleo/stm32c0xx_nucleo.c.obj
-                                      0x7d2c0 (size before relaxing)
- .debug_str     0x000000000007f03d      0x46a CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal.c.obj
-                                      0x78ce3 (size before relaxing)
- .debug_str     0x000000000007f4a7      0x33a CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_cortex.c.obj
-                                      0x78b38 (size before relaxing)
- .debug_str     0x000000000007f7e1      0x50a CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_rcc.c.obj
-                                      0x78cef (size before relaxing)
- .debug_str     0x000000000007fceb      0x198 CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_rcc_ex.c.obj
-                                      0x78941 (size before relaxing)
- .debug_str     0x000000000007fe83      0x2bd CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_gpio.c.obj
-                                      0x78917 (size before relaxing)
- .debug_str     0x0000000000080140      0x210 CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_exti.c.obj
-                                      0x7889b (size before relaxing)
- .debug_str     0x0000000000080350      0xe64 CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_tim.c.obj
-                                      0x79ba5 (size before relaxing)
- .debug_str     0x00000000000811b4      0x662 CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_tim_ex.c.obj
-                                      0x794d5 (size before relaxing)
- .debug_str     0x0000000000081816      0x98b CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_uart.c.obj
-                                      0x7959e (size before relaxing)
- .debug_str     0x00000000000821a1      0x34e CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_uart_ex.c.obj
-                                      0x78eee (size before relaxing)
- .debug_str     0x00000000000824ef       0xb2 CMakeFiles/motor_control.dir/Core/Src/system_stm32c0xx.c.obj
-                                      0x7871f (size before relaxing)
- .debug_str     0x00000000000825a1      0x528 CMakeFiles/motor_control.dir/Core/Src/sysmem.c.obj
-                                       0x5761 (size before relaxing)
- .debug_str     0x0000000000082ac9       0x7d CMakeFiles/motor_control.dir/startup_stm32c031xx.s.obj
+.debug_str      0x0000000000000000    0x82b4e
+ .debug_str     0x0000000000000000    0x7e8fb CMakeFiles/motor_control.dir/Core/Src/main.c.obj
+                                      0x7f04d (size before relaxing)
+ .debug_str     0x000000000007e8fb       0xf8 CMakeFiles/motor_control.dir/Core/Src/stm32c0xx_it.c.obj
+                                      0x7cdcc (size before relaxing)
+ .debug_str     0x000000000007e9f3      0x1d1 CMakeFiles/motor_control.dir/Core/Src/stm32c0xx_hal_msp.c.obj
+                                      0x7d26c (size before relaxing)
+ .debug_str     0x000000000007ebc4       0xf3 CMakeFiles/motor_control.dir/Core/Src/stm32c0xx_hal_timebase_tim.c.obj
+                                      0x78edc (size before relaxing)
+ .debug_str     0x000000000007ecb7      0x38e CMakeFiles/motor_control.dir/Drivers/BSP/STM32C0xx_Nucleo/stm32c0xx_nucleo.c.obj
+                                      0x7d2c8 (size before relaxing)
+ .debug_str     0x000000000007f045      0x46a CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal.c.obj
+                                      0x78ceb (size before relaxing)
+ .debug_str     0x000000000007f4af      0x33a CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_cortex.c.obj
+                                      0x78b40 (size before relaxing)
+ .debug_str     0x000000000007f7e9      0x50a CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_rcc.c.obj
+                                      0x78cf7 (size before relaxing)
+ .debug_str     0x000000000007fcf3      0x198 CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_rcc_ex.c.obj
+                                      0x78949 (size before relaxing)
+ .debug_str     0x000000000007fe8b      0x2bd CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_gpio.c.obj
+                                      0x7891f (size before relaxing)
+ .debug_str     0x0000000000080148      0x210 CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_exti.c.obj
+                                      0x788a3 (size before relaxing)
+ .debug_str     0x0000000000080358      0xe64 CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_tim.c.obj
+                                      0x79bad (size before relaxing)
+ .debug_str     0x00000000000811bc      0x662 CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_tim_ex.c.obj
+                                      0x794dd (size before relaxing)
+ .debug_str     0x000000000008181e      0x98b CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_uart.c.obj
+                                      0x795a6 (size before relaxing)
+ .debug_str     0x00000000000821a9      0x34e CMakeFiles/motor_control.dir/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_uart_ex.c.obj
+                                      0x78ef6 (size before relaxing)
+ .debug_str     0x00000000000824f7       0xb2 CMakeFiles/motor_control.dir/Core/Src/system_stm32c0xx.c.obj
+                                      0x78727 (size before relaxing)
+ .debug_str     0x00000000000825a9      0x528 CMakeFiles/motor_control.dir/Core/Src/sysmem.c.obj
+                                       0x5769 (size before relaxing)
+ .debug_str     0x0000000000082ad1       0x7d CMakeFiles/motor_control.dir/startup_stm32c031xx.s.obj
                                          0xe2 (size before relaxing)
 
 .comment        0x0000000000000000       0x49

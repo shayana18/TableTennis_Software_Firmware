@@ -36,25 +36,13 @@
 			}
 		]
 	},
-	"codemodelVersion" : 
-	{
-		"major" : 2,
-		"minor" : 9
-	},
-	"compileDependencies" : 
-	[
-		{
-			"backtrace" : 2,
-			"id" : "stm32cubemx::@768a070a0fe75716b479"
-		}
-	],
 	"compileGroups" : 
 	[
 		{
 			"compileCommandFragments" : 
 			[
 				{
-					"fragment" : " -mcpu=cortex-m0plus  -Wall -Wextra -Wpedantic -fdata-sections -ffunction-sections -O0 -g3 -mcpu=cortex-m0plus  -Wall -Wextra -Wpedantic -fdata-sections -ffunction-sections -O0 -g3 -g -std=gnu11"
+					"fragment" : " -mcpu=cortex-m0plus  -Wall -Wextra -Wpedantic -fdata-sections -ffunction-sections -O0 -g3 -mcpu=cortex-m0plus  -Wall -Wextra -Wpedantic -fdata-sections -ffunction-sections -O0 -g3 -mcpu=cortex-m0plus  -Wall -Wextra -Wpedantic -fdata-sections -ffunction-sections -O0 -g3 -g -std=gnu11"
 				}
 			],
 			"defines" : 
@@ -146,7 +134,7 @@
 			"compileCommandFragments" : 
 			[
 				{
-					"fragment" : " -mcpu=cortex-m0plus  -Wall -Wextra -Wpedantic -fdata-sections -ffunction-sections -O0 -g3 -mcpu=cortex-m0plus  -Wall -Wextra -Wpedantic -fdata-sections -ffunction-sections -O0 -g3 -x assembler-with-cpp -MMD -MP -g"
+					"fragment" : " -mcpu=cortex-m0plus  -Wall -Wextra -Wpedantic -fdata-sections -ffunction-sections -O0 -g3 -mcpu=cortex-m0plus  -Wall -Wextra -Wpedantic -fdata-sections -ffunction-sections -O0 -g3 -mcpu=cortex-m0plus  -Wall -Wextra -Wpedantic -fdata-sections -ffunction-sections -O0 -g3 -x assembler-with-cpp -MMD -MP -g"
 				}
 			],
 			"defines" : 
@@ -208,23 +196,12 @@
 		"commandFragments" : 
 		[
 			{
-				"fragment" : "-mcpu=cortex-m0plus  -Wall -Wextra -Wpedantic -fdata-sections -ffunction-sections -O0 -g3 -mcpu=cortex-m0plus  -Wall -Wextra -Wpedantic -fdata-sections -ffunction-sections -O0 -g3 -g",
-				"role" : "flags"
-			},
-			{
-				"fragment" : "-mcpu=cortex-m0plus  -T \"/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/cubemx/STM32C031C6Tx_FLASH.ld\" --specs=nano.specs -Wl,-Map=motor_control.map -Wl,--gc-sections -Wl,--start-group -lc -lm -Wl,--end-group -Wl,--print-memory-usage",
+				"fragment" : "-mcpu=cortex-m0plus  -Wall -Wextra -Wpedantic -fdata-sections -ffunction-sections -O0 -g3 -mcpu=cortex-m0plus  -Wall -Wextra -Wpedantic -fdata-sections -ffunction-sections -O0 -g3 -mcpu=cortex-m0plus  -Wall -Wextra -Wpedantic -fdata-sections -ffunction-sections -O0 -g3 -g",
 				"role" : "flags"
 			}
 		],
 		"language" : "C"
 	},
-	"linkLibraries" : 
-	[
-		{
-			"backtrace" : 2,
-			"id" : "stm32cubemx::@768a070a0fe75716b479"
-		}
-	],
 	"name" : "motor_control",
 	"nameOnDisk" : "motor_control.elf",
 	"paths" : 

@@ -2,16 +2,6 @@
 	"configurations" : 
 	[
 		{
-			"abstractTargets" : 
-			[
-				{
-					"directoryIndex" : 1,
-					"id" : "stm32cubemx::@768a070a0fe75716b479",
-					"jsonFile" : "target-stm32cubemx-Debug-f0c5ef51df405b29b7ce.json",
-					"name" : "stm32cubemx",
-					"projectIndex" : 1
-				}
-			],
 			"directories" : 
 			[
 				{
@@ -20,7 +10,7 @@
 					[
 						1
 					],
-					"jsonFile" : "directory-.-Debug-9ad1a58d4644cf6543fa.json",
+					"jsonFile" : "directory-.-Debug-f5ebdc15457944623624.json",
 					"minimumCMakeVersion" : 
 					{
 						"string" : "3.22"
@@ -33,12 +23,8 @@
 					]
 				},
 				{
-					"abstractTargetIndexes" : 
-					[
-						0
-					],
 					"build" : "cmake/stm32cubemx",
-					"jsonFile" : "directory-cmake.stm32cubemx-Debug-56097c516e47400ad7a1.json",
+					"jsonFile" : "directory-cmake.stm32cubemx-Debug-4b19649788072bcc790a.json",
 					"minimumCMakeVersion" : 
 					{
 						"string" : "3.22"
@@ -67,10 +53,6 @@
 					]
 				},
 				{
-					"abstractTargetIndexes" : 
-					[
-						0
-					],
 					"directoryIndexes" : 
 					[
 						1
@@ -84,7 +66,7 @@
 				{
 					"directoryIndex" : 0,
 					"id" : "motor_control::@6890427a1f51a3e7e1df",
-					"jsonFile" : "target-motor_control-Debug-c0755f3fc8804d697021.json",
+					"jsonFile" : "target-motor_control-Debug-8266a35eab372b4a127c.json",
 					"name" : "motor_control",
 					"projectIndex" : 0
 				}
@@ -100,6 +82,6 @@
 	"version" : 
 	{
 		"major" : 2,
-		"minor" : 9
+		"minor" : 8
 	}
 }

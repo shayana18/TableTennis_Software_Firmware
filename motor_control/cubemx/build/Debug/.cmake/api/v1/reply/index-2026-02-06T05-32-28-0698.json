@@ -8,34 +8,34 @@
 		},
 		"paths" : 
 		{
-			"cmake" : "/Users/shykizzy/.pyenv/versions/3.11.9/lib/python3.11/site-packages/cmake/data/bin/cmake",
-			"cpack" : "/Users/shykizzy/.pyenv/versions/3.11.9/lib/python3.11/site-packages/cmake/data/bin/cpack",
-			"ctest" : "/Users/shykizzy/.pyenv/versions/3.11.9/lib/python3.11/site-packages/cmake/data/bin/ctest",
-			"root" : "/Users/shykizzy/.pyenv/versions/3.11.9/lib/python3.11/site-packages/cmake/data/share/cmake-4.2"
+			"cmake" : "/Users/shykizzy/Library/Application Support/stm32cube/bundles/cmake/4.0.1+st.3/CMake.app/Contents/bin/cmake",
+			"cpack" : "/Users/shykizzy/Library/Application Support/stm32cube/bundles/cmake/4.0.1+st.3/CMake.app/Contents/bin/cpack",
+			"ctest" : "/Users/shykizzy/Library/Application Support/stm32cube/bundles/cmake/4.0.1+st.3/CMake.app/Contents/bin/ctest",
+			"root" : "/Users/shykizzy/Library/Application Support/stm32cube/bundles/cmake/4.0.1+st.3/CMake.app/Contents/share/cmake-4.0"
 		},
 		"version" : 
 		{
 			"isDirty" : false,
 			"major" : 4,
-			"minor" : 2,
+			"minor" : 0,
 			"patch" : 1,
-			"string" : "4.2.1",
+			"string" : "4.0.1",
 			"suffix" : ""
 		}
 	},
 	"objects" : 
 	[
 		{
-			"jsonFile" : "codemodel-v2-5588fa11f8bd2045afcd.json",
+			"jsonFile" : "codemodel-v2-242c8907f9967e972f9a.json",
 			"kind" : "codemodel",
 			"version" : 
 			{
 				"major" : 2,
-				"minor" : 9
+				"minor" : 8
 			}
 		},
 		{
-			"jsonFile" : "cache-v2-b22a392ea9071556d240.json",
+			"jsonFile" : "cache-v2-dd74ff2fcbe31c5131a6.json",
 			"kind" : "cache",
 			"version" : 
 			{
@@ -44,7 +44,7 @@
 			}
 		},
 		{
-			"jsonFile" : "cmakeFiles-v1-d648907c5c6134b3ccdb.json",
+			"jsonFile" : "cmakeFiles-v1-eb43e900349060db2fec.json",
 			"kind" : "cmakeFiles",
 			"version" : 
 			{
@@ -90,7 +90,7 @@
 				"responses" : 
 				[
 					{
-						"jsonFile" : "cache-v2-b22a392ea9071556d240.json",
+						"jsonFile" : "cache-v2-dd74ff2fcbe31c5131a6.json",
 						"kind" : "cache",
 						"version" : 
 						{
@@ -99,12 +99,12 @@
 						}
 					},
 					{
-						"jsonFile" : "codemodel-v2-5588fa11f8bd2045afcd.json",
+						"jsonFile" : "codemodel-v2-242c8907f9967e972f9a.json",
 						"kind" : "codemodel",
 						"version" : 
 						{
 							"major" : 2,
-							"minor" : 9
+							"minor" : 8
 						}
 					},
 					{
@@ -117,7 +117,7 @@
 						}
 					},
 					{
-						"jsonFile" : "cmakeFiles-v1-d648907c5c6134b3ccdb.json",
+						"jsonFile" : "cmakeFiles-v1-eb43e900349060db2fec.json",
 						"kind" : "cmakeFiles",
 						"version" : 
 						{
