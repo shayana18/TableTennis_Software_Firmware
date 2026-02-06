@@ -7,27 +7,30 @@ Stereo vision system for real-time ball tracking and trajectory prediction.
 ## System Overview
 
 ```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                        VISION PIPELINE                                   │
-├─────────────────────────────────────────────────────────────────────────┤
-│                                                                          │
-│   CAMERAS          DETECTION         TRIANGULATION      PREDICTION       │
-│                                                                          │
-│  ┌───────┐        ┌─────────┐        ┌───────────┐     ┌────────────┐   │
-│  │ Left  │───────▶│  Ball   │───────▶│           │     │            │   │
-│  │Camera │        │Detector │        │    3D     │────▶│ Trajectory │   │
-│  └───────┘        │(HSV+LAB)│        │Triangulate│     │ Predictor  │   │
-│                   └─────────┘        │           │     │            │   │
-│  ┌───────┐        ┌─────────┐        │  (X,Y,Z)  │     │ Intercept  │   │
-│  │ Right │───────▶│  Ball   │───────▶│           │────▶│   Point    │   │
-│  │Camera │        │Detector │        └───────────┘     └────────────┘   │
-│  └───────┘        └─────────┘                                 │          │
-│                                                               ▼          │
-│                                                         ┌──────────┐    │
-│                                                         │  ROBOT   │    │
-│                                                         │ CONTROL  │    │
-│                                                         └──────────┘    │
-└─────────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                             VISION PIPELINE                                  │
+├──────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  CAMERAS          DETECTION         TRIANGULATION        PREDICTION          │
+│                                                                              │
+│ ┌───────┐       ┌─────────┐        ┌───────────┐                            │
+│ │ Left  │──────▶│  Ball   │───────▶│           │      ┌──────────────┐      │
+│ │Camera │       │Detector │        │    3D     │─────▶│  Trajectory  │      │
+│ └───────┘       │(HSV+LAB)│        │Triangulate│      │  Predictor   │      │
+│                 └─────────┘        │           │      │              │      │
+│ ┌───────┐       ┌─────────┐        │  (X,Y,Z)  │      │  ┌────────┐ │      │
+│ │ Right │──────▶│  Ball   │───────▶│           │      │  │ Rising? │ │      │
+│ │Camera │       │Detector │        └───────────┘      │  └───┬────┘ │      │
+│ └───────┘       └─────────┘                           │    Y │ N    │      │
+│                                                       │  ┌──┘ └──┐  │      │
+│                                                       │ APEX  Z-PLANE│      │
+│                                                       └──────┬───────┘      │
+│                                                              ▼              │
+│                                                        ┌──────────┐         │
+│                                                        │  ROBOT   │         │
+│                                                        │ CONTROL  │         │
+│                                                        └──────────┘         │
+└──────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -141,17 +144,30 @@ Camera  │        Camera
 
 ### Stage 4: Trajectory Prediction
 
-**Purpose:** Predict where the ball will be in the future.
+**Purpose:** Predict where the ball will be in the future and choose the best interception point.
 
 **Process:**
-1. **Collect:** Store recent 3D positions with timestamps
-2. **Velocity:** Calculate ball velocity from position history using linear regression
-3. **Physics:** Apply kinematic equations with gravity
+1. **Collect:** Store recent 3D positions in a circular buffer (last 10 frames) with timestamps
+2. **Velocity:** Estimate ball velocity via linear regression on position history
+3. **Gravity correction:** The regression gives average velocity over the buffer window, not the instantaneous velocity at the latest frame. The predictor corrects Vy to the current moment using the known gravitational acceleration.
+4. **Physics:** Apply exact kinematic equations with gravity
    - X and Z: Constant velocity (no air resistance)
-   - Y: Accelerates downward at 981 cm/s²
-4. **Intercept:** Find where ball crosses robot's reach plane
+   - Y: Accelerates downward at 981 cm/s² (gravity in +Y direction, camera coords)
+5. **Two-case interception strategy:**
 
-**Output:** Interception point (X, Y) and time until arrival
+| Condition | Strategy | Intercept Point |
+|-----------|----------|-----------------|
+| Ball is rising (Vy < 0) | **Apex** | Trajectory peak where vertical velocity = 0 |
+| Ball is flat or falling (Vy >= 0) | **Z-Plane** | Fixed Z distance where robot can reach |
+
+The apex strategy catches tossed/lobbed balls at their highest point. The Z-plane strategy handles flat or descending shots approaching the robot.
+
+**Output:** Interception point (X, Y, Z), time until arrival, and strategy used (apex or z-plane)
+
+**Coordinate System Conventions:**
+- +Y is **down** (standard camera image coordinates)
+- Ball going **up** physically = Y decreasing = Vy < 0
+- Gravity pulls ball **down** = acts in +Y direction
 
 ---
 
@@ -193,10 +209,13 @@ Place the ball at known distances (measure with tape) and compare against displa
 
 Run the full pipeline:
 ```
+cd top_level_control
 python -m trajectory.test_trajectory_prediction
 ```
 
-Throw the ball toward the cameras and verify:
+Toss and throw the ball to verify both strategies:
+- **Toss upward** — OSD should show `[APEX]` with intercept at the peak
+- **Throw flat/downward** — OSD should show `[Z-PLANE]` with intercept at the robot Z distance
 - Velocity values are reasonable (200-800 cm/s for typical throws)
 - Predicted intercept point updates smoothly
 - Time-to-intercept decreases as ball approaches

@@ -36,7 +36,6 @@ import os
 import json
 import yaml
 import numpy as np
-q
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from tracking.stereo_triangulator import StereoTriangulator

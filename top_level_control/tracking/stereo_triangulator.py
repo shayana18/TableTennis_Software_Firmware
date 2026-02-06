@@ -5,10 +5,9 @@ Combines stereo detection with 3D triangulation.
 Loads camera calibration and computes 3D ball position.
 
 CAMERA: Arducam OV9782 Global Shutter USB Camera
-        1MP, 100fps @ 1280x800 MJPG
+        1MP, 100fps @ 1280x720 MJPG
 
-UNITS: All outputs are in the same units as checkerboard_box_size_scale
-       (typically mm if you used mm during calibration)
+UNITS: All outputs are in cm (checkerboard_box_size_scale = 3.17 cm)
 """
 
 import cv2

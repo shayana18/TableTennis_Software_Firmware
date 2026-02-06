@@ -109,34 +109,25 @@ class PhysicsModel:
     
     def predict_trajectory(self, position, velocity, duration, dt=0.001):
         """
-        Predict full trajectory over duration.
-        
+        Predict full trajectory over duration using exact kinematics.
+
         Args:
             position: (X, Y, Z) starting position
             velocity: (Vx, Vy, Vz) starting velocity
             duration: Total prediction time in seconds
-            dt: Time step for simulation (smaller = more accurate)
-        
+            dt: Time step between sample points
+
         Returns:
             List of (X, Y, Z, t) tuples representing trajectory
         """
         trajectory = []
-        
-        pos = np.array(position, dtype=float)
-        vel = np.array(velocity, dtype=float)
         t = 0.0
-        
+
         while t <= duration:
-            trajectory.append((pos[0], pos[1], pos[2], t))
-            
-            # Update velocity (gravity)
-            vel[1] += self.gravity_sign * self.gravity * dt
-            
-            # Update position
-            pos += vel * dt
-            
+            pred_pos = self.predict_position(position, velocity, t)
+            trajectory.append((pred_pos[0], pred_pos[1], pred_pos[2], t))
             t += dt
-        
+
         return trajectory
     
     def time_to_z(self, position, velocity, target_z):
@@ -208,6 +199,48 @@ class PhysicsModel:
         result['velocity'] = pred_vel
         result['valid'] = True
         
+        return result
+
+    def position_at_apex(self, position, velocity):
+        """
+        Calculate ball position at trajectory apex (where Vy = 0).
+
+        The apex occurs at t_apex = -Vy / (gravity_sign * gravity).
+        This is positive only when the ball is rising (Vy opposes gravity),
+        so it naturally returns invalid for non-rising trajectories.
+
+        Args:
+            position: (X, Y, Z) current position
+            velocity: (Vx, Vy, Vz) current velocity
+
+        Returns:
+            dict with:
+                'position': (X, Y, Z) at apex
+                'time': Time to reach apex
+                'velocity': (Vx, Vy, Vz) at apex (Vy ≈ 0)
+                'valid': True if ball is rising and apex exists
+        """
+        result = {
+            'position': None,
+            'time': None,
+            'velocity': None,
+            'valid': False
+        }
+
+        vy = velocity[1]
+        t_apex = -vy / (self.gravity_sign * self.gravity)
+
+        if t_apex <= 0:
+            return result
+
+        pred_pos = self.predict_position(position, velocity, t_apex)
+        pred_vel = self.predict_velocity(velocity, t_apex)
+
+        result['position'] = pred_pos
+        result['time'] = t_apex
+        result['velocity'] = pred_vel
+        result['valid'] = True
+
         return result
 
 

@@ -267,7 +267,12 @@ class TrajectoryTester:
                                    (10, y + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
                 
                 if pred['valid']:
-                    cv2.putText(left_vis, f"INTERCEPT Z={self.robot_z:.0f}: X={pred['intercept_x']:.0f} Y={pred['intercept_y']:.0f} in {pred['time_to_intercept']*1000:.0f}ms",
+                    strat = pred.get('strategy', 'z_plane')
+                    if strat == 'apex':
+                        osd_text = f"[APEX] X={pred['intercept_x']:.0f} Y={pred['intercept_y']:.0f} Z={pred['intercept_z']:.0f} in {pred['time_to_intercept']*1000:.0f}ms"
+                    else:
+                        osd_text = f"[Z-PLANE] Z={self.robot_z:.0f}: X={pred['intercept_x']:.0f} Y={pred['intercept_y']:.0f} in {pred['time_to_intercept']*1000:.0f}ms"
+                    cv2.putText(left_vis, osd_text,
                                (10, left_vis.shape[0] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
                 
                 # Display
@@ -283,7 +288,8 @@ class TrajectoryTester:
                     v = self.predictor.get_velocity()
                     print(f"\rPos:({x:5.0f},{y:5.0f},{z:5.0f}) Vel:({v['vx']:5.0f},{v['vy']:5.0f},{v['vz']:5.0f}) ", end='')
                     if pred['valid']:
-                        print(f"→ Intercept:({pred['intercept_x']:5.0f},{pred['intercept_y']:5.0f}) in {pred['time_to_intercept']*1000:4.0f}ms", end='')
+                        strat_label = pred.get('strategy', 'z_plane').upper().replace('_', '-')
+                        print(f"[{strat_label}] Intercept:({pred['intercept_x']:5.0f},{pred['intercept_y']:5.0f},{pred['intercept_z']:5.0f}) in {pred['time_to_intercept']*1000:4.0f}ms", end='')
                     print("   ", end='')
                 
                 # Keys

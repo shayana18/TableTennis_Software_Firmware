@@ -24,7 +24,6 @@ Usage:
         print(f"Time to intercept: {result['time_to_intercept']*1000:.0f} ms")
 """
 
-import time
 import numpy as np
 
 from .position_buffer import PositionBuffer
@@ -164,7 +163,8 @@ class TrajectoryPredictor:
             'time_to_intercept': None,
             'velocity_at_intercept': None,
             'current_position': None,
-            'current_velocity': None
+            'current_velocity': None,
+            'strategy': None
         }
         
         # Check if ready
@@ -179,18 +179,46 @@ class TrajectoryPredictor:
             return result
         
         result['current_position'] = current_pos
-        result['current_velocity'] = (current_vel['vx'], current_vel['vy'], current_vel['vz'])
-        
-        # Use physics model to predict intercept
-        prediction = self.physics_model.position_at_z(
-            position=current_pos,
-            velocity=result['current_velocity'],
-            target_z=target_z
+
+        # Correct Vy for regression bias: linear regression on parabolic Y data
+        # gives velocity at the buffer midpoint, not at the latest timestamp.
+        # Advance Vy to the latest time: Vy_corrected = Vy_reg + g * (t_latest - t_mean)
+        _, timestamps = self.position_buffer.get_as_arrays()
+        t_latest = timestamps[-1]
+        t_mean = timestamps.mean()
+        vy_corrected = current_vel['vy'] + (
+            self.physics_model.gravity_sign * self.physics_model.gravity * (t_latest - t_mean)
         )
-        
+
+        result['current_velocity'] = (current_vel['vx'], vy_corrected, current_vel['vz'])
+
+        # Two-case interception strategy
+        vy = result['current_velocity'][1]
+        prediction = None
+        strategy = None
+
+        # Case 1: Ball is rising (Vy < 0) → intercept at apex
+        if vy < 0:
+            prediction = self.physics_model.position_at_apex(
+                position=current_pos,
+                velocity=result['current_velocity']
+            )
+            if prediction['valid']:
+                strategy = 'apex'
+
+        # Case 2: Ball is flat/falling OR apex failed → fixed Z-plane
+        if prediction is None or not prediction['valid']:
+            prediction = self.physics_model.position_at_z(
+                position=current_pos,
+                velocity=result['current_velocity'],
+                target_z=target_z
+            )
+            if prediction['valid']:
+                strategy = 'z_plane'
+
         if not prediction['valid']:
             return result
-        
+
         # Fill result
         result['valid'] = True
         result['intercept_x'] = prediction['position'][0]
@@ -198,28 +226,38 @@ class TrajectoryPredictor:
         result['intercept_z'] = prediction['position'][2]
         result['time_to_intercept'] = prediction['time']
         result['velocity_at_intercept'] = prediction['velocity']
+        result['strategy'] = strategy
         
         return result
     
     def predict_trajectory(self, duration=0.5, dt=0.005):
         """
         Predict full trajectory for visualization.
-        
+
         Args:
             duration: How far into future to predict (seconds)
             dt: Time step (smaller = smoother, default 5ms)
-        
+
         Returns:
             List of (X, Y, Z, t) tuples, or empty list if not ready
         """
         if not self.is_ready():
             return []
-        
+
         current_pos = self.get_current_position()
         current_vel = self.get_velocity()
-        
-        velocity = (current_vel['vx'], current_vel['vy'], current_vel['vz'])
-        
+
+        # Apply same Vy gravity correction as predict() so trajectory
+        # visualization matches the interception point
+        _, timestamps = self.position_buffer.get_as_arrays()
+        t_latest = timestamps[-1]
+        t_mean = timestamps.mean()
+        vy_corrected = current_vel['vy'] + (
+            self.physics_model.gravity_sign * self.physics_model.gravity * (t_latest - t_mean)
+        )
+
+        velocity = (current_vel['vx'], vy_corrected, current_vel['vz'])
+
         return self.physics_model.predict_trajectory(
             position=current_pos,
             velocity=velocity,
