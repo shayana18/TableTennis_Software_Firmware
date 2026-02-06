@@ -10,6 +10,5 @@ top_level_control/*env*/
 .vscode/
 .metadata/
 __pycache__/
-motor_control/build/
-motor_control/cubemx/build/
+**/build/
 .cache/
