@@ -1,17 +1,21 @@
 # IO layer library
-add_library(io_lib STATIC)
+file(GLOB IO_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.c")
 
-# Add your IO source files
-target_sources(io_lib PRIVATE
-    # io/io_module.c
-)
-
-# Add include paths for this module
-target_include_directories(io_lib PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}
-)
-
-# Link against hardware layer
-target_link_libraries(io_lib PUBLIC
-    hw_lib
-)
+if(IO_SOURCES)
+    add_library(io_lib STATIC)
+    target_sources(io_lib PRIVATE ${IO_SOURCES})
+    target_include_directories(io_lib PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+    target_link_libraries(io_lib PUBLIC
+        hw_lib
+    )
+else()
+    add_library(io_lib INTERFACE)
+    target_include_directories(io_lib INTERFACE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+    target_link_libraries(io_lib INTERFACE
+        hw_lib
+    )
+endif()

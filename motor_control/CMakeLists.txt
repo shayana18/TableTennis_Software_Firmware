@@ -32,6 +32,11 @@ add_executable(${CMAKE_PROJECT_NAME})
 # Add STM32CubeMX generated sources
 add_subdirectory(cubemx/cmake/stm32cubemx)
 
+# Ensure CubeMX sources can see shared project headers (survives CubeMX regen)
+target_include_directories(stm32cubemx INTERFACE
+    ${CMAKE_CURRENT_SOURCE_DIR}/datatypes
+)
+
 # Add hardware abstraction layer
 add_subdirectory(hw)
 
@@ -41,6 +46,9 @@ add_subdirectory(io)
 # Add application layer
 add_subdirectory(app)
 
+#shared datatypes library
+add_subdirectory(datatypes)
+
 # Link directories setup
 target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined library search paths
@@ -49,6 +57,9 @@ target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
 # Add sources to executable (if any at root level)
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user sources here
+    cubemx/Core/Src/main.c
+    cubemx/Core/Src/sysmem.c
+    cubemx/Core/Src/syscalls.c
 )
 
 # Add include paths
@@ -57,6 +68,7 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/hw
     ${CMAKE_CURRENT_SOURCE_DIR}/io
     ${CMAKE_CURRENT_SOURCE_DIR}/app
+    ${CMAKE_CURRENT_SOURCE_DIR}/datatypes
 )
 
 # Add project symbols (macros)
@@ -67,6 +79,7 @@ target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
 # Add linked libraries
 target_link_libraries(${CMAKE_PROJECT_NAME}
     stm32cubemx
+    datatypes_lib
     hw_lib
     io_lib
     app_lib

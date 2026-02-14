@@ -20,6 +20,7 @@ target_include_directories(stm32cubemx INTERFACE
     ../../Drivers/BSP/STM32C0xx_Nucleo
     ../../Drivers/CMSIS/Device/ST/STM32C0xx/Include
     ../../Drivers/CMSIS/Include
+    ../../datatypes
 )
 
 target_sources(stm32cubemx INTERFACE
@@ -62,5 +63,4 @@ target_link_libraries(stm32cubemx INTERFACE
 if(CMAKE_C_STANDARD LESS 11)
     message(ERROR "Generated code requires C11 or higher")
 endif()
-
 

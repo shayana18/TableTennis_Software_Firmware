@@ -18,16 +18,12 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
-#include <ctype.h>
-#include <stdio.h>
-#include <strings.h>
-#include <string.h>
-#include <math.h>
-#include <stdlib.h>
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include <mailbox.h>
+#include <robot.h>
+#include <string.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -141,6 +137,8 @@ void setMotorSpeed(char motorID);
 void setAllMotorsSpeed(void);
 void indiv_motor_driv(void);
 
+void start_uart2_rx(void);
+
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -164,6 +162,12 @@ char delayDone = 0;
 
 char posMenu = 0;
 char trqMenu = 0;
+
+/* Shayan Variables*/
+
+static mailbox_t traj_new_mail;
+static uint8_t uart2_rx_buf[sizeof(float) * TARGET_MSG_FLOAT_COUNT];
+
 
 
 /* USER CODE END 0 */
@@ -211,6 +215,10 @@ int main(void)
   HAL_StatusTypeDef status;
   char menu[] = "\x1b[1m\r\nDaisy Chain Motor Test:\r\n\x1b[0m\r\n \x1b[1;36m[1]\tDrive a specific motor\r\n\x1b[0m \x1b[1;36m[2]\tDrive All Motors\r\n\x1b[0m\r\nSelect an option: ";
 
+  /* shayan code */
+  mailbox_init(&traj_new_mail);
+  start_uart2_rx();
+  
   Turn_const_speed(1,0);
   /* USER CODE END 2 */
 
@@ -233,36 +241,16 @@ int main(void)
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
+  HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_2);
+
   while (1)
   {
     /* USER CODE END WHILE */
-    /* USER CODE BEGIN 3 */
-    HAL_UART_Transmit(&huart2, (uint8_t *)menu, strlen(menu), HAL_MAX_DELAY);
-    HAL_UART_Receive(&huart2, (uint8_t *)&rx_data, 1, HAL_MAX_DELAY);
 
-    switch (rx_data)
-    {
-      case '1':
-        indiv_motor_driv();
-        break;
-      case '2':
-        setAllMotorsSpeed();
-        break;
-      case '3':
-        HAL_UART_Transmit(&huart2, (uint8_t *)"\r\n\x1b[1;31mAll motors turned OFF\r\n\x1b[0m", strlen("\r\n\x1b[1;31mAll motors turned OFF\r\n\x1b[0m"), HAL_MAX_DELAY);
-        Turn_const_speed(1, 0);
-        Turn_const_speed(2, 0);
-        Turn_const_speed(3, 0);
-        HAL_Delay(1500);
-        break;
-      default:
-        HAL_UART_Transmit(&huart2, (uint8_t *)"\r\n\x1b[1;31mInvalid selection!\r\n\x1b[0m", strlen("\r\n\x1b[1;31mInvalid selection!\r\n\x1b[0m"), HAL_MAX_DELAY);
-        HAL_Delay(500);
-        break;
-    }
+    /* USER CODE BEGIN 3 */
+    if(mailbox_mail_received(&traj_new_mail,))
   }
   /* USER CODE END 3 */
-
 }
 
 /**
@@ -319,9 +307,9 @@ static void MX_TIM1_Init(void)
 
   /* USER CODE END TIM1_Init 1 */
   htim1.Instance = TIM1;
-  htim1.Init.Prescaler = 7;
+  htim1.Init.Prescaler = 47;
   htim1.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim1.Init.Period = 49999;
+  htim1.Init.Period = 11111;
   htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim1.Init.RepetitionCounter = 0;
   htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
@@ -337,13 +325,13 @@ static void MX_TIM1_Init(void)
     Error_Handler();
   }
   sConfigOC.OCMode = TIM_OCMODE_PWM1;
-  sConfigOC.Pulse = 600;
+  sConfigOC.Pulse = 10;
   sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
   sConfigOC.OCNPolarity = TIM_OCNPOLARITY_HIGH;
   sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
   sConfigOC.OCIdleState = TIM_OCIDLESTATE_RESET;
   sConfigOC.OCNIdleState = TIM_OCNIDLESTATE_RESET;
-  if (HAL_TIM_PWM_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
+  if (HAL_TIM_PWM_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_2) != HAL_OK)
   {
     Error_Handler();
   }
@@ -1710,6 +1698,21 @@ void Make_CRC_Send(unsigned char Plength, unsigned char* B) {
     //use &huart1 for production
     HAL_UART_Transmit(&huart1, &RS232_HardwareShiftRegister, 1, HAL_MAX_DELAY);
     OutBfBtmPointer++; // Change to next byte in OutputBuffer to send
+  }
+}
+
+void start_uart2_rx(void)
+{
+  HAL_UART_Receive_IT(&huart2, uart2_rx_buf, sizeof(uart2_rx_buf));
+}
+
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+{
+  if (huart->Instance == USART2) {
+    float msg[TARGET_MSG_FLOAT_COUNT];
+    memcpy(msg, uart2_rx_buf, sizeof(msg));
+    mailbox_mail_arrived(&traj_new_mail, msg);
+    HAL_UART_Receive_IT(&huart2, uart2_rx_buf, sizeof(uart2_rx_buf));
   }
 }
 
