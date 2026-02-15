@@ -1,182 +1,140 @@
-/*
- * fsm.c
- *
- *  Created on: Feb 3, 2026
- *      Author: rocky
- */
-
 #include "robot_fsm.h"
-#include "services/service_motion.h"
-#include "services/service_comms.h"
-#include "services/service_safety.h"
-#include "robot.h"
 
+#include "motion_execute.h"
+#include "robot_runtime.h"
 
+void delta_fsm_bind_io(mailbox_t *mailbox, io_motor_com_t *motor_com)
+{
+  robot_runtime_bind(mailbox, motor_com);
+}
 
-// ==========================================================
-
-
+void delta_fsm_on_timer_tick(void)
+{
+  motion_execute_on_timer_tick();
+}
 
 void delta_fsm_init(robot_t *robot)
 {
   robot->state = STATE_OFF;
-  robot->current_pos = robot_get_current_pos(); 			// DRIVER FUNCTION
+  robot->current_pos = robot_get_current_pos();
   robot->current_target.type = TARGET_NONE;
+  robot->current_target.pos = robot->current_pos;
+  robot->current_target.t_arrival_s = 0.0f;
+  robot->current_move_plan.active = false;
 
-  robot->flag_new_target 	= false;
+  robot->flag_new_target = false;
   robot->flag_ready_to_move = false;
-  robot->flag_path_done  	= false;
-  robot->flag_path_abort 	= false;
-  robot->flag_fault      	= false;
-  robot->flag_pc_error   	= false;
+  robot->flag_path_done = false;
+  robot->flag_path_abort = false;
+  robot->flag_fault = false;
+  robot->flag_pc_error = false;
+
+  motion_execute_reset_scheduler();
 }
 
 void delta_fsm(robot_t *robot)
 {
-  // Process any incoming PC messages
-  comms_process_data();
+  if (robot->state == STATE_MOVE && motion_execute_consume_tick_due()) {
+    motion_execute_tick(robot);
+  }
 
-  //
+  if (robot->flag_fault) {
+    robot->state = STATE_FAULT;
+    robot_runtime_send_status("FAULT HAS OCCURRED\r\n");
+    return;
+  }
 
-	if (robot->flag_fault) {
-	  robot->state = STATE_FAULT;
-	  comms_send_status("FAULT HAS OCCURRED!!\n");
-	  return;
-	}
-
-  switch (robot->state)
-  {
+  switch (robot->state) {
     case STATE_OFF:
-    {
-	//
-		comms_send_status("STATE: OFF!\n");
-		comms_send_status("Powered ON!\n");
-		robot->state = STATE_UNHOMED;
-		comms_send_status("STATE: UNHOMED!\n");
-
-    } break;
+      robot_runtime_send_status("STATE: OFF\r\n");
+      robot->state = STATE_UNHOMED;
+      robot_runtime_send_status("STATE: UNHOMED\r\n");
+      break;
 
     case STATE_UNHOMED:
-	{
-		// Check if new target arrived
-		if (comms_pop_new_target(&robot->current_target)) {
-
-			if (!safety_check_joint_limits()) {
-				comms_send_status("ROBOT JOINTS ARE IN INVALID STATE\n");
-			}else if (robot->current_target.type == TARGET_HOME) {
-				motion_make_home_target(&robot);
-				robot->state = STATE_PLAN;
-				comms_send_status("STATE: PLAN!\n");
-			}
-			break;
-
-		}
-		comms_send_status("PLEASE HOME THE ROBOT FIRST!\n");
-		// Must home before continuing - will check if robot is even in workspace upon power cycle
-
-	} break;
+      if (robot_runtime_pop_target(&robot->current_target)) {
+        if (!motion_execute_safety_check_joint_limits()) {
+          robot_runtime_send_status("ROBOT JOINTS INVALID\r\n");
+        } else if (robot->current_target.type == TARGET_HOME) {
+          motion_execute_make_home_target(robot);
+          robot->state = STATE_PLAN;
+          robot_runtime_send_status("STATE: PLAN\r\n");
+        } else {
+          robot_runtime_send_status("WAITING FOR HOME TARGET\r\n");
+        }
+      }
+      break;
 
     case STATE_PLAN:
-	{
-
-
-		// Plan trajectory for the current target
-		bool path_ok = safety_check_target(robot->current_target.pos);
-
-
-		if (!path_ok) {
-		comms_send_status("PATH_INVALID\n");
-		robot->state = STATE_IDLE;
-		set_idle(robot);
-		comms_send_status("STATE: IDLE\n");
-		} else {
-
-		motion_plan(&robot);
-		motion_start(&robot);
-		robot->state = STATE_MOVE;
-		comms_send_status("STATE: MOVE\n");
-		}
-	} break;
+      if (!robot_target_in_workspace(robot->current_target.pos)) {
+        robot_runtime_send_status("PATH_INVALID\r\n");
+        robot->state = STATE_IDLE;
+        set_idle(robot);
+        robot_runtime_send_status("STATE: IDLE\r\n");
+      } else {
+        motion_execute_plan(robot);
+        motion_execute_start(robot);
+        robot->state = STATE_MOVE;
+        robot_runtime_send_status("STATE: MOVE\r\n");
+      }
+      break;
 
     case STATE_IDLE:
-    {
-      // Check if new target arrived
-		if (comms_pop_new_target(&robot->current_target)) {
-			robot->state = STATE_PLAN;
-		}
-
-    } break;
-
+      if (robot_runtime_pop_target(&robot->current_target)) {
+        robot->state = STATE_PLAN;
+      }
+      break;
 
     case STATE_MOVE:
-    {
-
-      // If ISR aborted (speed limit / singularity / comm timeout)
       if (robot->flag_path_abort) {
-        comms_send_status("STOP MESSAGE RECIEVED\n");
+        robot_runtime_send_status("STOP MESSAGE RECEIVED\r\n");
         stop_motion();
         robot->state = STATE_IDLE;
-        comms_send_status("STATE: IDLE\n");
+        robot_runtime_send_status("STATE: IDLE\r\n");
         break;
       }
 
-      // When plan completes
       if (robot->flag_path_done) {
-        // If we just reached intercept target, optionally do “strike”
         if (robot->current_target.type == TARGET_INTERCEPT) {
           robot->state = STATE_STRIKE;
-          comms_send_status("STATE: STRIKE\n");
-          break;
+          robot_runtime_send_status("STATE: STRIKE\r\n");
+        } else if (robot->current_target.type == TARGET_STRIKE) {
+          motion_execute_make_home_target(robot);
+          robot->state = STATE_PLAN;
+          robot_runtime_send_status("STRIKE DONE -> HOME\r\n");
         } else if (robot->current_target.type == TARGET_HOME) {
-
           robot->state = STATE_IDLE;
-          comms_send_status("REACHED HOME\n");
           set_idle(robot);
-          comms_send_status("STATE: IDLE\n");
-          break;
+          robot_runtime_send_status("REACHED HOME\r\n");
+          robot_runtime_send_status("STATE: IDLE\r\n");
+        } else {
+          robot->state = STATE_IDLE;
+          set_idle(robot);
+          robot_runtime_send_status("STATE: IDLE\r\n");
         }
-
       }
-
-    } break;
+      break;
 
     case STATE_STRIKE:
-    {
-
-
-    	motion_plan_strike(&robot);
-		// Plan trajectory for the strike target
-		bool path_ok = safety_check_target(robot->current_target.pos);
-
-		if (!path_ok) {
-		comms_send_status("PATH_INVALID, Sending to Home pos\n");
-		motion_make_home_target(&robot);
+      motion_execute_plan_strike(robot);
+      if (!robot_target_in_workspace(robot->current_target.pos)) {
+        robot_runtime_send_status("PATH_INVALID, SENDING HOME\r\n");
+        motion_execute_make_home_target(robot);
         robot->state = STATE_PLAN;
-        break;
-		}
-
-		motion_plan(&robot);
-		motion_strike(&robot);
-
-		if (robot->flag_path_done) {
-			motion_make_home_target(&robot);
-	    robot->state = STATE_PLAN;
-		}
-    } break;
+      } else {
+        motion_execute_plan(robot);
+        motion_execute_start(robot);
+        robot->state = STATE_MOVE;
+        robot_runtime_send_status("STATE: MOVE\r\n");
+      }
+      break;
 
     case STATE_FAULT:
     default:
-    {
-      // Enter safe mode
       safety_enter_fault_mode();
+      motion_execute_stop_all();
       stop_motion();
-      comms_send_status("FAULT\n");
-
-      // MVP: stay here until power cycle / manual clear
-      // If you want automatic recovery, do:
-      // if (!safety_any_fault_active()) { ctx->flag_fault=false; ctx->state=STATE_IDLE; set_idle(ctx); }
-    } break;
+      robot_runtime_send_status("FAULT\r\n");
+      break;
   }
 }
-
-

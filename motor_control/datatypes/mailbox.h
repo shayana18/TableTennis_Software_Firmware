@@ -4,16 +4,6 @@
 #include <stdint.h>
 #include "shared_types.h"
 
-// Optional critical-section hooks (e.g., disable/enable IRQs).
-// Define these macros before including mailbox.h or via compiler defines.
-#ifndef MAILBOX_CRITICAL_ENTER
-#define MAILBOX_CRITICAL_ENTER() do {} while (0)
-#endif
-
-#ifndef MAILBOX_CRITICAL_EXIT
-#define MAILBOX_CRITICAL_EXIT() do {} while (0)
-#endif
-
 typedef struct mailbox
 {
     float data[TARGET_MSG_FLOAT_COUNT];

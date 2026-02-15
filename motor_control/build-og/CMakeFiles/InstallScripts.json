@@ -1,0 +1,12 @@
+{
+	"InstallScripts" : 
+	[
+		"/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/build-og/cmake_install.cmake",
+		"/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/build-og/cubemx/cmake/stm32cubemx/cmake_install.cmake",
+		"/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/build-og/hw/cmake_install.cmake",
+		"/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/build-og/io/cmake_install.cmake",
+		"/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/build-og/app/cmake_install.cmake",
+		"/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/build-og/datatypes/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

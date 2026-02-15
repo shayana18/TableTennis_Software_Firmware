@@ -1,204 +1,194 @@
-/*
- * robot.c
- *
- *  Created on: Feb 7, 2026
- *      Author: rocky
- */
-
-#pragma once
 #include "robot.h"
-#include "services/service_comms.h"
 
-//
-#define PI 3.14159265358979323846
-#define DTR PI / 180
-#define SQRT3 1.7320508075688772
-#define TAN30 1.0f / SQRT3
-#define SIN30 0.5
+#include <math.h>
+
+#define PI_F 3.14159265358979323846f
+#define DTR (PI_F / 180.0f)
+#define SQRT3 1.7320508075688772f
+#define TAN30 (1.0f / SQRT3)
+#define SIN30 0.5f
 #define TAN60 SQRT3
-#define SIN120 0.8660254037844386
-#define COS120 -0.5
+#define SIN120 0.8660254037844386f
+#define COS120 -0.5f
 
+const vec3 home = {HOME_X, HOME_Y, HOME_Z};
 
-vec3 robot_get_current_pos() {
-
-	//
-
-	float q1;
-	float q2;
-	float q3;
-
-
-	comms_send_status("Encoder values read and returned\n");
-	return FK(q1, q2, q3);
+vec3 robot_get_current_pos(void)
+{
+  // TODO: replace with encoder -> joint angle -> FK path.
+  return home;
 }
 
+void robot_set_target_from_mail(robot_target_t *dst, const target_t *src)
+{
+  if (dst == NULL || src == NULL) {
+    return;
+  }
+
+  dst->type = src->type;
+  dst->target_ID = 0.0f;
+  dst->pos = src->intercept_pos;
+  dst->t_arrival_s = src->intercept_time;
+  dst->timestamp = src->timestamp;
+}
+
+float robot_calc_dist(vec3 current, vec3 target)
+{
+  const float x = target.x - current.x;
+  const float y = target.y - current.y;
+  const float z = target.z - current.z;
+  return sqrtf(x * x + y * y + z * z);
+}
+
+bool robot_target_in_workspace(vec3 pos)
+{
+  if (pos.x < LIMIT_NEG_X || pos.x > LIMIT_POS_X) {
+    return false;
+  }
+  if (pos.y < LIMIT_NEG_Y || pos.y > LIMIT_POS_Y) {
+    return false;
+  }
+  if (pos.z < LIMIT_NEG_Z || pos.z > LIMIT_POS_Z) {
+    return false;
+  }
+  return true;
+}
 
 // DELTA ROBOT FORWARD KINEMATICS
-vec3 FK(float motor_q1, float motor_q2, float motor_q3){
+vec3 FK(float motor_q1, float motor_q2, float motor_q3)
+{
+  const float f = BASE_RADIUS * 2.0f;
+  const float e = EE_RADIUS * 2.0f;
+  const float rf = UPPER_ARM_LENGTH;
+  const float re = LOWER_ARM_LENGTH;
 
+  // Convert to radians
+  const float t1 = motor_q1 * DTR;
+  const float t2 = motor_q2 * DTR;
+  const float t3 = motor_q3 * DTR;
 
-	float f = BASE_RADIUS * 2.0f;
-	float e = EE_RADIUS * 2.0f;
-	float rf = UPPER_ARM_LENGTH;
-	float re = LOWER_ARM_LENGTH;
+  const float t = (f - e) * TAN30 * 0.5f;
 
-	// ---- convert to radians ----
-	float t1 = motor_q1 * DTR;
-	float t2 = motor_q2 * DTR;
-	float t3 = motor_q3 * DTR;
+  const float y1 = -(t + rf * cosf(t1));
+  const float z1 = -rf * sinf(t1);
 
-	// ---- geometry helper ----
-	float t = (f - e) * TAN30 * 0.5f;
+  const float y2 = (t + rf * cosf(t2)) * SIN30;
+  const float x2 = y2 * TAN60;
+  const float z2 = -rf * sinf(t2);
 
-	// ---- calculate the three arm joint positions ----
-	float y1 = -(t + rf * cosf(t1));
-	float z1 = -rf * sinf(t1);
+  const float y3 = (t + rf * cosf(t3)) * SIN30;
+  const float x3 = -y3 * TAN60;
+  const float z3 = -rf * sinf(t3);
 
-	float y2 =  (t + rf * cosf(t2)) * SIN30;
-	float x2 =  y2 * TAN60;
-	float z2 = -rf * sinf(t2);
+  const float dnm = (y2 - y1) * x3 - (y3 - y1) * x2;
 
-	float y3 =  (t + rf * cosf(t3)) * SIN30;
-	float x3 = -y3 * TAN60;
-	float z3 = -rf * sinf(t3);
+  if (fabsf(dnm) < 1e-9f) {
+    return (vec3){0.0f, 0.0f, 0.0f};
+  }
 
-	// ---- determinant ----
-	float dnm = (y2 - y1) * x3 - (y3 - y1) * x2;
+  const float w1 = y1 * y1 + z1 * z1;
+  const float w2 = x2 * x2 + y2 * y2 + z2 * z2;
+  const float w3 = x3 * x3 + y3 * y3 + z3 * z3;
 
-	// Protect against division by ~0 (singular configuration / numerical issue)
-	if (fabsf(dnm) < 1e-9f) {
-		return (vec3){0.0f, 0.0f, 0.0f};  // Singular, return zero position
-	}
+  const float a1 = (z2 - z1) * (y3 - y1) - (z3 - z1) * (y2 - y1);
+  const float b1 = -0.5f * ((w2 - w1) * (y3 - y1) - (w3 - w1) * (y2 - y1));
 
-	float w1 = y1 * y1 + z1 * z1;
-	float w2 = x2 * x2 + y2 * y2 + z2 * z2;
-	float w3 = x3 * x3 + y3 * y3 + z3 * z3;
+  const float a2 = -(z2 - z1) * x3 + (z3 - z1) * x2;
+  const float b2 = 0.5f * ((w2 - w1) * x3 - (w3 - w1) * x2);
 
-	// x = (a1*z + b1)/dnm
-	float a1 = (z2 - z1) * (y3 - y1) - (z3 - z1) * (y2 - y1);
-	float b1 = -0.5f * ((w2 - w1) * (y3 - y1) - (w3 - w1) * (y2 - y1));
+  const float A = a1 * a1 + a2 * a2 + dnm * dnm;
+  const float B = 2.0f * (a1 * b1 + a2 * b2 + dnm * dnm * z1);
+  const float C = b1 * b1 + b2 * b2 + dnm * dnm * (z1 * z1 - re * re);
 
-	// y = (a2*z + b2)/dnm
-	float a2 = -(z2 - z1) * x3 + (z3 - z1) * x2;
-	float b2 =  0.5f * ((w2 - w1) * x3 - (w3 - w1) * x2);
+  float D = B * B - 4.0f * A * C;
+  if (D < 0.0f) {
+    if (D > -1e-6f) {
+      D = 0.0f;
+    } else {
+      return (vec3){0.0f, 0.0f, 0.0f};
+    }
+  }
 
-	// a*z^2 + b*z + c = 0
-	float A = a1 * a1 + a2 * a2 + dnm * dnm;
-	float B = 2.0f * (a1 * b1 + a2 * b2 + dnm * dnm * z1);
-	float C = (b1 * b1 + b2 * b2 + dnm * dnm * (z1 * z1 - re * re));
+  const float sqrtD = sqrtf(D);
+  const float z = -0.5f * (B + sqrtD) / A;
+  const float x = (a1 * z + b1) / dnm;
+  const float y = (a2 * z + b2) / dnm;
 
-	float D = B * B - 4.0f * A * C;
-
-	// Numerical robustness: allow tiny negative due to float roundoff
-	if (D < 0.0f) {
-		if (D > -1e-6f) D = 0.0f;
-		else return (vec3){0.0f, 0.0f, 0.0f};  // No real solution
-	}
-
-	float sqrtD = sqrtf(D);
-
-	// Choose the physically correct root for your coordinate convention.
-	// This matches your original code (uses -(B + sqrtD)/(2A)).
-	float z = -0.5f * (B + sqrtD) / A;
-	float x = (a1 * z + b1) / dnm;
-	float y = (a2 * z + b2) / dnm;
-
-	return (vec3){x, y, z};
-
+  return (vec3){x, y, z};
 }
 
-// Helper function for IK - calculates motor angle for YZ plane
-// Returns 0 if successful, -1 if unreachable
-static int calc_angleYZ(float x0, float y0, float z0, float *theta) {
+// Helper function for IK: solves one arm in YZ plane.
+static int calc_angleYZ(float x0, float y0, float z0, float *theta)
+{
+  if (fabsf(z0) < 1.0f) {
+    return -1;
+  }
 
-    // Match your Python guard: if |z0| < 1 mm treat as unreachable
-    if (fabsf(z0) < 1.0f) {
-        return -1;
-    }
+  const float y1 = -BASE_RADIUS;
+  const float y0p = y0 - EE_RADIUS;
 
-    // Upper and lower joint locations in YZ plane
-    float y1 = -BASE_RADIUS;
-    float y0p = y0 - EE_RADIUS;
+  const float a = (x0 * x0 + y0p * y0p + z0 * z0 + UPPER_ARM_LENGTH * UPPER_ARM_LENGTH
+      - LOWER_ARM_LENGTH * LOWER_ARM_LENGTH - y1 * y1) / (2.0f * z0);
+  const float b = (y1 - y0p) / z0;
 
-    // a and b from your derivation
-    float a = (x0*x0 + y0p*y0p + z0*z0 + UPPER_ARM_LENGTH*UPPER_ARM_LENGTH - LOWER_ARM_LENGTH*LOWER_ARM_LENGTH - y1*y1) / (2.0f * z0);
-    float b = (y1 - y0p) / z0;
+  const float term = a + b * y1;
+  const float d = -(term * term) + UPPER_ARM_LENGTH * (b * b * UPPER_ARM_LENGTH + UPPER_ARM_LENGTH);
+  if (d < 0.0f) {
+    return -1;
+  }
 
-    // discriminant
-    // d = -(a + b*y1)^2 + rf*(b^2*rf + rf)
-    float term = (a + b * y1);
-    float d = -(term * term) + UPPER_ARM_LENGTH * (b*b*UPPER_ARM_LENGTH + UPPER_ARM_LENGTH);
+  const float sqrt_d = sqrtf(d);
+  const float yj = (y1 - a * b - sqrt_d) / (b * b + 1.0f);
+  const float zj = a + b * yj;
 
-    if (d < 0.0f) {
-        return -1;
-    }
-
-    float sqrt_d = sqrtf(d);
-
-    // elbow-down configuration: use -sqrt(d)
-    float yj = (y1 - a*b - sqrt_d) / (b*b + 1.0f);
-    float zj = a + b * yj;
-
-    // theta = -pi - atan2(zj, (yj - y1))
-    *theta = -(float)M_PI - atan2f(zj, (yj - y1));
-    *theta = *theta * (180.0f / (float)M_PI);
-
-    return 0;
+  *theta = -PI_F - atan2f(zj, (yj - y1));
+  *theta *= (180.0f / PI_F);
+  return 0;
 }
 
 // DELTA ROBOT INVERSE KINEMATICS
-// Returns 0 if successful, -1 if unreachable
-// Fills in t1, t2, t3 with motor angles in degrees
-int IK(float x0, float y0, float z0, float *t1, float *t2, float *t3) {
+int IK(float x0, float y0, float z0, float *t1, float *t2, float *t3)
+{
+  float theta1;
+  float theta2;
+  float theta3;
 
-    float theta1, theta2, theta3;
-    int ok;
+  if (calc_angleYZ(x0, y0, z0, &theta1) != 0) {
+    return -1;
+  }
 
-    // Arm 1 (no rotation)
-    ok = calc_angleYZ(x0, y0, z0, &theta1);
-    if (ok != 0) return -1;
+  const float x1 = x0 * COS120 - y0 * SIN120;
+  const float y1 = y0 * COS120 + x0 * SIN120;
+  if (calc_angleYZ(x1, y1, z0, &theta2) != 0) {
+    return -1;
+  }
 
-    // Arm 2: rotate +120 deg
-    float x1 = x0 * COS120 - y0 * SIN120;
-    float y1 = y0 * COS120 + x0 * SIN120;
-    ok = calc_angleYZ(x1, y1, z0, &theta2);
-    if (ok != 0) return -1;
+  const float x2 = x0 * COS120 + y0 * SIN120;
+  const float y2 = y0 * COS120 - x0 * SIN120;
+  if (calc_angleYZ(x2, y2, z0, &theta3) != 0) {
+    return -1;
+  }
 
-    // Arm 3: rotate -120 deg
-    float x2 = x0 * COS120 + y0 * SIN120;  // cos(-120) = -0.5, sin(-120) = -0.866
-    float y2 = y0 * COS120 - x0 * SIN120;
-    ok = calc_angleYZ(x2, y2, z0, &theta3);
-    if (ok != 0) return -1;
-
-    *t1 = theta1;
-    *t2 = theta2;
-    *t3 = theta3;
-
-    return 0;
+  *t1 = theta1;
+  *t2 = theta2;
+  *t3 = theta3;
+  return 0;
 }
 
-// ============================================================
-// HELPER FUNCTIONS
-// ============================================================
-
-// Stop all motion immediately
-void stop_motion(void) {
-    // TODO: Partner to implement motor disable/brake logic
-    // For now, signal that motion should stop
+void stop_motion(void)
+{
+  // Motor stop commands are issued by FSM when IO context is available.
 }
 
-// Set robot to idle state (stop motors)
-void set_idle(robot_t *robot) {
-    stop_motion();
+void set_idle(robot_t *robot)
+{
+  stop_motion();
+  if (robot != NULL) {
     robot->flag_ready_to_move = false;
+  }
 }
 
-// Enter fault mode (safe state)
-void safety_enter_fault_mode(void) {
-    // TODO: Partner to implement fault handling:
-    // - Disable all motors
-    // - Engage brakes if available
-    // - Set appropriate safety signals
+void safety_enter_fault_mode(void)
+{
+  // TODO: add platform specific fault outputs and motor disable handling.
 }
-

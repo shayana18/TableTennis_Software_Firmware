@@ -35,6 +35,9 @@ add_subdirectory(cubemx/cmake/stm32cubemx)
 # Ensure CubeMX sources can see shared project headers (survives CubeMX regen)
 target_include_directories(stm32cubemx INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/datatypes
+    ${CMAKE_CURRENT_SOURCE_DIR}/io
+    ${CMAKE_CURRENT_SOURCE_DIR}/app
+    ${CMAKE_CURRENT_SOURCE_DIR}/hw
 )
 
 # Add hardware abstraction layer

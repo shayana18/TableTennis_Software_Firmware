@@ -1,4 +1,4 @@
-
+#pragma once
 
 // Float-array message layout: type is stored as a float when using float-only buffers.
 #define TARGET_MSG_FLOAT_COUNT 7
@@ -6,9 +6,9 @@
 
 typedef enum {
   TARGET_NONE = 0,
-  TARGET_INTERCEPT,
-  TARGET_STRIKE,
-  TARGET_HOME
+  TARGET_INTERCEPT = 1,
+  TARGET_STRIKE = 2,
+  TARGET_HOME = 3
 } target_type;
 
 typedef enum {

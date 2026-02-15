@@ -1,5 +1,6 @@
 # Application layer library
-file(GLOB APP_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.c")
+file(GLOB APP_SOURCES CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/*.c")
 
 if(APP_SOURCES)
     add_library(app_lib STATIC)

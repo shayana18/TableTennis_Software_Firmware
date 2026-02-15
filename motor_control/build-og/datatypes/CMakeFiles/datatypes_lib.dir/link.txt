@@ -1,0 +1,2 @@
+/usr/local/bin/arm-none-eabi-ar qc libdatatypes_lib.a CMakeFiles/datatypes_lib.dir/ringBuffer.c.obj CMakeFiles/datatypes_lib.dir/mailbox.c.obj
+/usr/local/bin/arm-none-eabi-ranlib libdatatypes_lib.a

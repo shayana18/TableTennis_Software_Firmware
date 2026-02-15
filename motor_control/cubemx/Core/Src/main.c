@@ -22,8 +22,13 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <mailbox.h>
-#include <robot.h>
+#include <stdint.h>
+#include <stdio.h>
 #include <string.h>
+#include "hw_uart.h"
+#include "io_motor_com.h"
+#include "app_motor_comm.h"
+#include "robot_fsm.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -33,36 +38,6 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-// Functions sent by host
-#define Set_Origin              0x00
-#define Go_Absolute_Pos         0x01
-#define Go_Relative_Pos         0x03
-#define General_Read            0x0e
-#define Set_MainGain            0x10
-#define Set_SpeedGain           0x11
-#define Set_IntGain             0x12
-#define Set_HighSpeed           0x14
-#define Set_HighAccel           0x15
-#define Set_Pos_OnRange         0x16
-#define Set_GearNumber          0x17
-#define Read_MainGain           0x18
-#define Read_HighSpeed			0x1c
-
-
-// Functions sent by DYN drive
-#define Is_MainGain             0x10
-#define Is_SpeedGain            0x11
-#define Is_IntGain              0x12
-#define Is_TrqCons              0x13
-#define Is_HighSpeed            0x14
-#define Is_HighAccel            0x15
-#define Is_Driver_ID            0x16
-#define Is_Pos_OnRange          0x17
-#define Is_Status               0x19
-#define Is_Config               0x1a
-#define Is_AbsPos32             0x1b
-#define Is_TrqCurrent           0x1e
-
 #define UART2_BAUD                115200 //Set Baud Rate for USB Communication (To Tablet or Computer)
 #define UART3_BAUD                38400
 //USE PIN PC4 ON CN10 FOR TX
@@ -96,12 +71,6 @@ static void MX_USART2_UART_Init(void);
 static void MX_USART1_UART_Init(void);
 static void MX_TIM1_Init(void);
 /* USER CODE BEGIN PFP */
-void clockwiseMotion();
-void counterClockwiseMotion();
-void speedControl(char*);
-void absoluteMove(char*);
-void absMoveSetup();
-int goHome();
 
 //Reading & Display Function Prototypes
 void sendString();
@@ -115,18 +84,6 @@ void timeDelay(int);
 // void Drive_Reset_RS232();
 // void Drive_Enable_RS232();
 // void Drive_Disable_RS232();
-void move_rel32(char,long);
-void ReadMotorTorqueCurrent(char);
-void ReadMotorPosition32(char);
-void ReadMotorSpeed32(char);
-void move_abs32(char,long);
-void Turn_const_speed(char,long);
-void ReadPackage();
-void Get_Function();
-int32_t Cal_SignValue(unsigned char*);
-long Cal_Value(unsigned char*);
-void Send_Package(char,long);
-void Make_CRC_Send(unsigned char, unsigned char*);
 
 //Menu Functions
 void speedMenu();
@@ -143,18 +100,9 @@ void start_uart2_rx(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-char InputBuffer[256];                          //Input buffer from RS232,
-char OutputBuffer[256]; //Output buffer to RS232,
 char outputString[20];
-unsigned char InBfTopPointer, InBfBtmPointer;   //input buffer pointers
-unsigned char OutBfTopPointer, OutBfBtmPointer; //output buffer pointers
-unsigned char Read_Package_Buffer[8], Read_Num, Read_Package_Length, Global_Func;
-unsigned char MotorPosition32Ready_Flag, MotorTorqueCurrentReady_Flag, MainGainRead_Flag, MotorSpeed32Ready_Flag;
-unsigned char Driver_MainGain, Driver_SpeedGain, Driver_IntGain, Driver_TrqCons, Driver_HighSpeed, Driver_HighAccel,Driver_ReadID,Driver_Status,Driver_Config,Driver_OnRange;
-long Motor_Pos32, MotorTorqueCurrent, Motor_Speed32;
 int speed = 0;
 int position = 0;
-int sendSpeed;
 char speedParse;
 int motorPower;
 char motorDirection = 0; //motorDirection = 1 (CW), motorDirection = 2 (CCW), 0 on startup
@@ -167,6 +115,15 @@ char trqMenu = 0;
 
 static mailbox_t traj_new_mail;
 static uint8_t uart2_rx_buf[sizeof(float) * TARGET_MSG_FLOAT_COUNT];
+static io_motor_com_t motor_com;
+static uint8_t motor_input_buffer[IO_MOTOR_COM_INPUT_BUFFER_LEN];
+static uint8_t motor_output_buffer[IO_MOTOR_COM_OUTPUT_BUFFER_LEN];
+static robot_t robot;
+
+float msg[TARGET_MSG_FLOAT_COUNT];
+volatile uint8_t uart2_msg_ready = 0;
+
+
 
 
 
@@ -207,19 +164,17 @@ int main(void)
   MX_TIM1_Init();
   /* USER CODE BEGIN 2 */
   motorPower = 1;
-  char rx_data; // Variable to store received character
-  int rx_index = 0; // Index to keep track of received characters
-  char sendMsg[256];
-  char commandType;
-  char commandValue;
-  HAL_StatusTypeDef status;
-  char menu[] = "\x1b[1m\r\nDaisy Chain Motor Test:\r\n\x1b[0m\r\n \x1b[1;36m[1]\tDrive a specific motor\r\n\x1b[0m \x1b[1;36m[2]\tDrive All Motors\r\n\x1b[0m\r\nSelect an option: ";
+  io_motor_com_init(&motor_com, motor_input_buffer, sizeof(motor_input_buffer),
+                    motor_output_buffer, sizeof(motor_output_buffer));
 
-  /* shayan code */
   mailbox_init(&traj_new_mail);
+  delta_fsm_bind_io(&traj_new_mail, &motor_com);
+  delta_fsm_init(&robot);
+
   start_uart2_rx();
-  
-  Turn_const_speed(1,0);
+  Turn_const_speed(&motor_com, ROBOT_MOTOR_1_ID, 0);
+  Turn_const_speed(&motor_com, ROBOT_MOTOR_2_ID, 0);
+  Turn_const_speed(&motor_com, ROBOT_MOTOR_3_ID, 0);
   /* USER CODE END 2 */
 
   /* Initialize leds */
@@ -242,13 +197,10 @@ int main(void)
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_2);
-
   while (1)
   {
-    /* USER CODE END WHILE */
-
-    /* USER CODE BEGIN 3 */
-    if(mailbox_mail_received(&traj_new_mail,))
+    delta_fsm(&robot);
+    HAL_Delay(1);
   }
   /* USER CODE END 3 */
 }
@@ -533,7 +485,7 @@ static void MX_GPIO_Init(void)
 
 void indiv_motor_driv(void)
 {
-  char ind_drive_men[] = "\x1b[1m\r\nIndividual Motor Control:\r\n\x1b[0m\r\n \x1b[1;36m[1]\tDrive Motor 1\r\n\x1b[0m \x1b[1;36m[2]\tDrive Motor 2\r\n\x1b[0m \x1b[1;36m[3]\tDrive Motor 3\r\n\x1b[0m \x1b[1;36m[4]\tReturn to Main Menu\r\n\x1b[0m\r\nSelect an option: ";
+  char ind_drive_men[] = "\x1b[1m\r\nIndividual Motor Control:\r\n\x1b[0m\r\n \x1b[1;36m[1]\tDrive Motor 2\r\n\x1b[0m \x1b[1;36m[2]\tDrive Motor 3\r\n\x1b[0m \x1b[1;36m[3]\tDrive Motor 4\r\n\x1b[0m \x1b[1;36m[4]\tReturn to Main Menu\r\n\x1b[0m\r\nSelect an option: ";
   char rx_data;
   char exit_menu = 0;
 
@@ -606,9 +558,9 @@ void setAllMotorsSpeed(void){
           speed = speedTemp;
           sprintf(sendMsg,"\r\n\n\x1b[1mAll motors speed set to %d RPM\x1b[0m\r\n", speedTemp);
           HAL_UART_Transmit(&huart2, (uint8_t *)sendMsg, strlen(sendMsg), HAL_MAX_DELAY);
-          Turn_const_speed(2, speed);
-          Turn_const_speed(3, speed);
-          Turn_const_speed(4, speed);
+          Turn_const_speed(&motor_com, 2, speed);
+          Turn_const_speed(&motor_com, 3, speed);
+          Turn_const_speed(&motor_com, 4, speed);
           HAL_Delay(1000);
         }
 
@@ -734,7 +686,7 @@ void speedMenu(){
 				HAL_Delay(250);
 				sprintf(sendMsg,"\x1b[1mMoving Clockwise at %d RPM\r\n\r\n[Space] - Change Direction\t[X] - Main Menu\t\t[B] - Previous Menu\x1b[0m\r\n\n", speedTemp);
 				HAL_UART_Transmit(&huart2, (uint8_t *)sendMsg, strlen(sendMsg), HAL_MAX_DELAY); // Transmit menu over UART
-				clockwiseMotion();
+				clockwiseMotion(&motor_com, 1, speed, motorDirection);
 				char code = updateMotorData(2, speedTemp,0);
 				if(code == 1){
 					spdMenu = 0;
@@ -747,7 +699,7 @@ void speedMenu(){
 				HAL_Delay(250);
 				sprintf(sendMsg,"\x1b[1mMoving Counter-Clockwise at %d RPM\r\n\r\n[Space] - Change Direction\t[X] - Main Menu\t\t[B] - Previous Menu\x1b[0m\r\n\n", speedTemp);
 				HAL_UART_Transmit(&huart2, (uint8_t *)sendMsg, strlen(sendMsg), HAL_MAX_DELAY); // Transmit menu over UART
-				counterClockwiseMotion();
+				counterClockwiseMotion(&motor_com, 1, speed, motorDirection);
 				char code = updateMotorData(2, speedTemp,0);
 				if(code == 1){
 					spdMenu = 0;
@@ -798,7 +750,7 @@ void positionMenu(){
 		case '1':
 			// ReadMotorPosition32(1);
 			HAL_Delay(25);
-			sprintf(currentPos,"\x1b[1m\r\nCurrent Motor Position:\x1b[0m \x1b[1;36m %ld [Pulses]\x1b[0m\n\n",Motor_Pos32);
+			sprintf(currentPos,"\x1b[1m\r\nCurrent Motor Position:\x1b[0m \x1b[1;36m %ld [Pulses]\x1b[0m\n\n",io_motor_com_get_motor_pos(&motor_com));
 			HAL_UART_Transmit(&huart2, (uint8_t *)currentPos, strlen(currentPos), HAL_MAX_DELAY); // Transmit menu over UART
 			HAL_UART_Transmit(&huart2, (uint8_t *)"\r\nEnter the Destination Position (Encoder Pulses): ", strlen("\r\nEnter the Destination Position (Encoder Pulses): "), HAL_MAX_DELAY);
 			isTyping = 1;
@@ -929,11 +881,11 @@ char updateMotorData(char controlMode, int RPM, long position){
 
 	while(reading == 1){
 
-		ReadMotorPosition32(1);
+		ReadMotorPosition32(&motor_com, 1);
 		HAL_Delay(25);
 		// ReadMotorSpeed32(1);
 		HAL_Delay(25);
-		sprintf(data,"\x1b[G\x1b[2KPostion: %ld [Pulses]\t||\tSpeed: %ld [RPM]",Motor_Pos32, Motor_Speed32);
+		sprintf(data,"\x1b[G\x1b[2KPostion: %ld [Pulses]\t||\tSpeed: %ld [RPM]",io_motor_com_get_motor_pos(&motor_com), io_motor_com_get_motor_speed(&motor_com));
 
 		HAL_UART_Transmit(&huart2, (uint8_t *)data, strlen(data), HAL_MAX_DELAY); // Transmit menu over UART
 
@@ -945,11 +897,11 @@ char updateMotorData(char controlMode, int RPM, long position){
 				reading = 0;
 				code = 1;
 				HAL_UART_Transmit(&huart2, (uint8_t *)"\x1b[0;0H\x1b[2J", strlen("\x1b[0;0H\x1b[2J"), HAL_MAX_DELAY);
-				Turn_const_speed(1,0);
+				Turn_const_speed(&motor_com, 1, 0);
 			}
 			else if(rx_data == 'b' || rx_data == 'B'){
 				reading = 0;
-				Turn_const_speed(1,0);
+				Turn_const_speed(&motor_com, 1, 0);
 				HAL_UART_Transmit(&huart2, (uint8_t *)"\x1b[0;0H\x1b[2J", strlen("\x1b[0;0H\x1b[2J"), HAL_MAX_DELAY);
 				HAL_Delay(250);
 			}
@@ -959,7 +911,7 @@ char updateMotorData(char controlMode, int RPM, long position){
 					HAL_UART_Transmit(&huart2, (uint8_t *)"\x1b[0;0H\x1b[2J", strlen("\x1b[0;0H\x1b[2J"), HAL_MAX_DELAY);
 					HAL_Delay(250);
 					sprintf(sendMsg,"\x1b[1mMoving Counter-Clockwise at %d RPM\r\n\r\n[Space] - Change Direction\t[X] - Main Menu\t\t[B] - Previous Menu\x1b[0m\r\n\n", RPM);
-					counterClockwiseMotion();
+					counterClockwiseMotion(&motor_com, 1, speed, motorDirection);
 					HAL_UART_Transmit(&huart2, (uint8_t *)sendMsg, strlen(sendMsg), HAL_MAX_DELAY); // Transmit menu over UART
 				}
 				else if(motorDirection == 2){
@@ -967,19 +919,19 @@ char updateMotorData(char controlMode, int RPM, long position){
 					HAL_UART_Transmit(&huart2, (uint8_t *)"\x1b[0;0H\x1b[2J", strlen("\x1b[0;0H\x1b[2J"), HAL_MAX_DELAY);
 					HAL_Delay(250);
 					sprintf(sendMsg,"\x1b[1mMoving Clockwise at %d RPM\r\n\r\n[Space] - Change Direction\t[X] - Main Menu\t\t[B] - Previous Menu\x1b[0m\r\n\n", RPM);
-					clockwiseMotion();
+					clockwiseMotion(&motor_com, 1, speed, motorDirection);
 					HAL_UART_Transmit(&huart2, (uint8_t *)sendMsg, strlen(sendMsg), HAL_MAX_DELAY); // Transmit menu over UART
 				}
 			}
 			else if(rx_data == ' ' && controlMode == 3){
 
-				move_abs32(1,position);
+				move_abs32(&motor_com, 1, position);
 			}
 			else if(rx_data == ' ' && controlMode == 4){
 
 				// ReadMotorPosition32(1);
 				long targetPos = 65536 * RPM;
-				move_rel32(1,targetPos);
+				move_rel32(&motor_com, 1, targetPos);
 
 			}
 
@@ -989,112 +941,6 @@ char updateMotorData(char controlMode, int RPM, long position){
 	}
 	HAL_NVIC_DisableIRQ(USART2_IRQn);
 	return code;
-}
-///////////////////////////////////////////////////////////////////////////////////////////////////
-/////////////////////////////CONTROL FUNCTIONS (CAN CHANGE)////////////////////////////////////////
-///////////////////////////////////////////////////////////////////////////////////////////////////
-
-/* Function Name: clockwiseMotion
- * Author: Aidan Drescher
- * Date: 2024-02-21
- * Purpose: Send a command packet to DMM drive to initiate clockwise motion of the shaft with user
- * defined speed
- * */
-void clockwiseMotion(){
-	if(motorPower == 0){
-		return;
-	}
-	else if(motorPower == 1){
-		sendSpeed = speed;
-		Turn_const_speed(1,sendSpeed);
-		motorDirection = 1;
-	}
-}
-
-/* Function Name: counterClockwiseMotion
- * Author: Aidan Drescher
- * Date: 2024-02-21
- * Purpose: Send a command packet to DMM drive to initiate counter-clockwise motion of the shaft
- * with user defined speed
- * */
-void counterClockwiseMotion(){
-	if(motorPower == 0){
-		return;
-	}
-	else if(motorPower == 1){
-		sendSpeed = speed*-1;
-		Turn_const_speed(1,sendSpeed);
-		motorDirection = 2;
-	}
-}
-
-/* Function Name: speedControl
- * Author: Aidan Drescher
- * Date: 2024-02-21
- * Purpose: Parse incoming speed commands to separate the command type and the real value. Change
- * the multiplier to adjust the scale of the speed
- * */
-void speedControl(char* command){
-  int index = 0;
-  int i = 0;
-  char speedVal[3] = {};
-  for(i=0; command[i]!='\0'; i++){
-	  if(isdigit(command[i])){
-	      speedVal[index] = command[i];
-	      index++;
-	  }
-  }
-  speed = atoi(speedVal);
-  speed = speed * 10; //change multiplier here to determine max speed (motor rated 3000RPM - set to 30)
-
-  if(motorDirection == 1){
-	  clockwiseMotion();
-  }
-  else if(motorDirection == 2){
-	  counterClockwiseMotion();
-  }
-}
-
-/* Function Name: absoluteMove
- * Author: Aidan Drescher
- * Date: 2024-02-21
- * Purpose: Parse incoming absolute move commands to separate the command type and the real value.
- * The function computes the move time based on # of revolutions and calls appropriate functions
- * to execute the move (move_rel32)
- * */
-void absoluteMove(char* command){
-	int index = 0;
-	int i = 0;
-	char revCount[3] = {};
-	long int noRev = 0;
-	int moveTime = 0;
-	if(motorPower == 0){
-		return;
-	}
-	else if(motorPower == 1){
-		motorDirection = 0;
-		Turn_const_speed(1,0);
-		HAL_Delay(2000);
-		//while timer is not done, wait (still run read data for position display)
-		for(i=0; command[i]!='\0'; i++){
-			if(isdigit(command[i])){
-			    revCount[index] = command[i];
-			    index++;
-			}
-		}
-		noRev = atoi(revCount);
-		moveTime = 550 * noRev;
-		if(command[1] == '-'){
-		    noRev = noRev * -65536;
-			move_rel32(1,noRev);
-			HAL_Delay(moveTime);
-		}
-		else{
-			noRev = noRev * 65536;
-			move_rel32(1,noRev);
-			HAL_Delay(moveTime);
-		}
-	}
 }
 
 /* Function Name: setMotorSpeed
@@ -1136,7 +982,7 @@ void setMotorSpeed(char motorID){
 					speed = speedTemp;
 					sprintf(sendMsg,"\r\n\n\x1b[1mMotor %d speed set to %d RPM\x1b[0m\r\n", motorID, speedTemp);
 					HAL_UART_Transmit(&huart2, (uint8_t *)sendMsg, strlen(sendMsg), HAL_MAX_DELAY);
-					Turn_const_speed(motorID, speed);
+					Turn_const_speed(&motor_com, motorID, speed);
 				}
 
 			}
@@ -1157,81 +1003,6 @@ void setMotorSpeed(char motorID){
 	}
 }
 
-/* Function Name: absMoveSetup
- * Author: Aidan Drescher
- * Date: 2024-04-10
- * Purpose: Ensures positional accuracy before relative moves
- * */
-void absMoveSetup(){
-
-	for(int i=0; i<45; i++){
-		//sendString();
-		HAL_Delay(75);
-	}
-}
-
-/* Function Name: goHome
- * Author: Aidan Drescher
- * Date: 2024-03-19
- * Purpose: Sends the motor back to 0 pulses on the encoder
- * */
-int goHome(){
-
-  if(motorPower == 0){
-    return 5;
-  }
-  else if(motorPower == 1){
-
-    motorDirection = 0;
-    Turn_const_speed(1,0);
-    ReadMotorPosition32(1);
-
-    if(Motor_Pos32 > 400000){
-      while(Motor_Pos32 > 400000){
-        //sendString();
-    	ReadMotorPosition32(1);
-        Turn_const_speed(1,-750);
-      }
-      while(Motor_Pos32 > 200000 && Motor_Pos32 <= 400000){
-        //sendString();
-    	ReadMotorPosition32(1);
-        Turn_const_speed(1,-250);
-      }
-      Turn_const_speed(1,0);
-      absMoveSetup();
-      ReadMotorPosition32(1);
-      move_rel32(1,-Motor_Pos32);
-      return 1;
-    }
-    else if(Motor_Pos32 < -400000){
-      while(Motor_Pos32 < -400000){
-        //sendString();
-    	ReadMotorPosition32(1);
-        Turn_const_speed(1,750);
-      }
-      while(Motor_Pos32 < -200000 && Motor_Pos32 >= -400000){
-        //sendString();
-    	ReadMotorPosition32(1);
-        Turn_const_speed(1,250);
-      }
-      Turn_const_speed(1,0);
-      absMoveSetup();
-      ReadMotorPosition32(1);
-      move_rel32(1,-Motor_Pos32);
-      return 1;
-    }
-    else{
-      Turn_const_speed(1,0);
-      absMoveSetup();
-      ReadMotorPosition32(1);
-      move_rel32(1,-Motor_Pos32);
-      return 1;
-    }
-
-
-  }
-
-}
 //////////////////////////////////////////////////////////////////////////////////////////////////////
 /////////////////////////////DATA READING & DISPLAY FUNCTIONS/////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -1243,13 +1014,13 @@ int goHome(){
  * */
 void sendString(){
 
-  ReadMotorPosition32(1);
-  classifyReadString(Motor_Pos32,'p',outputString);
+  ReadMotorPosition32(&motor_com, 1);
+  classifyReadString(io_motor_com_get_motor_pos(&motor_com),'p',outputString);
   HAL_Delay(25);
   HAL_UART_Transmit(&huart2, (uint8_t*)outputString, strlen(outputString), HAL_MAX_DELAY);
 
-  ReadMotorSpeed32(1);
-  classifyReadString(Motor_Speed32,'s',outputString);
+  ReadMotorSpeed32(&motor_com, 1);
+  classifyReadString(io_motor_com_get_motor_speed(&motor_com),'s',outputString);
   HAL_Delay(25);
   HAL_UART_Transmit(&huart2, (uint8_t*)outputString, strlen(outputString), HAL_MAX_DELAY);
 
@@ -1343,364 +1114,6 @@ void timeDelay(int delay){
 	HAL_TIM_OC_Stop_IT(&htim3, TIM_CHANNEL_1);
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////////////////
-/////////////////////////////DYN DRIVE FUNCTIONS (DONT CHANGE)////////////////////////////////////////
-//////////////////////////////////////////////////////////////////////////////////////////////////////
-
-/* Function Name: Drive_Reset_RS232
- * Author: Aidan Drescher
- * Date: 2024-05-17
- * Purpose: Prepares a relative move packet to send to DMM drive
- * */
-// void Drive_Reset_RS232(){
-// 	timeDelay(500);
-// 	Global_Func = (char)General_Read;
-// 	Send_Package(1,Is_DriveReset);
-// }
-
-// void Drive_Enable_RS232(){
-// 	timeDelay(500);
-// 	Global_Func = (char)General_Read;
-// 	Send_Package(1,Is_DriveEnable);
-// }
-
-// void Drive_Disable_RS232(){
-// 	timeDelay(500);
-// 	Global_Func = (char)General_Read;
-// 	Send_Package(1,Is_DriveDisable);
-// }
-/* Function Name: move_rel32
- * Author: Tianyu Li
- * Date: 2019-02-21
- * Purpose: Prepares a relative move packet to send to DMM drive
- * */
-void move_rel32(char ID, long pos)
-{
-  char Axis_Num = ID;
-  Global_Func = (char)Go_Relative_Pos;
-  Send_Package(Axis_Num, pos);
-}
-
-/* Function Name: ReadMotorTorqueCurrent
- * Author: Tianyu Li
- * Date: 2019-02-21
- * Purpose: Executes a read from the DMM drive to obtain motor torque
- * */
-void ReadMotorTorqueCurrent(char ID)
-{
-  Global_Func = General_Read;
-  Send_Package(ID , Is_TrqCurrent);
-  MotorTorqueCurrentReady_Flag = 0xff;
-  while(MotorTorqueCurrentReady_Flag != 0x00)
-  {
-    ReadPackage();
-  }
-}
-
-/* Function Name: ReadMotorPosition32
- * Author: Tianyu Li
- * Date: 2019-02-21
- * Purpose: Executes a read from the DMM drive to obtain motor position in encoder pulses
- * */
-void ReadMotorPosition32(char ID)
-{
-  Global_Func = (char)General_Read;
-  Send_Package(ID , Is_AbsPos32);
-  MotorPosition32Ready_Flag = 0xff;
-  while(MotorPosition32Ready_Flag != 0x00)
-  {
-    ReadPackage();
-  }
-}
-
-/* Function Name: ReadMotorSpeed32
- * Author: Aidan Drescher
- * Date: 2024-04-10
- * Purpose: Executes a read from the DMM drive to obtain motor speed in RPM
- * */
-void ReadMotorSpeed32(char ID)
-{
-  Global_Func = (char)General_Read;
-  Send_Package(ID, Read_HighSpeed);
-  MotorSpeed32Ready_Flag = 0xff;
-//   while(MotorSpeed32Ready_Flag != 0x00)
-//   {
-    // ReadPackage();
-//   }
-}
-/* Function Name: ReadMotorTorqueCurrent
- * Author: Tianyu Li
- * Date: 2019-02-21
- * Purpose: Prepares an absolute move packet to send to DMM drive
- * */
-void move_abs32(char MotorID, long Pos32)
-{
-  char Axis_Num = MotorID;
-  Global_Func = (char)Go_Absolute_Pos;
-  Send_Package(Axis_Num, Pos32);
-}
-
-/* Function Name: Turn_const_speed
- * Author: Tianyu Li
- * Date: 2019-02-21
- * Purpose: Prepares and sends a data packet to execute a constant speed command
- * */
-void Turn_const_speed(char ID, long spd)
-{
-      char Axis_Num = ID;
-      Global_Func = 0x0a;
-      Send_Package(Axis_Num, spd);
-}
-
-
-/* Function Name: classifyReadString
- * Author: Aidan Drescher
- * Date: 2024-04-11
- * Purpose: Reads data from drive.
- * */
-void ReadPackage(void) {
-
-  signed int c, cif;
-
-  while (__HAL_UART_GET_FLAG(&huart1, UART_FLAG_RXNE)) {
-    HAL_UART_Receive(&huart1, &c, 1, HAL_MAX_DELAY); // Receive one byte from UART
-    InputBuffer[InBfTopPointer] = c; // Load InputBuffer with received packets
-    InBfTopPointer++;
-  }
-
-  while (InBfBtmPointer != InBfTopPointer) {
-    c = InputBuffer[InBfBtmPointer];
-    InBfBtmPointer++;
-    cif = c & 0x80;
-    if (cif == 0) {
-      Read_Num = 0;
-      Read_Package_Length = 0;
-    }
-    if (cif == 0 || Read_Num > 0) {
-      Read_Package_Buffer[Read_Num] = c;
-      Read_Num++;
-      if (Read_Num == 2) {
-        cif = c >> 5;
-        cif = cif & 0x03;
-        Read_Package_Length = 4 + cif;
-        c = 0;
-      }
-      if (Read_Num == Read_Package_Length) {
-        Get_Function(); // Assuming Get_Function() is defined elsewhere
-        Read_Num = 0;
-        Read_Package_Length = 0;
-      }
-    }
-  }
-}
-
-/* Function Name: Get_Function
- * Author: Tianyu Li
- * Date: 2019-02-21
- * Purpose: Decodes the desired function code and toggles related flag. Initiates data processing
- * */
-void Get_Function(void) {
-  char ID, ReceivedFunction_Code, CRC_Check;
-  long Temp32;
-  ID = Read_Package_Buffer[0] & 0x7f;
-  ReceivedFunction_Code = Read_Package_Buffer[1] & 0x1f;
-  CRC_Check = 0;
-
-  for (int i = 0; i < Read_Package_Length - 1; i++) {
-    CRC_Check += Read_Package_Buffer[i];
-  }
-
-  CRC_Check ^= Read_Package_Buffer[Read_Package_Length - 1];
-  CRC_Check &= 0x7f;
-  if (CRC_Check != 0) {
-  }
-  else {
-    switch (ReceivedFunction_Code)
-    {
-      case  Is_AbsPos32:
-        Motor_Pos32 = Cal_SignValue(Read_Package_Buffer);
-        MotorPosition32Ready_Flag = 0x00;
-        break;
-    //   case  Is_MotorSpeed:
-    //     Motor_Speed32 = Cal_SignValue(Read_Package_Buffer);
-    //     MotorSpeed32Ready_Flag = 0x00;
-    //     break;
-      case  Is_TrqCurrent:
-	      MotorTorqueCurrent = Cal_SignValue(Read_Package_Buffer);
-	    break;
-      case  Is_Status:
-        Driver_Status = (char)Cal_SignValue(Read_Package_Buffer);
-        // Driver_Status=drive status byte data
-        break;
-      case  Is_Config:
-        Temp32 = Cal_Value(Read_Package_Buffer);
-        //Driver_Config = drive configuration setting
-        break;
-      case  Is_MainGain:
-        Driver_MainGain = (char)Cal_SignValue(Read_Package_Buffer);
-        Driver_MainGain = Driver_MainGain & 0x7f;
-        break;
-      case  Is_SpeedGain:
-        Driver_SpeedGain = (char)Cal_SignValue(Read_Package_Buffer);
-        Driver_SpeedGain = Driver_SpeedGain & 0x7f;
-        break;
-      case  Is_IntGain:
-        Driver_IntGain = (char)Cal_SignValue(Read_Package_Buffer);
-        Driver_IntGain = Driver_IntGain & 0x7f;
-        break;
-      case  Is_TrqCons:
-        Driver_TrqCons = (char)Cal_SignValue(Read_Package_Buffer);
-        Driver_TrqCons = Driver_TrqCons & 0x7f;
-        break;
-      case  Is_HighSpeed:
-        Driver_HighSpeed = (char)Cal_SignValue(Read_Package_Buffer);
-        Driver_HighSpeed = Driver_HighSpeed & 0x7f;
-        break;
-      case  Is_HighAccel:
-        Driver_HighAccel = (char)Cal_SignValue(Read_Package_Buffer);
-        Driver_HighAccel = Driver_HighAccel & 0x7f;
-        break;
-      case  Is_Driver_ID:
-        Driver_ReadID = ID;
-        break;
-      case  Is_Pos_OnRange:
-        Driver_OnRange = (char)Cal_SignValue(Read_Package_Buffer);
-        Driver_OnRange = Driver_OnRange & 0x7f;
-        break;
-    }
-  }
-}
-/* Function Name: Cal_SignValue
- * Author: Aidan Drescher
- * Date: 2024-04-17
- * Purpose: Interprets the correct mathematical sign (pos/neg) from the 2^18 value
- * (splits into -2^17 ~ 2^17 - 1)
- * */
-int32_t Cal_SignValue(unsigned char* One_Package) {
-    char Package_Length, i;
-    int32_t Lcmd;
-
-    // Determine package length based on the second byte
-    Package_Length = 4 + ((One_Package[1] >> 5) & 0x03);
-
-    // Initialize the command value
-    Lcmd = (One_Package[2] & 0x7F); // Mask out the sign bit
-
-    // Extract the sign bit from the first byte
-    int sign_bit = (One_Package[2] & 0x40) ? 1 : 0;
-
-    // Sign extension if necessary
-    if (sign_bit) {
-        Lcmd |= 0xFFFFFF80; // Sign extend to 32 bits
-    }
-
-    // Process the remaining bytes
-    for (i = 3; i < Package_Length - 1; i++) {
-        Lcmd = (Lcmd << 7) | (One_Package[i] & 0x7F);
-    }
-
-    return Lcmd; // Lcmd: -2^17 ~ 2^17 - 1
-}
-
-/* Function Name: Cal_Value
- * Author: Tianyu Li
- * Date: 2019-02-21
- * Purpose:
- * */
-long Cal_Value(unsigned char* One_Package)
-{
-  char Package_Length,OneChar,i;
-  long Lcmd;
-  OneChar = One_Package[1];
-  OneChar = OneChar>>5;
-  OneChar = OneChar&0x03;
-  Package_Length = 4 + OneChar;
-
-  OneChar = One_Package[2];   /*First byte 0x7f, bit 6 reprents sign      */
-  OneChar &= 0x7f;
-  Lcmd = (long)OneChar;     /*Sign extended to 32bits           */
-  for(i=3;i<Package_Length-1;i++)
-  {
-    OneChar = One_Package[i];
-    OneChar &= 0x7f;
-    Lcmd = Lcmd<<7;
-    Lcmd += OneChar;
-  }
-  return(Lcmd);         /*Lcmd : -2^27 ~ 2^27 - 1           */
-}
-
-/* Function Name: Send_Package
- * Author: Tianyu Li
- * Date: 2019-02-21
- * Purpose: Prepares and sends a data packet
- * */
-void Send_Package(char ID , long Displacement) {
-  unsigned char B[8], Package_Length, Function_Code;
-  long TempLong;
-  B[1] = B[2] = B[3] = B[4] = B[5] = (unsigned char)0x80;
-  B[0] = ID & 0x7f;
-  Function_Code = Global_Func & 0x1f;
-  TempLong = Displacement & 0x0fffffff; //Max 28bits
-  B[5] += (unsigned char)TempLong & 0x0000007f;
-  TempLong = TempLong >> 7;
-  B[4] += (unsigned char)TempLong & 0x0000007f;
-  TempLong = TempLong >> 7;
-  B[3] += (unsigned char)TempLong & 0x0000007f;
-  TempLong = TempLong >> 7;
-  B[2] += (unsigned char)TempLong & 0x0000007f;
-  Package_Length = 7;
-  TempLong = Displacement;
-  TempLong = TempLong >> 20;
-  if (( TempLong == 0x00000000) || ( TempLong == 0xffffffff)) { //Three byte data
-    B[2] = B[3];
-    B[3] = B[4];
-    B[4] = B[5];
-    Package_Length = 6;
-  }
-  TempLong = Displacement;
-  TempLong = TempLong >> 13;
-  if (( TempLong == 0x00000000) || ( TempLong == 0xffffffff)) { //Two byte data
-    B[2] = B[3];
-    B[3] = B[4];
-    Package_Length = 5;
-  }
-  TempLong = Displacement;
-  TempLong = TempLong >> 6;
-  if (( TempLong == 0x00000000) || ( TempLong == 0xffffffff)) { //One byte data
-    B[2] = B[3];
-    Package_Length = 4;
-  }
-  B[1] += (Package_Length - 4) * 32 + Function_Code;
-  Make_CRC_Send(Package_Length, B);
-}
-
-/* Function Name: Make_CRC_Send
- * Author: Tianyu Li
- * Date: 2019-02-21
- * Purpose: Checks packet and transmits
- * */
-void Make_CRC_Send(unsigned char Plength, unsigned char* B) {
-  unsigned char Error_Check = 0;
-  char RS232_HardwareShiftRegister;
-
-  for (int i = 0; i < Plength - 1; i++) {
-    OutputBuffer[OutBfTopPointer] = B[i];
-    OutBfTopPointer++;
-    Error_Check += B[i];
-  }
-  Error_Check = Error_Check | 0x80;
-  OutputBuffer[OutBfTopPointer] = Error_Check;
-  OutBfTopPointer++;
-  while (OutBfBtmPointer != OutBfTopPointer) {
-    RS232_HardwareShiftRegister = OutputBuffer[OutBfBtmPointer];
-    //Serial.print("RS232_HardwareShiftRegister: ");
-    //Serial.println(RS232_HardwareShiftRegister, DEC);
-    //use &huart1 for production
-    HAL_UART_Transmit(&huart1, &RS232_HardwareShiftRegister, 1, HAL_MAX_DELAY);
-    OutBfBtmPointer++; // Change to next byte in OutputBuffer to send
-  }
-}
-
 void start_uart2_rx(void)
 {
   HAL_UART_Receive_IT(&huart2, uart2_rx_buf, sizeof(uart2_rx_buf));
@@ -1709,10 +1122,11 @@ void start_uart2_rx(void)
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
   if (huart->Instance == USART2) {
-    float msg[TARGET_MSG_FLOAT_COUNT];
+    // float msg[TARGET_MSG_FLOAT_COUNT];
     memcpy(msg, uart2_rx_buf, sizeof(msg));
     mailbox_mail_arrived(&traj_new_mail, msg);
     HAL_UART_Receive_IT(&huart2, uart2_rx_buf, sizeof(uart2_rx_buf));
+
   }
 }
 
@@ -1733,6 +1147,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
   /* USER CODE END Callback 0 */
   if (htim->Instance == TIM14) {
     HAL_IncTick();
+    delta_fsm_on_timer_tick();
   }
   /* USER CODE BEGIN Callback 1 */
 

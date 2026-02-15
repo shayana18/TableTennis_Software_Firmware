@@ -9,6 +9,7 @@ if(IO_SOURCES)
     )
     target_link_libraries(io_lib PUBLIC
         hw_lib
+        datatypes_lib
     )
 else()
     add_library(io_lib INTERFACE)
@@ -17,5 +18,6 @@ else()
     )
     target_link_libraries(io_lib INTERFACE
         hw_lib
+        datatypes_lib
     )
 endif()

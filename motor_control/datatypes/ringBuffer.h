@@ -2,17 +2,14 @@
 
 #include <stdint.h>
 #include <stdbool.h>
-#include "message.h"
-
-#define MAX_BUF_SIZE 30
-
 
 typedef struct ringBuffer
 {
-    target_t buf[MAX_BUF_SIZE];
-    volatile uint8_t head;
-    volatile uint8_t tail;
-}ringBuffer_t; 
+    uint8_t *buf;
+    uint16_t size;
+    volatile uint16_t head;
+    volatile uint16_t tail;
+} ringBuffer_t; 
 
 typedef enum bufErrCodes_e
 {
@@ -22,14 +19,10 @@ typedef enum bufErrCodes_e
     FULL_OVERWRITE,
 } buffErrCodes_e; 
 
-void initRingBuffer(ringBuffer_t *buffer);
+void initRingBuffer(ringBuffer_t *buffer, uint8_t *storage, uint16_t size);
 
-// input must point to TARGET_MSG_FLOAT_COUNT floats
-buffErrCodes_e enqueue(ringBuffer_t *buffer, const float *input);
-
-// output must point to TARGET_MSG_FLOAT_COUNT floats
-buffErrCodes_e dequeue(ringBuffer_t *buffer, float *output); 
+buffErrCodes_e enqueue(ringBuffer_t *buffer, uint8_t input);
+buffErrCodes_e dequeue(ringBuffer_t *buffer, uint8_t *output); 
 
 bool bufIsEmpty(ringBuffer_t *buffer); 
-
 
