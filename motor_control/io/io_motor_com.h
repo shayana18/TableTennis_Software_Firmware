@@ -92,3 +92,11 @@ void io_motor_com_set_motor_position_ready(io_motor_com_t *ctx, uint8_t value);
 void io_motor_com_set_motor_speed_ready(io_motor_com_t *ctx, uint8_t value);
 void io_motor_com_set_motor_torque_ready(io_motor_com_t *ctx, uint8_t value);
 void io_motor_com_set_driver_config_ready(io_motor_com_t *ctx, uint8_t value);
+
+// Lightweight RX diagnostics to debug motor comm timeouts.
+void io_motor_com_debug_snapshot(uint32_t *rx_packets,
+                                 uint32_t *rx_crc_bad,
+                                 uint32_t *rx_pos_packets,
+                                 uint8_t *last_id,
+                                 uint8_t *last_func,
+                                 uint8_t *last_crc_ok);

@@ -34,9 +34,6 @@ void delta_fsm_init(robot_t *robot)
 
 void delta_fsm(robot_t *robot)
 {
-  if (robot->state == STATE_MOVE && motion_execute_consume_tick_due()) {
-    motion_execute_tick(robot);
-  }
 
   if (robot->flag_fault) {
     robot->state = STATE_FAULT;
@@ -49,31 +46,39 @@ void delta_fsm(robot_t *robot)
       robot_runtime_send_status("STATE: OFF\r\n");
       robot->state = STATE_UNHOMED;
       robot_runtime_send_status("STATE: UNHOMED\r\n");
+      robot_runtime_send_status("WAITING FOR HOME TARGET\r\n");
       break;
 
     case STATE_UNHOMED:
       if (robot_runtime_pop_target(&robot->current_target)) {
-        if (!motion_execute_safety_check_joint_limits()) {
-          robot_runtime_send_status("ROBOT JOINTS INVALID\r\n");
-        } else if (robot->current_target.type == TARGET_HOME) {
+        // float q1, q2, q3;
+        // if (!robot_runtime_get_joint_angles(&q1, &q2, &q3) ||!motion_execute_safety_check_joint_limits(q1, q2, q3)) {
+        //   robot_runtime_send_status("CURRENT ROBOT JOINTS ARE INVALID\r\n");
+        // } else 
+        if (robot->current_target.type == TARGET_HOME) {
+          robot_runtime_send_status("HOMING...\r\n");
           motion_execute_make_home_target(robot);
           robot->state = STATE_PLAN;
           robot_runtime_send_status("STATE: PLAN\r\n");
-        } else {
-          robot_runtime_send_status("WAITING FOR HOME TARGET\r\n");
         }
       }
       break;
 
     case STATE_PLAN:
       if (!robot_target_in_workspace(robot->current_target.pos)) {
-        robot_runtime_send_status("PATH_INVALID\r\n");
+        robot_runtime_send_status("TARGET IS INVALID\r\n");
         robot->state = STATE_IDLE;
         set_idle(robot);
         robot_runtime_send_status("STATE: IDLE\r\n");
       } else {
         motion_execute_plan(robot);
         motion_execute_start(robot);
+        if (!robot->flag_ready_to_move) {
+          robot->state = STATE_IDLE;
+          set_idle(robot);
+          robot_runtime_send_status("STATE: IDLE\r\n");
+          break;
+        }
         robot->state = STATE_MOVE;
         robot_runtime_send_status("STATE: MOVE\r\n");
       }
@@ -86,9 +91,15 @@ void delta_fsm(robot_t *robot)
       break;
 
     case STATE_MOVE:
+
+    // Continuously update motion
+      if (motion_execute_consume_tick_due()) {
+        motion_execute_tick(robot);
+      }
+
       if (robot->flag_path_abort) {
         robot_runtime_send_status("STOP MESSAGE RECEIVED\r\n");
-        stop_motion();
+        motion_execute_stop_all();
         robot->state = STATE_IDLE;
         robot_runtime_send_status("STATE: IDLE\r\n");
         break;
@@ -124,6 +135,12 @@ void delta_fsm(robot_t *robot)
       } else {
         motion_execute_plan(robot);
         motion_execute_start(robot);
+        if (!robot->flag_ready_to_move) {
+          robot->state = STATE_IDLE;
+          set_idle(robot);
+          robot_runtime_send_status("STATE: IDLE\r\n");
+          break;
+        }
         robot->state = STATE_MOVE;
         robot_runtime_send_status("STATE: MOVE\r\n");
       }
@@ -133,7 +150,6 @@ void delta_fsm(robot_t *robot)
     default:
       safety_enter_fault_mode();
       motion_execute_stop_all();
-      stop_motion();
       robot_runtime_send_status("FAULT\r\n");
       break;
   }

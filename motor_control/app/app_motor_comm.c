@@ -8,6 +8,22 @@
 #include "io_motor_com.h"
 #include "main.h"
 
+#define MOTOR_POS_READ_TIMEOUT_MS 300U
+#define MOTOR_POS_READ_RETRIES 3U
+#define MOTOR_POS_RETRY_GAP_MS 2U
+
+static void motor_uart_recover_and_drain(void)
+{
+  uint8_t dump = 0;
+
+  __HAL_UART_CLEAR_OREFLAG(&huart1);
+  __HAL_UART_CLEAR_FEFLAG(&huart1);
+  __HAL_UART_CLEAR_NEFLAG(&huart1);
+
+  while (__HAL_UART_GET_FLAG(&huart1, UART_FLAG_RXNE)) {
+    (void)HAL_UART_Receive(&huart1, &dump, 1, 0);
+  }
+}
 
 /* Function Name: clockwiseMotion
  * Purpose: Send a command packet to DMM drive to initiate clockwise motion of the shaft with user
@@ -204,15 +220,72 @@ void ReadMotorTorqueCurrent(io_motor_com_t *motor_com, char ID)
  * Date: 2019-02-21
  * Purpose: Executes a read from the DMM drive to obtain motor position in encoder pulses
  * */
-void ReadMotorPosition32(io_motor_com_t *motor_com, char ID)
+static bool read_motor_position32_impl(io_motor_com_t *motor_com, char ID, bool log_timeout)
 {
-  // No dedicated read function code for position; use General_Read + IS code.
-  io_motor_com_send_package(motor_com, ID , Is_AbsPos32, (char)General_Read);
-  io_motor_com_set_motor_position_ready(motor_com, 0xff);
-  while(io_motor_com_get_motor_position_ready(motor_com) != 0x00)
-  {
-    io_motor_com_read_package(motor_com);
+  uint32_t rx_start = 0, crc_start = 0, pos_start = 0;
+  const uint32_t t_begin = HAL_GetTick();
+  uint8_t last_id = 0, last_func = 0, last_crc_ok = 0;
+  io_motor_com_debug_snapshot(&rx_start, &crc_start, &pos_start,
+                              &last_id, &last_func, &last_crc_ok);
+
+  for (uint8_t attempt = 0; attempt < MOTOR_POS_READ_RETRIES; attempt++) {
+    motor_uart_recover_and_drain();
+
+    // No dedicated read function code for position; use General_Read + IS code.
+    io_motor_com_send_package(motor_com, ID, Is_AbsPos32, (char)General_Read);
+    io_motor_com_set_motor_position_ready(motor_com, 0xff);
+    const uint32_t t0 = HAL_GetTick();
+
+    while ((HAL_GetTick() - t0) < MOTOR_POS_READ_TIMEOUT_MS) {
+      io_motor_com_read_package(motor_com);
+
+      if (io_motor_com_get_motor_position_ready(motor_com) == 0x00) {
+        uint8_t got_id = 0, got_func = 0, got_crc_ok = 0;
+        io_motor_com_debug_snapshot(NULL, NULL, NULL, &got_id, &got_func, &got_crc_ok);
+
+        if (got_crc_ok && got_func == (uint8_t)Is_AbsPos32 && got_id == (uint8_t)ID) {
+          return true;
+        }
+
+        // Ignore stale/mismatched packets and keep waiting for requested ID.
+        io_motor_com_set_motor_position_ready(motor_com, 0xff);
+      }
+    }
+
+    if ((attempt + 1U) < MOTOR_POS_READ_RETRIES) {
+      HAL_Delay(MOTOR_POS_RETRY_GAP_MS);
+    }
   }
+
+  if (log_timeout) {
+    uint32_t rx_end = 0, crc_end = 0, pos_end = 0;
+    io_motor_com_debug_snapshot(&rx_end, &crc_end, &pos_end,
+                                &last_id, &last_func, &last_crc_ok);
+    char dbg[192];
+    snprintf(dbg, sizeof(dbg),
+             "ERR: pos timeout id=%d dt=%lums rx+%lu pos+%lu crc+%lu last=%u/%02X/%u\r\n",
+             ID,
+             (unsigned long)(HAL_GetTick() - t_begin),
+             (unsigned long)(rx_end - rx_start),
+             (unsigned long)(pos_end - pos_start),
+             (unsigned long)(crc_end - crc_start),
+             (unsigned)last_id,
+             (unsigned)last_func,
+             (unsigned)last_crc_ok);
+    HAL_UART_Transmit(&huart2, (uint8_t *)dbg, strlen(dbg), HAL_MAX_DELAY);
+  }
+
+  return false;
+}
+
+bool ReadMotorPosition32(io_motor_com_t *motor_com, char ID)
+{
+  return read_motor_position32_impl(motor_com, ID, true);
+}
+
+bool ReadMotorPosition32Quiet(io_motor_com_t *motor_com, char ID)
+{
+  return read_motor_position32_impl(motor_com, ID, false);
 }
 
 /* Function Name: ReadMotorSpeed32

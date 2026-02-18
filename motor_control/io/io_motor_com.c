@@ -6,11 +6,33 @@
 #include <stdio.h>
 #include <string.h>
 
+// Set to 1 to mirror raw motor UART bytes to laptop UART (binary output).
+// Keep 0 for human-readable terminal output.
+#define IO_DEBUG_RAW_UART_MIRROR 0
+// Set to 1 to print decoded RX packet traces over laptop UART.
+#define IO_DEBUG_PACKET_TRACE 0
+// Set to 1 to print every TX motor packet byte as ASCII hex over laptop UART.
+#define IO_DEBUG_TX_HEX_STREAM 0
+
+static volatile uint32_t s_dbg_rx_packets = 0;
+static volatile uint32_t s_dbg_rx_crc_bad = 0;
+static volatile uint32_t s_dbg_rx_pos_packets = 0;
+static volatile uint8_t s_dbg_last_id = 0;
+static volatile uint8_t s_dbg_last_func = 0;
+static volatile uint8_t s_dbg_last_crc_ok = 0;
+
 static void io_motor_com_dbg_packet(const io_motor_com_t *ctx,
                                     char id,
                                     char func,
                                     int crc_ok)
 {
+#if !IO_DEBUG_PACKET_TRACE
+  (void)ctx;
+  (void)id;
+  (void)func;
+  (void)crc_ok;
+  return;
+#else
   char msg[256];
   size_t off = 0;
 
@@ -33,6 +55,7 @@ static void io_motor_com_dbg_packet(const io_motor_com_t *ctx,
   }
 
   HAL_UART_Transmit(&huart2, (uint8_t *)msg, strlen(msg), HAL_MAX_DELAY);
+#endif
 }
 
 static void io_motor_com_dbg_tx(const unsigned char *buf,
@@ -86,8 +109,10 @@ void io_motor_com_read_package(io_motor_com_t *ctx) {
     HAL_StatusTypeDef status;
     status = hw_motor_rx(&c, 1, 0); // Receive one byte from UART
     enqueue(&ctx->input_buffer, c);
+#if IO_DEBUG_RAW_UART_MIRROR
     uint8_t raw = c;
     HAL_UART_Transmit(&huart2, &raw, 1, HAL_MAX_DELAY);
+#endif
   }
 
   while (!bufIsEmpty(&ctx->input_buffer)) {
@@ -129,6 +154,9 @@ void io_motor_com_get_function(io_motor_com_t *ctx) {
   long Temp32;
   ID = ctx->read_package_buffer[0] & 0x7f;
   ReceivedFunction_Code = ctx->read_package_buffer[1] & 0x1f;
+  s_dbg_rx_packets++;
+  s_dbg_last_id = (uint8_t)ID;
+  s_dbg_last_func = (uint8_t)ReceivedFunction_Code;
   CRC_Check = 0;
 
   for (int i = 0; i < ctx->read_package_length - 1; i++) {
@@ -138,9 +166,15 @@ void io_motor_com_get_function(io_motor_com_t *ctx) {
   CRC_Check ^= ctx->read_package_buffer[ctx->read_package_length - 1];
   CRC_Check &= 0x7f;
   if (CRC_Check != 0) {
+    s_dbg_rx_crc_bad++;
+    s_dbg_last_crc_ok = 0;
     io_motor_com_dbg_packet(ctx, ID, ReceivedFunction_Code, 0);
   }
   else {
+    s_dbg_last_crc_ok = 1;
+    if (ReceivedFunction_Code == Is_AbsPos32) {
+      s_dbg_rx_pos_packets++;
+    }
     io_motor_com_dbg_packet(ctx, ID, ReceivedFunction_Code, 1);
     switch (ReceivedFunction_Code)
     {
@@ -163,11 +197,13 @@ void io_motor_com_get_function(io_motor_com_t *ctx) {
         Temp32 = io_motor_com_cal_value(ctx->read_package_buffer);
         ctx->data.driver_config = Temp32;
         ctx->data.driver_config_ready_flag = 0x00;
+#if IO_DEBUG_PACKET_TRACE
         {
           char msg[128];
           snprintf(msg, sizeof(msg), "[DBG] Driver config value: %ld\r\n", Temp32);
           HAL_UART_Transmit(&huart2, (uint8_t *)msg, strlen(msg), HAL_MAX_DELAY);
         }
+#endif
         break;
       case  Is_MainGain:
         ctx->data.driver_main_gain = (char)io_motor_com_cal_sign_value(ctx->read_package_buffer);
@@ -332,9 +368,11 @@ void io_motor_com_make_crc_send(io_motor_com_t *ctx, unsigned char Plength, unsi
     //Serial.print("RS232_HardwareShiftRegister: ");
     //Serial.println(RS232_HardwareShiftRegister, DEC);
     //use &huart1 for production
-  char msg[16];
-  snprintf(msg, sizeof(msg), "%02X ", (uint8_t)RS232_HardwareShiftRegister);
+#if IO_DEBUG_TX_HEX_STREAM
+    char msg[16];
+    snprintf(msg, sizeof(msg), "%02X ", (uint8_t)RS232_HardwareShiftRegister);
     hw_laptop_tx((uint8_t *)msg, strlen(msg), HAL_MAX_DELAY);
+#endif
     hw_motor_tx((uint8_t *)&RS232_HardwareShiftRegister, 1, HAL_MAX_DELAY);
   }
 }
@@ -399,4 +437,31 @@ void io_motor_com_set_motor_torque_ready(io_motor_com_t *ctx, uint8_t value)
 void io_motor_com_set_driver_config_ready(io_motor_com_t *ctx, uint8_t value)
 {
   ctx->data.driver_config_ready_flag = value;
+}
+
+void io_motor_com_debug_snapshot(uint32_t *rx_packets,
+                                 uint32_t *rx_crc_bad,
+                                 uint32_t *rx_pos_packets,
+                                 uint8_t *last_id,
+                                 uint8_t *last_func,
+                                 uint8_t *last_crc_ok)
+{
+  if (rx_packets) {
+    *rx_packets = s_dbg_rx_packets;
+  }
+  if (rx_crc_bad) {
+    *rx_crc_bad = s_dbg_rx_crc_bad;
+  }
+  if (rx_pos_packets) {
+    *rx_pos_packets = s_dbg_rx_pos_packets;
+  }
+  if (last_id) {
+    *last_id = s_dbg_last_id;
+  }
+  if (last_func) {
+    *last_func = s_dbg_last_func;
+  }
+  if (last_crc_ok) {
+    *last_crc_ok = s_dbg_last_crc_ok;
+  }
 }
