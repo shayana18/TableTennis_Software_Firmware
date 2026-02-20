@@ -5,7 +5,7 @@ Tests the full trajectory prediction pipeline with live cameras:
   Cameras → Detection → Triangulation → Prediction → Visualization
 
 CAMERA: Arducam OV9782 Global Shutter USB Camera
-        1MP, 120fps @ 1280x720
+        1MP, 100fps @ 1280x800 MJPG
 
 USAGE:
     cd top_level_control
@@ -33,7 +33,6 @@ import sys
 import os
 import time
 import numpy as np
-import yaml
 import json
 
 # Add parent directory to path for imports
@@ -44,21 +43,7 @@ if parent_dir not in sys.path:
 
 from tracking.stereo_triangulator import StereoTriangulator
 from trajectory.trajectory_predictor import TrajectoryPredictor
-
-
-def configure_camera_for_arducam(cap, width=1280, height=720):
-    """Configure camera for Arducam OV9782 with MJPG codec."""
-    fourcc_mjpg = cv2.VideoWriter_fourcc(*'MJPG')
-    cap.set(cv2.CAP_PROP_FOURCC, fourcc_mjpg)
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-    cap.set(cv2.CAP_PROP_FPS, 120)
-    
-    return {
-        'width': int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
-        'height': int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),
-        'fps': cap.get(cv2.CAP_PROP_FPS)
-    }
+from config.camera_config import load_camera_settings, configure_camera
 
 
 class TrajectoryTester:
@@ -71,15 +56,15 @@ class TrajectoryTester:
         
         # File paths
         self.calibration_dir = os.path.join(self.base_dir, 'camera_calibration', 'camera_parameters')
-        self.config_path = os.path.join(self.base_dir, 'config', 'stereo_config.yaml')
         self.thresholds_stereo = os.path.join(self.base_dir, 'config', 'ball_thresholds_stereo.json')
         self.thresholds_single = os.path.join(self.base_dir, 'config', 'ball_thresholds.json')
         
-        # Camera settings
-        self.frame_width = 1280
-        self.frame_height = 720
-        self.cam_left_id = 1
-        self.cam_right_id = 2
+        # Camera settings (from calibration_settings.yaml)
+        cam_settings = load_camera_settings()
+        self.frame_width = cam_settings['frame_width']
+        self.frame_height = cam_settings['frame_height']
+        self.cam_left_id = cam_settings['camera0']
+        self.cam_right_id = cam_settings['camera1']
         
         # Robot interception plane (Z distance where robot can reach)
         self.robot_z = 50.0  # cm - ADJUST THIS FOR YOUR SETUP
@@ -95,15 +80,8 @@ class TrajectoryTester:
         self.load_config()
     
     def load_config(self):
-        """Load camera configuration."""
-        if os.path.exists(self.config_path):
-            with open(self.config_path, 'r') as f:
-                config = yaml.safe_load(f)
-            self.cam_left_id = config.get('camera_left', {}).get('id', 1)
-            self.cam_right_id = config.get('camera_right', {}).get('id', 2)
-            self.frame_width = config.get('frame_width', 1280)
-            self.frame_height = config.get('frame_height', 720)
-            print(f"[Config] Loaded: Left={self.cam_left_id}, Right={self.cam_right_id}, {self.frame_width}x{self.frame_height}")
+        """Camera settings already loaded in __init__ via load_camera_settings()."""
+        print(f"[Config] Left={self.cam_left_id}, Right={self.cam_right_id}, {self.frame_width}x{self.frame_height}")
     
     def load_thresholds(self):
         """Load ball detection thresholds (stereo or single)."""
@@ -133,8 +111,8 @@ class TrajectoryTester:
             raise RuntimeError("Failed to open cameras")
         
         # Configure for Arducam
-        s_left = configure_camera_for_arducam(self.triangulator.cap_left, self.frame_width, self.frame_height)
-        s_right = configure_camera_for_arducam(self.triangulator.cap_right, self.frame_width, self.frame_height)
+        s_left = configure_camera(self.triangulator.cap_left, self.frame_width, self.frame_height)
+        s_right = configure_camera(self.triangulator.cap_right, self.frame_width, self.frame_height)
         
         print(f"  LEFT:  {s_left['width']}x{s_left['height']} @ {s_left['fps']:.0f}fps")
         print(f"  RIGHT: {s_right['width']}x{s_right['height']} @ {s_right['fps']:.0f}fps")
@@ -219,7 +197,8 @@ class TrajectoryTester:
             min_points=3,
             velocity_method='regression',
             gravity=981.0,
-            y_down=True
+            y_down=True,
+            enable_drag=True
         )
         
         print("\n--- LIVE TRACKING ---\n")

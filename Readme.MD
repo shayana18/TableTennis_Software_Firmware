@@ -150,9 +150,10 @@ Camera  │        Camera
 1. **Collect:** Store recent 3D positions in a circular buffer (last 10 frames) with timestamps
 2. **Velocity:** Estimate ball velocity via linear regression on position history
 3. **Gravity correction:** The regression gives average velocity over the buffer window, not the instantaneous velocity at the latest frame. The predictor corrects Vy to the current moment using the known gravitational acceleration.
-4. **Physics:** Apply exact kinematic equations with gravity
-   - X and Z: Constant velocity (no air resistance)
-   - Y: Accelerates downward at 981 cm/s² (gravity in +Y direction, camera coords)
+4. **Physics:** Semi-implicit Euler integration at 1ms timesteps with gravity and air drag
+   - Drag deceleration on each axis: `a_drag_i = -k * |v| * v_i` where `k = (rho * Cd * A) / (2 * m) ≈ 0.00128 cm⁻¹`
+   - At typical speeds (~300 cm/s), drag is ~12% of gravity — enough to reduce overshoot by 10-15%
+   - Falls back to exact analytical kinematics when drag is disabled
 5. **Two-case interception strategy:**
 
 | Condition | Strategy | Intercept Point |
@@ -244,7 +245,9 @@ Toss and throw the ball to verify both strategies:
 | `camera_left/right id` | stereo_config.yaml | USB camera device IDs |
 | `robot_z` | trajectory test | Z distance where robot intercepts |
 | `min_points` | trajectory_predictor | Points needed before prediction (3) |
+| `enable_drag` | trajectory_predictor / physics_model | Air drag simulation (default True) |
 | `gravity` | physics_model | 981 cm/s² (or 9810 mm/s²) |
+| `drag_coefficient` | physics_model | Cd for table tennis ball (default 0.45) |
 
 ---
 

@@ -2,10 +2,17 @@ import cv2 as cv
 import glob
 import numpy as np
 import sys
+import time
 from scipy import linalg
 import yaml
 import os
 from datetime import datetime
+
+# Add parent dir so we can import shared config
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from config.camera_config import (
+    configure_camera, CAMERA_LEFT_ID, CAMERA_RIGHT_ID, FRAME_WIDTH, FRAME_HEIGHT
+)
 
 # This will contain the calibration settings from the calibration_settings.yaml file
 calibration_settings = {}
@@ -18,69 +25,27 @@ calibration_rmse = {
 }
 
 
-def configure_camera_for_arducam(cap, width, height):
-    """
-    Configure camera specifically for Arducam OV9782 global shutter cameras.
-    Forces MJPG codec and 1280x800 resolution, then verifies actual settings.
-    Returns dict with actual accepted values.
-    """
-    # First, set the FOURCC to MJPG - this is crucial for getting full framerate
-    fourcc_mjpg = cv.VideoWriter_fourcc(*'MJPG')
-    cap.set(cv.CAP_PROP_FOURCC, fourcc_mjpg)
-    
-    # Set resolution
-    cap.set(cv.CAP_PROP_FRAME_WIDTH, width)
-    cap.set(cv.CAP_PROP_FRAME_HEIGHT, height)
-    
-    # Optional: try to set a higher framerate (Arducam supports 120fps at 1280x720 MJPG?)
-    cap.set(cv.CAP_PROP_FPS, 120)
-    
-    # Now read back the ACTUAL values the camera accepted
-    actual_width = int(cap.get(cv.CAP_PROP_FRAME_WIDTH))
-    actual_height = int(cap.get(cv.CAP_PROP_FRAME_HEIGHT))
-    actual_fps = cap.get(cv.CAP_PROP_FPS)
-    actual_fourcc_int = int(cap.get(cv.CAP_PROP_FOURCC))
-    
-    # Decode FOURCC integer back to string
-    actual_fourcc_str = "".join([chr((actual_fourcc_int >> 8 * i) & 0xFF) for i in range(4)])
-    
-    settings = {
-        'requested_width': width,
-        'requested_height': height,
-        'requested_fourcc': 'MJPG',
-        'actual_width': actual_width,
-        'actual_height': actual_height,
-        'actual_fps': actual_fps,
-        'actual_fourcc': actual_fourcc_str,
-        'settings_match': (actual_width == width and actual_height == height and 'MJPG' in actual_fourcc_str.upper())
-    }
-    
-    return settings
-
-
 def print_camera_settings(camera_name, settings):
     """
     Pretty print camera settings for verification.
+    Uses the dict returned by configure_camera() from camera_config.py.
     """
     print("\n" + "="*60)
     print(f"CAMERA SETTINGS: {camera_name}")
     print("="*60)
-    print(f"  Requested Resolution: {settings['requested_width']}x{settings['requested_height']}")
-    print(f"  Actual Resolution:    {settings['actual_width']}x{settings['actual_height']}")
-    print(f"  Requested FOURCC:     {settings['requested_fourcc']}")
-    print(f"  Actual FOURCC:        {settings['actual_fourcc']}")
-    print(f"  Actual FPS:           {settings['actual_fps']}")
-    
+    print(f"  Resolution:  {settings['width']}x{settings['height']}")
+    print(f"  FOURCC:      {settings['fourcc']}")
+    print(f"  FPS:         {settings['fps']}")
+    if settings.get('trigger_mode'):
+        trigger_status = "ON" if settings.get('trigger_ok') else "FAILED"
+        print(f"  Trigger:     {trigger_status}")
+
     if settings['settings_match']:
-        print("  STATUS: ✓ Settings accepted correctly!")
+        print("  STATUS: Settings accepted correctly!")
     else:
-        print("  STATUS: ⚠ WARNING - Settings may not match requested values!")
-        if settings['actual_width'] != settings['requested_width'] or settings['actual_height'] != settings['requested_height']:
-            print(f"           Resolution mismatch!")
-        if 'MJPG' not in settings['actual_fourcc'].upper():
-            print(f"           FOURCC mismatch - may affect framerate!")
+        print("  STATUS: WARNING - Settings may not match requested values!")
     print("="*60 + "\n")
-    
+
     return settings['settings_match']
 
 
@@ -123,11 +88,12 @@ def parse_calibration_settings_file(filename):
     with open(filename) as f:
         calibration_settings = yaml.safe_load(f)
 
-    # Rudimentary check to make sure correct file was loaded
-    if 'camera0' not in calibration_settings.keys():
-        print('camera0 key was not found in the settings file. Check if correct calibration_settings.yaml file was passed')
-        quit()
-    
+    # Camera settings come from camera_config.py (single source of truth)
+    calibration_settings['camera0'] = CAMERA_LEFT_ID
+    calibration_settings['camera1'] = CAMERA_RIGHT_ID
+    calibration_settings['frame_width'] = FRAME_WIDTH
+    calibration_settings['frame_height'] = FRAME_HEIGHT
+
     # Print loaded settings for verification
     print("\n" + "="*60)
     print("LOADED CALIBRATION SETTINGS")
@@ -155,7 +121,7 @@ def save_frames_single_camera(camera_name):
     cap = cv.VideoCapture(camera_device_id)
     
     # Configure camera with MJPG and verify settings
-    settings = configure_camera_for_arducam(cap, width, height)
+    settings = configure_camera(cap, width, height)
     settings_ok = print_camera_settings(camera_name, settings)
     
     if not settings_ok:
@@ -168,6 +134,9 @@ def save_frames_single_camera(camera_name):
     
     cooldown = cooldown_time
     start = False
+    countdown_active = False
+    countdown_start = 0
+    COUNTDOWN_SECONDS = 10
     saved_count = 0
 
     while True:
@@ -178,14 +147,25 @@ def save_frames_single_camera(camera_name):
 
         frame_small = cv.resize(frame, None, fx = 1/view_resize, fy=1/view_resize)
 
-        if not start:
+        if not start and not countdown_active:
             cv.putText(frame_small, "Press SPACEBAR to start collection frames", (50,50), cv.FONT_HERSHEY_COMPLEX, 1, (0,0,255), 1)
-        
+
+        if countdown_active and not start:
+            elapsed = time.time() - countdown_start
+            remaining = COUNTDOWN_SECONDS - elapsed
+            if remaining <= 0:
+                start = True
+                countdown_active = False
+                print("\n[GO] Starting frame collection!")
+            else:
+                cv.putText(frame_small, f"Starting in {int(remaining)+1}...", (50,50), cv.FONT_HERSHEY_COMPLEX, 2, (0,165,255), 3)
+                cv.putText(frame_small, "Get checkerboard in position!", (50,120), cv.FONT_HERSHEY_COMPLEX, 1, (0,165,255), 2)
+
         if start:
             cooldown -= 1
             cv.putText(frame_small, "Cooldown: " + str(cooldown), (50,50), cv.FONT_HERSHEY_COMPLEX, 1, (0,255,0), 1)
             cv.putText(frame_small, "Num frames: " + str(saved_count), (50,100), cv.FONT_HERSHEY_COMPLEX, 1, (0,255,0), 1)
-            
+
             # Save the frame when cooldown reaches 0
             if cooldown <= 0:
                 savename = os.path.join('frames', camera_name + '_' + str(saved_count) + '.png')
@@ -195,12 +175,14 @@ def save_frames_single_camera(camera_name):
 
         cv.imshow('frame_small', frame_small)
         k = cv.waitKey(1)
-        
+
         if k == 27:
             quit()
 
-        if k == 32:
-            start = True
+        if k == 32 and not start and not countdown_active:
+            countdown_active = True
+            countdown_start = time.time()
+            print(f"\n[COUNTDOWN] {COUNTDOWN_SECONDS} seconds to get checkerboard in position...")
 
         if saved_count == number_to_save:
             break
@@ -340,8 +322,8 @@ def save_frames_two_cams(camera0_name, camera1_name):
     
     # Configure both cameras with MJPG and verify settings
     print("\nConfiguring cameras for stereo frame capture...")
-    settings0 = configure_camera_for_arducam(cap0, width, height)
-    settings1 = configure_camera_for_arducam(cap1, width, height)
+    settings0 = configure_camera(cap0, width, height)
+    settings1 = configure_camera(cap1, width, height)
     
     settings0_ok = print_camera_settings(camera0_name, settings0)
     settings1_ok = print_camera_settings(camera1_name, settings1)
@@ -356,8 +338,11 @@ def save_frames_two_cams(camera0_name, camera1_name):
 
     cooldown = cooldown_time
     start = False
+    countdown_active = False
+    countdown_start = 0
+    COUNTDOWN_SECONDS = 10
     saved_count = 0
-    
+
     while True:
         ret0, frame0 = cap0.read()
         ret1, frame1 = cap1.read()
@@ -369,15 +354,28 @@ def save_frames_two_cams(camera0_name, camera1_name):
         frame0_small = cv.resize(frame0, None, fx=1./view_resize, fy=1./view_resize)
         frame1_small = cv.resize(frame1, None, fx=1./view_resize, fy=1./view_resize)
 
-        if not start:
+        if not start and not countdown_active:
             cv.putText(frame0_small, "Make sure both cameras can see the calibration pattern well", (50,50), cv.FONT_HERSHEY_COMPLEX, 1, (0,0,255), 1)
             cv.putText(frame0_small, "Press SPACEBAR to start collection frames", (50,100), cv.FONT_HERSHEY_COMPLEX, 1, (0,0,255), 1)
-        
+
+        if countdown_active and not start:
+            elapsed = time.time() - countdown_start
+            remaining = COUNTDOWN_SECONDS - elapsed
+            if remaining <= 0:
+                start = True
+                countdown_active = False
+                print("\n[GO] Starting frame collection!")
+            else:
+                cv.putText(frame0_small, f"Starting in {int(remaining)+1}...", (50,50), cv.FONT_HERSHEY_COMPLEX, 2, (0,165,255), 3)
+                cv.putText(frame0_small, "Get checkerboard in position!", (50,120), cv.FONT_HERSHEY_COMPLEX, 1, (0,165,255), 2)
+                cv.putText(frame1_small, f"Starting in {int(remaining)+1}...", (50,50), cv.FONT_HERSHEY_COMPLEX, 2, (0,165,255), 3)
+                cv.putText(frame1_small, "Get checkerboard in position!", (50,120), cv.FONT_HERSHEY_COMPLEX, 1, (0,165,255), 2)
+
         if start:
             cooldown -= 1
             cv.putText(frame0_small, "Cooldown: " + str(cooldown), (50,50), cv.FONT_HERSHEY_COMPLEX, 1, (0,255,0), 1)
             cv.putText(frame0_small, "Num frames: " + str(saved_count), (50,100), cv.FONT_HERSHEY_COMPLEX, 1, (0,255,0), 1)
-            
+
             cv.putText(frame1_small, "Cooldown: " + str(cooldown), (50,50), cv.FONT_HERSHEY_COMPLEX, 1, (0,255,0), 1)
             cv.putText(frame1_small, "Num frames: " + str(saved_count), (50,100), cv.FONT_HERSHEY_COMPLEX, 1, (0,255,0), 1)
 
@@ -394,12 +392,14 @@ def save_frames_two_cams(camera0_name, camera1_name):
         cv.imshow('frame0_small', frame0_small)
         cv.imshow('frame1_small', frame1_small)
         k = cv.waitKey(1)
-        
+
         if k == 27:
             quit()
 
-        if k == 32:
-            start = True
+        if k == 32 and not start and not countdown_active:
+            countdown_active = True
+            countdown_start = time.time()
+            print(f"\n[COUNTDOWN] {COUNTDOWN_SECONDS} seconds to get checkerboard in position...")
 
         if saved_count == number_to_save:
             break
@@ -571,8 +571,8 @@ def check_calibration(camera0_name, camera0_data, camera1_name, camera1_data, _z
     height = calibration_settings['frame_height']
     
     # Configure cameras with MJPG
-    settings0 = configure_camera_for_arducam(cap0, width, height)
-    settings1 = configure_camera_for_arducam(cap1, width, height)
+    settings0 = configure_camera(cap0, width, height)
+    settings1 = configure_camera(cap1, width, height)
     print_camera_settings(camera0_name + " (verification)", settings0)
     print_camera_settings(camera1_name + " (verification)", settings1)
 

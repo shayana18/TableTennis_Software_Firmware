@@ -12,91 +12,26 @@ CAMERA: Arducam OV9782 Global Shutter USB Camera
 import cv2
 import numpy as np
 import json
-import yaml
-from pathlib import Path
 from .ball_tracker import EnhancedBallTracker
-
-
-def configure_camera_for_arducam(cap, width=1280, height=720):
-    """
-    Configure camera for Arducam OV9782 global shutter cameras.
-    Forces MJPG codec and specified resolution.
-    
-    Args:
-        cap: cv2.VideoCapture object
-        width: Desired width (default 1280)
-        height: Desired height (default 800)
-    
-    Returns:
-        dict with actual accepted values
-    """
-    # Set FOURCC to MJPG first - critical for getting full framerate on Arducam
-    fourcc_mjpg = cv2.VideoWriter_fourcc(*'MJPG')
-    cap.set(cv2.CAP_PROP_FOURCC, fourcc_mjpg)
-    
-    # Set resolution
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-    
-    # Try to set higher framerate (Arducam OV9782 supports 100fps at 1280x800 MJPG)
-    cap.set(cv2.CAP_PROP_FPS, 100)
-    
-    # Disable auto-exposure for consistent detection
-    cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)
-    
-    # Read back actual values
-    actual_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    actual_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    actual_fps = cap.get(cv2.CAP_PROP_FPS)
-    actual_fourcc_int = int(cap.get(cv2.CAP_PROP_FOURCC))
-    
-    # Decode FOURCC integer to string
-    actual_fourcc_str = "".join([chr((actual_fourcc_int >> 8 * i) & 0xFF) for i in range(4)])
-    
-    return {
-        'requested_width': width,
-        'requested_height': height,
-        'requested_fourcc': 'MJPG',
-        'actual_width': actual_width,
-        'actual_height': actual_height,
-        'actual_fps': actual_fps,
-        'actual_fourcc': actual_fourcc_str,
-        'settings_match': (actual_width == width and actual_height == height)
-    }
+from config.camera_config import (
+    configure_camera, CAMERA_LEFT_ID, CAMERA_RIGHT_ID, FRAME_WIDTH, FRAME_HEIGHT
+)
 
 
 class StereoDetector:
     """Detect ball in stereo camera pair. No 3D calculations."""
 
-    def __init__(self, cam_left_id=None, cam_right_id=None, thresholds_file=None, config_path=None):
+    def __init__(self, cam_left_id=None, cam_right_id=None, thresholds_file=None, **kwargs):
         """
         Initialize stereo detector.
 
         Args:
-            cam_left_id: Device ID for left camera
-            cam_right_id: Device ID for right camera
+            cam_left_id: Device ID for left camera  (default: from camera_config)
+            cam_right_id: Device ID for right camera (default: from camera_config)
             thresholds_file: Optional path to ball_thresholds.json
-            config_path: Optional path to stereo_config.yaml
         """
-        # Load configuration
-        if config_path is None:
-            config_path = Path(__file__).parent.parent / 'config' / 'stereo_config.yaml'
-        
-        self.config = {}
-        
-        if config_path and Path(config_path).exists():
-            with open(config_path, 'r') as f:
-                self.config = yaml.safe_load(f)
-            
-            # Get camera IDs from config
-            cam_left_id = cam_left_id if cam_left_id is not None else self.config.get('camera_left', {}).get('id', 1)
-            cam_right_id = cam_right_id if cam_right_id is not None else self.config.get('camera_right', {}).get('id', 2)
-        else:
-            cam_left_id = cam_left_id if cam_left_id is not None else 1
-            cam_right_id = cam_right_id if cam_right_id is not None else 2
-
-        self.cam_left_id = cam_left_id
-        self.cam_right_id = cam_right_id
+        self.cam_left_id = cam_left_id if cam_left_id is not None else CAMERA_LEFT_ID
+        self.cam_right_id = cam_right_id if cam_right_id is not None else CAMERA_RIGHT_ID
 
         # Camera objects
         self.cap_left = None
@@ -147,14 +82,15 @@ class StereoDetector:
         except Exception as e:
             print(f"[StereoDetector] Warning: Could not load thresholds: {e}")
 
-    def start_cameras(self, width=1280, height=720):
+    def start_cameras(self, width=None, height=None):
         """
         Open camera streams with Arducam MJPG configuration.
-        
-        Args:
-            width: Frame width (default 1280 for OV9782)
-            height: Frame height (default 800 for OV9782)
+        Defaults come from camera_config.py.
         """
+        if width is None:
+            width = FRAME_WIDTH
+        if height is None:
+            height = FRAME_HEIGHT
         self.cap_left = cv2.VideoCapture(self.cam_left_id)
         self.cap_right = cv2.VideoCapture(self.cam_right_id)
 
@@ -163,19 +99,24 @@ class StereoDetector:
         if not self.cap_right.isOpened():
             raise RuntimeError(f"Failed to open right camera (ID: {self.cam_right_id})")
 
-        # Configure for Arducam OV9782 with MJPG
+        # Configure for Arducam OV9782 with MJPG + trigger mode from yaml
         print("\n[StereoDetector] Configuring cameras (Arducam OV9782 MJPG mode):")
-        settings_left = configure_camera_for_arducam(self.cap_left, width, height)
-        settings_right = configure_camera_for_arducam(self.cap_right, width, height)
-        
-        print(f"  LEFT:  {settings_left['actual_width']}x{settings_left['actual_height']} "
-              f"@ {settings_left['actual_fps']:.0f}fps ({settings_left['actual_fourcc']})")
-        print(f"  RIGHT: {settings_right['actual_width']}x{settings_right['actual_height']} "
-              f"@ {settings_right['actual_fps']:.0f}fps ({settings_right['actual_fourcc']})")
-        
+        settings_left = configure_camera(self.cap_left, width, height)
+        settings_right = configure_camera(self.cap_right, width, height)
+
+        print(f"  LEFT:  {settings_left['width']}x{settings_left['height']} "
+              f"@ {settings_left['fps']:.0f}fps ({settings_left['fourcc']})")
+        print(f"  RIGHT: {settings_right['width']}x{settings_right['height']} "
+              f"@ {settings_right['fps']:.0f}fps ({settings_right['fourcc']})")
+
+        if settings_left.get('trigger_mode'):
+            tl = 'OK' if settings_left.get('trigger_ok') else 'FAILED'
+            tr = 'OK' if settings_right.get('trigger_ok') else 'FAILED'
+            print(f"  TRIGGER: LEFT={tl}  RIGHT={tr}")
+
         if not settings_left['settings_match'] or not settings_right['settings_match']:
             print("  WARNING: Some camera settings don't match requested values")
-        
+
         print("[StereoDetector] Cameras started successfully!")
         return True
 

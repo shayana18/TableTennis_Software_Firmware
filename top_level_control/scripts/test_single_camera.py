@@ -25,47 +25,22 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from tracking.ball_tracker import EnhancedBallTracker
-
-
-def configure_camera_for_arducam(cap, width=1280, height=720):
-    """
-    Configure camera for Arducam OV9782 global shutter cameras.
-    Forces MJPG codec and specified resolution.
-    """
-    fourcc_mjpg = cv2.VideoWriter_fourcc(*'MJPG')
-    cap.set(cv2.CAP_PROP_FOURCC, fourcc_mjpg)
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-    cap.set(cv2.CAP_PROP_FPS, 100)
-    cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)
-    
-    actual_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    actual_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    actual_fps = cap.get(cv2.CAP_PROP_FPS)
-    actual_fourcc_int = int(cap.get(cv2.CAP_PROP_FOURCC))
-    actual_fourcc_str = "".join([chr((actual_fourcc_int >> 8 * i) & 0xFF) for i in range(4)])
-    
-    return {
-        'actual_width': actual_width,
-        'actual_height': actual_height,
-        'actual_fps': actual_fps,
-        'actual_fourcc': actual_fourcc_str,
-        'settings_match': (actual_width == width and actual_height == height)
-    }
+from config.camera_config import load_camera_settings, configure_camera
 
 
 class SingleCameraTester:
     def __init__(self):
         self.script_dir = os.path.dirname(os.path.abspath(__file__))
         self.thresholds_path = os.path.join(self.script_dir, '..', 'config', 'ball_thresholds.json')
-        
-        self.camera_id = 1  # Default for Arducam
+
+        cam_settings = load_camera_settings()
+        self.camera_id = cam_settings['camera0']
         self.cap = None
         self.tracker = EnhancedBallTracker()
-        
-        self.frame_width = 1280
-        self.frame_height = 720
-        
+
+        self.frame_width = cam_settings['frame_width']
+        self.frame_height = cam_settings['frame_height']
+
         self.show_tuner = False
         self.show_debug = False
         
@@ -176,12 +151,12 @@ class SingleCameraTester:
             print(f"Failed to open camera {self.camera_id}")
             return False
         
-        settings = configure_camera_for_arducam(self.cap, self.frame_width, self.frame_height)
-        
+        settings = configure_camera(self.cap, self.frame_width, self.frame_height)
+
         print(f"\nCamera {self.camera_id} opened:")
-        print(f"  Resolution: {settings['actual_width']}x{settings['actual_height']}")
-        print(f"  FPS: {settings['actual_fps']:.0f}")
-        print(f"  FOURCC: {settings['actual_fourcc']}")
+        print(f"  Resolution: {settings['width']}x{settings['height']}")
+        print(f"  FPS: {settings['fps']:.0f}")
+        print(f"  FOURCC: {settings['fourcc']}")
         
         if not settings['settings_match']:
             print("  WARNING: Resolution mismatch!")

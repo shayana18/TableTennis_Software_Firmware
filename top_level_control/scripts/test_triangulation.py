@@ -34,38 +34,11 @@ import cv2
 import sys
 import os
 import json
-import yaml
 import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from tracking.stereo_triangulator import StereoTriangulator
-
-
-def configure_camera_for_arducam(cap, width=1280, height=720):
-    """
-    Configure camera for Arducam OV9782 global shutter cameras.
-    Forces MJPG codec and specified resolution.
-    """
-    fourcc_mjpg = cv2.VideoWriter_fourcc(*'MJPG')
-    cap.set(cv2.CAP_PROP_FOURCC, fourcc_mjpg)
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-    cap.set(cv2.CAP_PROP_FPS, 100)
-    cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)
-    
-    actual_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    actual_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    actual_fps = cap.get(cv2.CAP_PROP_FPS)
-    actual_fourcc_int = int(cap.get(cv2.CAP_PROP_FOURCC))
-    actual_fourcc_str = "".join([chr((actual_fourcc_int >> 8 * i) & 0xFF) for i in range(4)])
-    
-    return {
-        'actual_width': actual_width,
-        'actual_height': actual_height,
-        'actual_fps': actual_fps,
-        'actual_fourcc': actual_fourcc_str,
-        'settings_match': (actual_width == width and actual_height == height)
-    }
+from config.camera_config import load_camera_settings, configure_camera
 
 
 class TriangulationTester:
@@ -74,12 +47,12 @@ class TriangulationTester:
     def __init__(self):
         self.script_dir = os.path.dirname(os.path.abspath(__file__))
         self.calibration_dir = os.path.join(self.script_dir, '..', 'camera_calibration', 'camera_parameters')
-        self.config_path = os.path.join(self.script_dir, '..', 'config', 'stereo_config.yaml')
         self.thresholds_path = os.path.join(self.script_dir, '..', 'config', 'ball_thresholds.json')
         
-        self.frame_width = 1280
-        self.frame_height = 720
-        
+        cam_settings = load_camera_settings()
+        self.frame_width = cam_settings['frame_width']
+        self.frame_height = cam_settings['frame_height']
+
         self.triangulator = None
         self.measurements = []
         self.show_debug = False
@@ -103,20 +76,14 @@ class TriangulationTester:
         self.stereo_thresholds = False
         
     def load_config(self):
-        """Load camera IDs and resolution from config."""
-        if os.path.exists(self.config_path):
-            with open(self.config_path, 'r') as f:
-                config = yaml.safe_load(f)
-            self.cam_left_id = config['camera_left']['id']
-            self.cam_right_id = config['camera_right']['id']
-            self.frame_width = config.get('frame_width', 1280)
-            self.frame_height = config.get('frame_height', 720)
-            print(f"Loaded config: Left=ID{self.cam_left_id}, Right=ID{self.cam_right_id}")
-            print(f"  Resolution: {self.frame_width}x{self.frame_height}")
-        else:
-            self.cam_left_id = 1
-            self.cam_right_id = 2
-            print(f"No config found, using defaults: Left=ID{self.cam_left_id}, Right=ID{self.cam_right_id}")
+        """Load camera IDs and resolution from calibration_settings.yaml."""
+        cam_settings = load_camera_settings()
+        self.cam_left_id = cam_settings['camera0']
+        self.cam_right_id = cam_settings['camera1']
+        self.frame_width = cam_settings['frame_width']
+        self.frame_height = cam_settings['frame_height']
+        print(f"Loaded config: Left=ID{self.cam_left_id}, Right=ID{self.cam_right_id}")
+        print(f"  Resolution: {self.frame_width}x{self.frame_height}")
     
     def load_thresholds(self):
         """Load HSV and LAB thresholds from JSON."""
@@ -349,15 +316,15 @@ class TriangulationTester:
             raise RuntimeError(f"Failed to open right camera (ID: {self.cam_right_id})")
         
         print("\nConfiguring cameras (Arducam OV9782 MJPG mode):")
-        settings_left = configure_camera_for_arducam(
+        s_left = configure_camera(
             self.triangulator.cap_left, self.frame_width, self.frame_height)
-        settings_right = configure_camera_for_arducam(
+        s_right = configure_camera(
             self.triangulator.cap_right, self.frame_width, self.frame_height)
-        
-        print(f"  LEFT:  {settings_left['actual_width']}x{settings_left['actual_height']} "
-              f"@ {settings_left['actual_fps']:.0f}fps ({settings_left['actual_fourcc']})")
-        print(f"  RIGHT: {settings_right['actual_width']}x{settings_right['actual_height']} "
-              f"@ {settings_right['actual_fps']:.0f}fps ({settings_right['actual_fourcc']})")
+
+        print(f"  LEFT:  {s_left['width']}x{s_left['height']} "
+              f"@ {s_left['fps']:.0f}fps ({s_left['fourcc']})")
+        print(f"  RIGHT: {s_right['width']}x{s_right['height']} "
+              f"@ {s_right['fps']:.0f}fps ({s_right['fourcc']})")
     
     def run(self):
         """Main run loop."""

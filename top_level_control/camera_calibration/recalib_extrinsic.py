@@ -8,11 +8,16 @@ Use this when intrinsics are already calibrated but you need to redo extrinsics.
 
 import cv2 as cv
 import glob
-import numpy as np 
+import numpy as np
 import sys
 from scipy import linalg
 import yaml
 import os
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
+from config.camera_config import (
+    configure_camera, CAMERA_LEFT_ID, CAMERA_RIGHT_ID, FRAME_WIDTH, FRAME_HEIGHT
+)
 
 #This will contain the calibration settings from the calibration_settings.yaml file
 calibration_settings = {}
@@ -47,10 +52,11 @@ def parse_calibration_settings_file(filename):
     with open(filename) as f:
         calibration_settings = yaml.safe_load(f)
 
-    #rudimentray check to make sure correct file was loaded
-    if 'camera0' not in calibration_settings.keys():
-        print('camera0 key was not found in the settings file. Check if correct calibration_settings.yaml file was passed')
-        quit()
+    # Camera settings come from camera_config.py (single source of truth)
+    calibration_settings['camera0'] = CAMERA_LEFT_ID
+    calibration_settings['camera1'] = CAMERA_RIGHT_ID
+    calibration_settings['frame_width'] = FRAME_WIDTH
+    calibration_settings['frame_height'] = FRAME_HEIGHT
 
 
 #Load camera intrinsic parameters from saved .dat file
@@ -115,13 +121,11 @@ def save_frames_two_cams(camera0_name, camera1_name):
     cap0 = cv.VideoCapture(calibration_settings[camera0_name])
     cap1 = cv.VideoCapture(calibration_settings[camera1_name])
 
-    #set camera resolutions
+    #set camera resolutions (MJPG + 100fps via shared config)
     width = calibration_settings['frame_width']
     height = calibration_settings['frame_height']
-    cap0.set(3, width)
-    cap0.set(4, height)
-    cap1.set(3, width)
-    cap1.set(4, height)
+    configure_camera(cap0, width, height)
+    configure_camera(cap1, width, height)
 
     cooldown = cooldown_time
     start = False
@@ -315,13 +319,11 @@ def check_calibration(camera0_name, camera0_data, camera1_name, camera1_data, _z
     cap0 = cv.VideoCapture(calibration_settings[camera0_name])
     cap1 = cv.VideoCapture(calibration_settings[camera1_name])
 
-    #set camera resolutions
+    #set camera resolutions (MJPG + 100fps via shared config)
     width = calibration_settings['frame_width']
     height = calibration_settings['frame_height']
-    cap0.set(3, width)
-    cap0.set(4, height)
-    cap1.set(3, width)
-    cap1.set(4, height)
+    configure_camera(cap0, width, height)
+    configure_camera(cap1, width, height)
 
     while True:
 

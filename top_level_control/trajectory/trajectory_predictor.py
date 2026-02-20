@@ -43,29 +43,31 @@ class TrajectoryPredictor:
         3. When ready: call predict(target_z) to get interception point
     """
     
-    def __init__(self, 
+    def __init__(self,
                  buffer_size=10,
                  min_points=3,
                  velocity_method='regression',
                  gravity=981.0,
-                 y_down=True):
+                 y_down=True,
+                 enable_drag=True):
         """
         Initialize trajectory predictor.
-        
+
         Args:
             buffer_size: Max positions to store (default 10)
             min_points: Min points needed before prediction (default 3)
             velocity_method: 'simple' or 'regression' (default 'regression')
             gravity: Gravity in cm/s² (default 981)
             y_down: True if +Y is downward in camera coords (default True)
+            enable_drag: Include air resistance in physics model (default True)
         """
         self.buffer_size = buffer_size
         self.min_points = min_points
-        
+
         # Initialize components
         self.position_buffer = PositionBuffer(max_size=buffer_size)
         self.velocity_estimator = VelocityEstimator(method=velocity_method)
-        self.physics_model = PhysicsModel(gravity=gravity, y_down=y_down)
+        self.physics_model = PhysicsModel(gravity=gravity, y_down=y_down, enable_drag=enable_drag)
         
         # Cached velocity (updated on each add_position)
         self._current_velocity = None

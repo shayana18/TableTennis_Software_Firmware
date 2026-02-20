@@ -32,114 +32,54 @@ import cv2
 import sys
 import os
 import json
+import time
 import numpy as np
-import yaml
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from tracking.ball_tracker import EnhancedBallTracker
-
-
-def configure_camera_for_arducam(cap, width=1280, height=720):
-    """
-    Configure camera for Arducam OV9782 global shutter cameras.
-    Forces MJPG codec and specified resolution, then verifies actual settings.
-    
-    Args:
-        cap: cv2.VideoCapture object
-        width: Desired width (default 1280)
-        height: Desired height (default 800)
-    
-    Returns:
-        dict with actual accepted values
-    """
-    # Set FOURCC to MJPG first - critical for getting full framerate on Arducam
-    fourcc_mjpg = cv2.VideoWriter_fourcc(*'MJPG')
-    cap.set(cv2.CAP_PROP_FOURCC, fourcc_mjpg)
-    
-    # Set resolution
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-    
-    # Try to set higher framerate (Arducam OV9782 supports 100fps at 1280x800 MJPG)
-    cap.set(cv2.CAP_PROP_FPS, 120)
-    
-    # Disable auto-exposure for consistent detection
-    cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)
-    
-    # Read back actual values
-    actual_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    actual_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    actual_fps = cap.get(cv2.CAP_PROP_FPS)
-    actual_fourcc_int = int(cap.get(cv2.CAP_PROP_FOURCC))
-    
-    # Decode FOURCC integer to string
-    actual_fourcc_str = "".join([chr((actual_fourcc_int >> 8 * i) & 0xFF) for i in range(4)])
-    
-    settings = {
-        'requested_width': width,
-        'requested_height': height,
-        'requested_fourcc': 'MJPG',
-        'actual_width': actual_width,
-        'actual_height': actual_height,
-        'actual_fps': actual_fps,
-        'actual_fourcc': actual_fourcc_str,
-        'settings_match': (actual_width == width and actual_height == height)
-    }
-    
-    return settings
-
-
-def print_camera_settings(camera_name, settings):
-    """Pretty print camera settings for verification."""
-    print(f"\n  {camera_name}:")
-    print(f"    Resolution: {settings['actual_width']}x{settings['actual_height']} "
-          f"(requested {settings['requested_width']}x{settings['requested_height']})")
-    print(f"    FOURCC: {settings['actual_fourcc']} (requested {settings['requested_fourcc']})")
-    print(f"    FPS: {settings['actual_fps']}")
-    
-    if settings['settings_match']:
-        print(f"    Status: ✓ OK")
-        return True
-    else:
-        print(f"    Status: ⚠ WARNING - Settings mismatch!")
-        return False
+from config.camera_config import (
+    load_camera_settings, configure_camera,
+    CAMERA_LEFT_ID, CAMERA_RIGHT_ID, FRAME_WIDTH, FRAME_HEIGHT
+)
 
 
 class ArducamStereoCapture:
     """
     Stereo camera capture optimized for Arducam OV9782 cameras.
-    Uses MJPG codec for full framerate at 1280x800.
+    All defaults come from camera_config.py.
     """
-    
-    def __init__(self, cam_left_id=0, cam_right_id=1):
-        self.cam_left_id = cam_left_id
-        self.cam_right_id = cam_right_id
+
+    def __init__(self, cam_left_id=None, cam_right_id=None):
+        self.cam_left_id = cam_left_id if cam_left_id is not None else CAMERA_LEFT_ID
+        self.cam_right_id = cam_right_id if cam_right_id is not None else CAMERA_RIGHT_ID
         self.cap_left = None
         self.cap_right = None
-    
-    def start_cameras(self, width=1280, height=720):
-        """Open and configure cameras with MJPG codec."""
+
+    def start_cameras(self, width=None, height=None):
+        """Open and configure cameras. Defaults from camera_config.py."""
+        if width is None:
+            width = FRAME_WIDTH
+        if height is None:
+            height = FRAME_HEIGHT
         self.cap_left = cv2.VideoCapture(self.cam_left_id)
         self.cap_right = cv2.VideoCapture(self.cam_right_id)
-        
+
         if not self.cap_left.isOpened():
             raise RuntimeError(f"Failed to open left camera (ID: {self.cam_left_id})")
         if not self.cap_right.isOpened():
             raise RuntimeError(f"Failed to open right camera (ID: {self.cam_right_id})")
-        
-        # Configure both cameras for Arducam OV9782
+
         print("\nConfiguring cameras (Arducam OV9782 MJPG mode):")
-        settings_left = configure_camera_for_arducam(self.cap_left, width, height)
-        settings_right = configure_camera_for_arducam(self.cap_right, width, height)
-        
-        ok_left = print_camera_settings("LEFT Camera", settings_left)
-        ok_right = print_camera_settings("RIGHT Camera", settings_right)
-        
-        if not (ok_left and ok_right):
-            print("\n  ⚠ Some camera settings don't match requested values.")
-            print("    Detection may still work, but verify image quality.")
-        
+        s_left = configure_camera(self.cap_left, width, height)
+        s_right = configure_camera(self.cap_right, width, height)
+
+        print(f"  LEFT:  {s_left['width']}x{s_left['height']} @ {s_left['fps']:.0f}fps ({s_left['fourcc']})")
+        print(f"  RIGHT: {s_right['width']}x{s_right['height']} @ {s_right['fps']:.0f}fps ({s_right['fourcc']})")
+
+        if not s_left['settings_match'] or not s_right['settings_match']:
+            print("  WARNING: Some camera settings don't match requested values.")
+
         print(f"\nCameras started: Left=ID{self.cam_left_id}, Right=ID{self.cam_right_id}")
     
     def read(self):
@@ -494,34 +434,26 @@ def create_debug_view(frame_left, frame_right, tracker_left, tracker_right):
 
 def main():
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    config_path = os.path.join(script_dir, '..', 'config', 'stereo_config.yaml')
     thresholds_path = os.path.join(script_dir, '..', 'config', 'ball_thresholds_stereo.json')
     thresholds_single_path = os.path.join(script_dir, '..', 'config', 'ball_thresholds.json')
-    
-    # Default config for Arducam OV9782
+
+    cam_settings = load_camera_settings()
     config = {
-        'camera_left': {'id': 1},
-        'camera_right': {'id': 2},
-        'frame_width': 1280,
-        'frame_height': 720
+        'camera_left': {'id': cam_settings['camera0']},
+        'camera_right': {'id': cam_settings['camera1']},
+        'frame_width': cam_settings['frame_width'],
+        'frame_height': cam_settings['frame_height'],
     }
-    
-    # Load config from file if exists
-    if os.path.exists(config_path):
-        with open(config_path, 'r') as f:
-            loaded_config = yaml.safe_load(f)
-            if loaded_config:
-                config.update(loaded_config)
-    
-    FRAME_WIDTH = config.get('frame_width', 1280)
-    FRAME_HEIGHT = config.get('frame_height', 720)
+
+    FRAME_WIDTH = cam_settings['frame_width']
+    FRAME_HEIGHT = cam_settings['frame_height']
     
     print("\n" + "=" * 60)
     print("STEREO DETECTION TEST (Arducam OV9782)")
     print("=" * 60)
     print(f"\nCamera: Arducam OV9782 Global Shutter")
-    print(f"  Left ID:  {config.get('camera_left', {}).get('id', 1)}")
-    print(f"  Right ID: {config.get('camera_right', {}).get('id', 2)}")
+    print(f"  Left ID:  {cam_settings['camera0']}")
+    print(f"  Right ID: {cam_settings['camera1']}")
     print(f"\nResolution: {FRAME_WIDTH}x{FRAME_HEIGHT} (MJPG)")
     
     print("\nCONTROLS:")
@@ -557,9 +489,23 @@ def main():
         return
     
     show_debug = False
-    
+
+    # FPS tracking (rolling window of timestamps)
+    fps_timestamps = []
+    fps_display = 0.0
+
     try:
         while True:
+            t_now = time.perf_counter()
+            fps_timestamps.append(t_now)
+            # Keep last 30 timestamps for rolling average
+            if len(fps_timestamps) > 30:
+                fps_timestamps.pop(0)
+            if len(fps_timestamps) >= 2:
+                elapsed = fps_timestamps[-1] - fps_timestamps[0]
+                if elapsed > 0:
+                    fps_display = (len(fps_timestamps) - 1) / elapsed
+
             # Capture frames
             ret_left, frame_left_raw, ret_right, frame_right_raw = detector.read_frames()
             
@@ -632,6 +578,14 @@ def main():
             display_height = int(display_width * FRAME_HEIGHT / FRAME_WIDTH)
             left_small = cv2.resize(left_vis, (display_width, display_height))
             right_small = cv2.resize(right_vis, (display_width, display_height))
+
+            # FPS overlay (small text, no box)
+            fps_text = f"{fps_display:.1f} fps"
+            cv2.putText(left_small, fps_text, (10, 20),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+            cv2.putText(right_small, fps_text, (10, 20),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+
             combined = cv2.hconcat([left_small, right_small])
             cv2.imshow('Stereo Detection', combined)
             
