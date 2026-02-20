@@ -51,9 +51,9 @@ void robot_runtime_set_joint_speed(long cmd1, long cmd2, long cmd3)
     return;
   }
 
-  const long motor_cmd1 = (long)lroundf((float)cmd1 * ROBOT_JOINT_SIGN_1);
-  const long motor_cmd2 = (long)lroundf((float)cmd2 * ROBOT_JOINT_SIGN_2);
-  const long motor_cmd3 = (long)lroundf((float)cmd3 * ROBOT_JOINT_SIGN_3);
+  const long motor_cmd1 = (long)lroundf((float)cmd1 * ROBOT_JOINT_SIGN);
+  const long motor_cmd2 = (long)lroundf((float)cmd2 * ROBOT_JOINT_SIGN);
+  const long motor_cmd3 = (long)lroundf((float)cmd3 * ROBOT_JOINT_SIGN);
 
   if (!s_speed_cmd_valid || motor_cmd1 != s_speed_cmd_last_1) {
     Turn_const_speed(s_motor_com, ROBOT_MOTOR_1_ID, motor_cmd1);
@@ -76,41 +76,37 @@ void robot_runtime_stop_joint_speed(void)
   robot_runtime_set_joint_speed(0, 0, 0);
 }
 
-bool robot_runtime_get_joint_angles(float *q1_deg, float *q2_deg, float *q3_deg)
+
+
+bool robot_runtime_get_joint_ticks(long *q1_tick, long *q2_tick, long *q3_tick)
 {
-  if (s_motor_com == NULL || q1_deg == NULL || q2_deg == NULL || q3_deg == NULL) {
+  if (s_motor_com == NULL || q1_tick == NULL || q2_tick == NULL || q3_tick == NULL) {
     return false;
   }
+
 
   // Request and read encoder positions from each motor driver
   if (!ReadMotorPosition32(s_motor_com, ROBOT_MOTOR_1_ID)) {
     robot_runtime_send_status("ERR: m1 pos timeout\r\n");
     return false;
   }
-  long p1 = io_motor_com_get_motor_pos(s_motor_com) - (long)HOME_PULSE_OFFSET_M1;
+  long p1 = io_motor_com_get_motor_pos(s_motor_com);
 
   if (!ReadMotorPosition32(s_motor_com, ROBOT_MOTOR_2_ID)) {
     robot_runtime_send_status("ERR: m2 pos timeout\r\n");
     return false;
   }
-  long p2 = io_motor_com_get_motor_pos(s_motor_com) - (long)HOME_PULSE_OFFSET_M2;
+  long p2 = io_motor_com_get_motor_pos(s_motor_com);
 
   if (!ReadMotorPosition32(s_motor_com, ROBOT_MOTOR_3_ID)) {
     robot_runtime_send_status("ERR: m3 pos timeout\r\n");
     return false;
   }
-  long p3 = io_motor_com_get_motor_pos(s_motor_com) - (long)HOME_PULSE_OFFSET_M3;
+  long p3 = io_motor_com_get_motor_pos(s_motor_com);
 
-  float deg1 = (((float)p1 / PULSES_PER_REV) * 360.0f / JOINT_GEAR_RATIO) * ROBOT_JOINT_SIGN_1;
-  float deg2 = (((float)p2 / PULSES_PER_REV) * 360.0f / JOINT_GEAR_RATIO) * ROBOT_JOINT_SIGN_2;
-  float deg3 = (((float)p3 / PULSES_PER_REV) * 360.0f / JOINT_GEAR_RATIO) * ROBOT_JOINT_SIGN_3;
-
-  // Keep absolute/continuous joint angle from encoder pulses.
-  // Wrapping to [-180,180) can introduce artificial jumps near +/-180.
-
-  *q1_deg = deg1;
-  *q2_deg = deg2;
-  *q3_deg = deg3;
+  *q1_tick = p1;
+  *q2_tick = p2;
+  *q3_tick = p3;
 
   return true;
 }

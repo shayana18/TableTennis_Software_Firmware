@@ -14,70 +14,18 @@
 
 const vec3 home = {HOME_X, HOME_Y, HOME_Z};
 
-static bool robot_get_home_ik_reference(float *q1_home_deg, float *q2_home_deg, float *q3_home_deg)
+bool robot_get_joint_angles(float *q1_deg, float *q2_deg, float *q3_deg)
 {
-  static bool initialized = false;
-  static bool valid = false;
-  static float q_home[3] = {0.0f, 0.0f, 0.0f};
 
-  if (!initialized) {
-    initialized = true;
-    valid = (IK(HOME_X, HOME_Y, HOME_Z, &q_home[0], &q_home[1], &q_home[2]) == 0);
-  }
+  long t1, t2, t3;
+  if (!q1_deg || !q2_deg || !q3_deg) return false;
+  if (!robot_runtime_get_joint_ticks(&t1, &t2, &t3)) return false;
 
-  if (!valid) {
-    return false;
-  }
+  // Convert encoder pulses to joint angles in degrees, and converted to correct reference frame for kinematics.
+  *q1_deg = ((float)t1 * 360.0f / ((float)PULSES_PER_REV * JOINT_GEAR_RATIO) * ROBOT_JOINT_SIGN) + ENCODER_ZERO_TO_IK_OFFSET;
+  *q2_deg = ((float)t2 * 360.0f / ((float)PULSES_PER_REV * JOINT_GEAR_RATIO) * ROBOT_JOINT_SIGN) + ENCODER_ZERO_TO_IK_OFFSET;
+  *q3_deg = ((float)t3 * 360.0f / ((float)PULSES_PER_REV * JOINT_GEAR_RATIO) * ROBOT_JOINT_SIGN) + ENCODER_ZERO_TO_IK_OFFSET;
 
-  if (q1_home_deg != NULL) {
-    *q1_home_deg = q_home[0];
-  }
-  if (q2_home_deg != NULL) {
-    *q2_home_deg = q_home[1];
-  }
-  if (q3_home_deg != NULL) {
-    *q3_home_deg = q_home[2];
-  }
-  return true;
-}
-
-bool robot_joint_angles_ik_to_encoder(float q1_ik_deg, float q2_ik_deg, float q3_ik_deg,
-                                      float *q1_enc_deg, float *q2_enc_deg, float *q3_enc_deg)
-{
-  float q1_home, q2_home, q3_home;
-  if (!robot_get_home_ik_reference(&q1_home, &q2_home, &q3_home)) {
-    return false;
-  }
-
-  if (q1_enc_deg != NULL) {
-    *q1_enc_deg = q1_ik_deg - q1_home;
-  }
-  if (q2_enc_deg != NULL) {
-    *q2_enc_deg = q2_ik_deg - q2_home;
-  }
-  if (q3_enc_deg != NULL) {
-    *q3_enc_deg = q3_ik_deg - q3_home;
-  }
-  return true;
-}
-
-bool robot_joint_angles_encoder_to_ik(float q1_enc_deg, float q2_enc_deg, float q3_enc_deg,
-                                      float *q1_ik_deg, float *q2_ik_deg, float *q3_ik_deg)
-{
-  float q1_home, q2_home, q3_home;
-  if (!robot_get_home_ik_reference(&q1_home, &q2_home, &q3_home)) {
-    return false;
-  }
-
-  if (q1_ik_deg != NULL) {
-    *q1_ik_deg = q1_enc_deg + q1_home;
-  }
-  if (q2_ik_deg != NULL) {
-    *q2_ik_deg = q2_enc_deg + q2_home;
-  }
-  if (q3_ik_deg != NULL) {
-    *q3_ik_deg = q3_enc_deg + q3_home;
-  }
   return true;
 }
 
@@ -85,11 +33,10 @@ vec3 robot_get_current_pos(void)
 {
   static vec3 last_known_pos = {HOME_X, HOME_Y, HOME_Z};
   float q1_enc, q2_enc, q3_enc;
-  if (robot_runtime_get_joint_angles(&q1_enc, &q2_enc, &q3_enc)) {
-    float q1_ik, q2_ik, q3_ik;
-    if (robot_joint_angles_encoder_to_ik(q1_enc, q2_enc, q3_enc, &q1_ik, &q2_ik, &q3_ik)) {
-      last_known_pos = FK(q1_ik, q2_ik, q3_ik);
-    }
+  if (robot_get_joint_angles(&q1_enc, &q2_enc, &q3_enc)) {
+    // float q1_ik, q2_ik, q3_ik;
+    // robot_joint_angles_encoder_to_ik(q1_enc, q2_enc, q3_enc, &q1_ik, &q2_ik, &q3_ik);
+    last_known_pos = FK(q1_enc, q2_enc, q3_enc);
     return last_known_pos;
   }
   // Keep the last valid estimate instead of snapping to HOME; this avoids
@@ -259,7 +206,9 @@ vec3 FK(float theta1_deg, float theta2_deg, float theta3_deg)
   float x0 = x0_0 + x0_1 * z0;
   float y0 = y0_0 + y0_1 * z0;
 
-  return (vec3){x0, y0, z0};
+  // Align FK output with IK/world frame convention used by IK(target) in this
+  // codebase (without this, FK(IK(p)) mirrors X).
+  return (vec3){-x0, y0, z0};
 }
 
 // Helper function for IK: solves one arm in YZ plane.
@@ -337,3 +286,4 @@ void safety_enter_fault_mode(void)
 {
   // TODO: add platform specific fault outputs and motor disable handling.
 }
+

@@ -6,7 +6,7 @@
 #include "shared_types.h"
 
 // Robot motion limits
-#define MAX_JOINT_ANGLE_LIMIT HOME_ANGLE_ABOVE_HOR + 5.0f // Temporary to accound for encoder inaccuracy.
+#define MAX_JOINT_ANGLE_LIMIT ENCODER_ZERO_TO_IK_OFFSET + 1.0f // Temporary to accound for encoder inaccuracy.
 #define MIN_JOINT_ANGLE_LIMIT 70.0f
 #define MAX_JOINT_VEL 3000.0L      // RPM, Conservative values
 #define MAX_JOINT_ACC 1000.0L     // RPM/s, Conservative Values
@@ -17,7 +17,8 @@
 // Home position (mm)
 #define HOME_X 0.0f
 #define HOME_Y 0.0f
-#define HOME_Z -1000.0f
+#define HOME_Z -900.0f
+#define HOME_TIME 5.0f
 
 // Delta geometry (mm)
 #define BASE_RADIUS 165.0f
@@ -39,8 +40,8 @@
 #define JOINT_GEAR_RATIO 10.0f        // 10:1 gear box
 #define PULSES_PER_REV 65536.0f
 #define MAX_MOTOR_SPEED_CMD MAX_JOINT_VEL
-#define HOME_ANGLE_ABOVE_HOR 57.2242812f
-#define HOME_PULSE_OFFSET_DEFAULT (HOME_ANGLE_ABOVE_HOR * (PULSES_PER_REV / 360.0f) * JOINT_GEAR_RATIO)
+#define ENCODER_ZERO_TO_IK_OFFSET 57.2242812f  // deg
+#define HOME_PULSE_OFFSET_DEFAULT (ENCODER_ZERO_TO_IK_OFFSET * (PULSES_PER_REV / 360.0f) * JOINT_GEAR_RATIO)
 // Calibrated offsets from end-stop encoder zero to true kinematic HOME (z = HOME_Z).
 // Tune per motor from measured pulses after homing procedure.
 #define HOME_PULSE_OFFSET_M1 HOME_PULSE_OFFSET_DEFAULT
@@ -48,9 +49,7 @@
 #define HOME_PULSE_OFFSET_M3 HOME_PULSE_OFFSET_DEFAULT
 // Joint sign calibration between motor raw direction and model direction.
 // Set to -1.0f for a motor if commanded Z motion is inverted.
-#define ROBOT_JOINT_SIGN_1 1.0f
-#define ROBOT_JOINT_SIGN_2 1.0f
-#define ROBOT_JOINT_SIGN_3 1.0f
+#define ROBOT_JOINT_SIGN -1.0f
 
 // Motor IDs on the daisy-chain
 #define ROBOT_MOTOR_1_ID 2
@@ -121,11 +120,8 @@ void robot_set_target_from_mail(robot_target_t *dst, const target_t *src);
 // Calculate distance and output component differences. Returns euclidean distance.
 float robot_calc_dist(vec3 current, vec3 target, float *out_dx, float *out_dy, float *out_dz);
 bool robot_target_in_workspace(vec3 pos);
-// Convert between IK angle frame and encoder angle frame (HOME == 0 deg).
-bool robot_joint_angles_ik_to_encoder(float q1_ik_deg, float q2_ik_deg, float q3_ik_deg,
-                                      float *q1_enc_deg, float *q2_enc_deg, float *q3_enc_deg);
-bool robot_joint_angles_encoder_to_ik(float q1_enc_deg, float q2_enc_deg, float q3_enc_deg,
-                                      float *q1_ik_deg, float *q2_ik_deg, float *q3_ik_deg);
+
+bool robot_get_joint_angles(float *q1_deg, float *q2_deg, float *q3_deg);
 
 // Safety/state helpers
 void set_idle(robot_t *robot);
