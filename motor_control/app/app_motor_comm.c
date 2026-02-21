@@ -8,8 +8,8 @@
 #include "io_motor_com.h"
 #include "main.h"
 
-#define MOTOR_POS_READ_TIMEOUT_MS 300U
-#define MOTOR_POS_READ_RETRIES 3U
+#define MOTOR_POS_READ_TIMEOUT_MS 10U
+#define MOTOR_POS_READ_RETRIES 2U
 #define MOTOR_POS_RETRY_GAP_MS 2U
 
 static void motor_uart_recover_and_drain(void)

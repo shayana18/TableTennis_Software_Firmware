@@ -11,7 +11,7 @@ import serial
 
 
 TARGET_MSG_FLOAT_COUNT = 7
-DEFAULT_HOME = (0.0, 0.0, -1000.0)
+DEFAULT_HOME = (0.0, 0.0, -900.0)
 
 ser: Optional[serial.Serial] = None
 _stop_reader = threading.Event()
@@ -59,7 +59,7 @@ def send_message(msg_type: float, x: float, y: float, z: float, arrival_time: fl
 
 
 def send_home(home_xyz: tuple[float, float, float]) -> None:
-    send_message(3.0, home_xyz[0], home_xyz[1], home_xyz[2], 1.0)
+    send_message(3.0, home_xyz[0], home_xyz[1], home_xyz[2], 5.0)
 
 
 def send_intercept(x: float, y: float, z: float, t_s: float) -> None:

@@ -6,13 +6,13 @@
 #include "shared_types.h"
 
 // Robot motion limits
-#define MAX_JOINT_ANGLE_LIMIT ENCODER_ZERO_TO_IK_OFFSET + 1.0f // Temporary to accound for encoder inaccuracy.
-#define MIN_JOINT_ANGLE_LIMIT 70.0f
+#define MAX_JOINT_ANGLE_LIMIT ENCODER_ZERO_TO_IK_OFFSET - 5.0f // degrees
+#define MIN_JOINT_ANGLE_LIMIT -70.0f
 #define MAX_JOINT_VEL 3000.0L      // RPM, Conservative values
 #define MAX_JOINT_ACC 1000.0L     // RPM/s, Conservative Values
 
-#define MAX_CART_VEL 4000.0f     // mm/s
-#define MAX_CART_ACC 20000.0f    // mm/s^2
+#define MAX_CART_VEL 4000.0f     // mm/s Default: 4000
+#define MAX_CART_ACC 20000.0f    // mm/s^2  default: 20000
 
 // Home position (mm)
 #define HOME_X 0.0f
@@ -35,8 +35,7 @@
 #define LIMIT_NEG_Z -1000.0f
 
 // Motion execution configuration
-#define MOTION_EXECUTE_PERIOD_MS 20U
-#define JOINT_SPEED_CMD_SCALE 1.0f
+#define MOTION_EXECUTE_PERIOD_MS 10U
 #define JOINT_GEAR_RATIO 10.0f        // 10:1 gear box
 #define PULSES_PER_REV 65536.0f
 #define MAX_MOTOR_SPEED_CMD MAX_JOINT_VEL
@@ -50,6 +49,8 @@
 // Joint sign calibration between motor raw direction and model direction.
 // Set to -1.0f for a motor if commanded Z motion is inverted.
 #define ROBOT_JOINT_SIGN -1.0f
+#define Q_TOLERANCE 0.5 // degrees
+
 
 // Motor IDs on the daisy-chain
 #define ROBOT_MOTOR_1_ID 2
@@ -92,6 +93,9 @@ typedef struct {
   uint32_t prev_tick_ms;
   float prev_joint_deg[3];
   bool prev_joint_valid;
+  float last_feedback_deg[3];
+  bool feedback_valid;
+  uint8_t feedback_miss_ticks;
   bool active;
 } move_plan;
 
@@ -114,6 +118,7 @@ typedef struct {
 vec3 robot_get_current_pos(void);
 vec3 FK(float motor_q1, float motor_q2, float motor_q3);
 int IK(float x0, float y0, float z0, float *t1, float *t2, float *t3);
+int robot_delta_inv_jacobian(const float theta_deg[3], vec3 C, float Jinv[3][3]);
 
 // Robot helpers
 void robot_set_target_from_mail(robot_target_t *dst, const target_t *src);

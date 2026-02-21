@@ -96,6 +96,66 @@ static void unit_xy_2d(float vx, float vy, float *out_ux, float *out_uy)
   }
 }
 
+int robot_delta_inv_jacobian(const float theta_deg[3], vec3 C, float Jinv[3][3])
+{
+  if (theta_deg == NULL || Jinv == NULL) {
+    return -1;
+  }
+
+  const float Rb = BASE_RADIUS;
+  const float Re = EE_RADIUS;
+  const float rf = UPPER_ARM_LENGTH;
+
+  const float Bx[3] = {0.0f, Rb * SQRT3 / 2.0f, -Rb * SQRT3 / 2.0f};
+  const float By[3] = {-Rb, Rb / 2.0f, Rb / 2.0f};
+  const float Vx[3] = {0.0f, Re * SQRT3 / 2.0f, -Re * SQRT3 / 2.0f};
+  const float Vy[3] = {-Re, Re / 2.0f, Re / 2.0f};
+
+  float ux[3];
+  float uy[3];
+  for (int i = 0; i < 3; i++) {
+    unit_xy_2d(Bx[i], By[i], &ux[i], &uy[i]);
+  }
+
+  // Convert IK/world frame setpoint to internal geometry frame.
+  const float Cx = -C.x;
+  const float Cy = C.y;
+  const float Cz = C.z;
+
+  // Direct inverse Jacobian from A*Cdot = B*thetadot:
+  // thetadot = B^{-1} * A * Cdot.
+  // We keep units in deg/s by including DTR in dE/d(theta_deg).
+  for (int i = 0; i < 3; i++) {
+    const float th = theta_deg[i] * DTR;
+
+    const float Eix = Bx[i] + rf * cosf(th) * ux[i];
+    const float Eiy = By[i] + rf * cosf(th) * uy[i];
+    const float Eiz = rf * sinf(th);
+
+    const float six = Cx + Vx[i] - Eix;
+    const float siy = Cy + Vy[i] - Eiy;
+    const float siz = Cz - Eiz;
+
+    const float dEix = rf * (-sinf(th) * ux[i]) * DTR;
+    const float dEiy = rf * (-sinf(th) * uy[i]) * DTR;
+    const float dEiz = rf * cosf(th) * DTR;
+
+    const float gi = six * dEix + siy * dEiy + siz * dEiz;
+    if (fabsf(gi) < 1e-9f) {
+      return -1;
+    }
+
+    const float inv_g = 1.0f / gi;
+
+    // x column is negated to map IK/world Cdot to internal model Cdot.
+    Jinv[i][0] = -(six * inv_g);
+    Jinv[i][1] = siy * inv_g;
+    Jinv[i][2] = siz * inv_g;
+  }
+
+  return 0;
+}
+
 // DELTA ROBOT FORWARD KINEMATICS (analytical, matches IK geometry)
 vec3 FK(float theta1_deg, float theta2_deg, float theta3_deg)
 {
