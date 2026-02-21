@@ -330,19 +330,19 @@ class StereoTriangulator:
         self.tracker_left.set_lab_thresholds(lower, upper)
         self.tracker_right.set_lab_thresholds(lower, upper)
 
-    def get_hsv_thresholds(self):
-        """Get current HSV thresholds."""
-        return (
-            self.tracker_left.hsv_lower.tolist(),
-            self.tracker_left.hsv_upper.tolist()
-        )
+    def reset_background(self):
+        """Reset MOG2 background model on both trackers."""
+        self.tracker_left.reset_background()
+        self.tracker_right.reset_background()
 
-    def get_lab_thresholds(self):
-        """Get current LAB thresholds."""
-        return (
-            self.tracker_left.lab_lower.tolist(),
-            self.tracker_left.lab_upper.tolist()
-        )
+    def warmup_status(self):
+        """Return warmup progress for both trackers."""
+        return {
+            'left_ready': self.tracker_left.is_ready(),
+            'right_ready': self.tracker_right.is_ready(),
+            'left_progress': self.tracker_left.get_warmup_progress(),
+            'right_progress': self.tracker_right.get_warmup_progress()
+        }
 
     def get_baseline(self):
         """Get stereo baseline (same units as calibration)."""

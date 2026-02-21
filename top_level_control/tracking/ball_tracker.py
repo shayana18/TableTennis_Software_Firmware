@@ -1,10 +1,11 @@
 """
 Enhanced Ball Tracker for Table Tennis
 
-Robust ball detection using HSV + LAB color space fusion.
-- HSV: Good for consistent lighting
-- LAB: Lighting-independent color detection
-- Fusion: 55% HSV + 45% LAB (configurable)
+Motion-based ball detection using MOG2 background subtraction.
+Ported from detection_experiments/step3_contour_filtering.py.
+- MOG2 foreground mask isolates moving objects
+- Contour filtering by area + circularity
+- Scoring: circularity + proximity + orange color boost
 """
 
 import cv2
@@ -13,144 +14,141 @@ import numpy as np
 
 class EnhancedBallTracker:
     """
-    Ball detector using HSV + LAB fusion.
-    
-    Fusion weights: 55% HSV, 45% LAB (adjustable via hsv_weight)
+    Ball detector using MOG2 background subtraction + contour scoring.
+
+    Replaces HSV+LAB fusion with a motion-based approach that is
+    lighting-invariant and requires no manual threshold tuning.
     """
 
     def __init__(self):
-        # HSV thresholds for orange ball
-        self.hsv_lower = np.array([0, 78, 69], dtype=np.uint8)
-        self.hsv_upper = np.array([50, 255, 255], dtype=np.uint8)
-        
-        # LAB thresholds for orange ball
-        self.lab_lower = np.array([16, 125, 160], dtype=np.uint8)
-        self.lab_upper = np.array([255, 248, 255], dtype=np.uint8)
-        
-        # CLAHE for lighting normalization
-        self.clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-        
-        # Detection parameters
-        self.min_area = 100
-        self.min_circularity = 0.6
-        self.min_solidity = 0.7
-        self.max_aspect_ratio = 1.6
-        
+        # MOG2 background subtractor
+        self.bg_sub = cv2.createBackgroundSubtractorMOG2(
+            history=300, varThreshold=40, detectShadows=False)
+
         # Morphological kernels
-        self.kernel_small = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-        self.kernel_medium = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-        
-        # Fusion weight: 0.55 = 55% HSV, 45% LAB
-        self.hsv_weight = 0.55
+        self.kernel_open = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        self.kernel_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
 
-    def preprocess(self, frame):
-        """Apply CLAHE to normalize lighting."""
-        lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
-        l, a, b = cv2.split(lab)
-        l_clahe = self.clahe.apply(l)
-        lab_clahe = cv2.merge([l_clahe, a, b])
-        return cv2.cvtColor(lab_clahe, cv2.COLOR_LAB2BGR)
+        # Detection parameters (from step3)
+        self.min_area = 150
+        self.max_area = 1100
+        self.min_circularity = 0.45
 
-    def detect_hsv(self, frame):
-        """Detect orange using HSV color space."""
-        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-        mask = cv2.inRange(hsv, self.hsv_lower, self.hsv_upper)
-        return mask
+        # Proximity tracking
+        self.last_pos = None
+        self.search_radius = 150
 
-    def detect_lab(self, frame):
-        """Detect orange using LAB color space (lighting-independent)."""
-        lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
-        mask = cv2.inRange(lab, self.lab_lower, self.lab_upper)
-        return mask
+        # Scoring weights (sum ~1.0 at max)
+        self.w_circularity = 0.4
+        self.w_proximity = 0.3
+        self.w_color = 0.3
+        self.w_no_history = 0.15
 
-    def fuse_masks(self, mask_hsv, mask_lab):
+        # Warmup: MOG2 needs frames to build a background model
+        self._frame_count = 0
+        self._warmup_frames = 300
+        self._is_warmed_up = False
+
+    def _get_fg_mask(self, frame):
+        """Apply MOG2 and morphological cleanup, return binary fg mask."""
+        self._frame_count += 1
+
+        if not self._is_warmed_up:
+            if self._frame_count >= self._warmup_frames:
+                self._is_warmed_up = True
+            learning_rate = 0.05
+        else:
+            learning_rate = 0.002
+
+        fg_mask = self.bg_sub.apply(frame, learningRate=learning_rate)
+        fg_mask = cv2.morphologyEx(fg_mask, cv2.MORPH_OPEN, self.kernel_open)
+        fg_mask = cv2.morphologyEx(fg_mask, cv2.MORPH_CLOSE, self.kernel_close)
+        return fg_mask
+
+    def find_best_ball(self, mask, frame):
         """
-        Combine HSV and LAB masks.
-        
-        Default: 55% HSV + 45% LAB
+        Find the best ball candidate using contour scoring.
+
+        Ported directly from step3_contour_filtering.py:
+        1. findContours on fg_mask
+        2. Filter: area 150-1100, circularity > 0.45
+        3. Score = circularity*0.4 + proximity(up to 0.3) + orange boost(0.3)
+        4. minEnclosingCircle for radius
         """
-        m_hsv = mask_hsv.astype(np.float32) / 255.0
-        m_lab = mask_lab.astype(np.float32) / 255.0
-        
-        # Weighted fusion
-        fused = m_hsv * self.hsv_weight + m_lab * (1 - self.hsv_weight)
-        
-        # Threshold: if >= 40% confidence, consider detected
-        mask_fused = (fused > 0.4).astype(np.uint8) * 255
-        
-        return mask_fused
-
-    def clean_mask(self, mask):
-        """Apply morphological operations to clean up mask."""
-        mask = cv2.erode(mask, self.kernel_small, iterations=2)
-        mask = cv2.dilate(mask, self.kernel_medium, iterations=2)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, self.kernel_medium)
-        mask = cv2.GaussianBlur(mask, (5, 5), 0)
-        _, mask = cv2.threshold(mask, 127, 255, cv2.THRESH_BINARY)
-        return mask
-
-    def find_best_ball(self, mask):
-        """Find the best circular contour in the mask."""
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
+
         if not contours:
             return None
-        
+
         best_candidate = None
-        best_score = 0
-        
-        for contour in contours:
-            area = cv2.contourArea(contour)
-            
-            if area < self.min_area:
+        best_score = -1
+
+        for cnt in contours:
+            area = cv2.contourArea(cnt)
+            if area < self.min_area or area > self.max_area:
                 continue
-            
-            (x, y), radius = cv2.minEnclosingCircle(contour)
-            
-            # Circularity check
-            circle_area = np.pi * radius * radius
-            circularity = area / circle_area if circle_area > 0 else 0
+
+            perimeter = cv2.arcLength(cnt, True)
+            if perimeter == 0:
+                continue
+            circularity = 4 * np.pi * area / (perimeter * perimeter)
             if circularity < self.min_circularity:
                 continue
-            
-            # Solidity check
-            hull = cv2.convexHull(contour)
-            hull_area = cv2.contourArea(hull)
-            solidity = area / hull_area if hull_area > 0 else 0
-            if solidity < self.min_solidity:
+
+            # Centroid
+            M = cv2.moments(cnt)
+            if M["m00"] == 0:
                 continue
-            
-            # Aspect ratio check
-            x_rect, y_rect, w, h = cv2.boundingRect(contour)
-            aspect_ratio = max(w, h) / min(w, h) if min(w, h) > 0 else float('inf')
-            if aspect_ratio > self.max_aspect_ratio:
-                continue
-            
-            # Score: prefer larger, more circular contours
-            score = area * circularity * solidity
-            
+            cx = M["m10"] / M["m00"]
+            cy = M["m01"] / M["m00"]
+
+            # --- Scoring ---
+            score = circularity * self.w_circularity
+
+            # Proximity to last known position
+            if self.last_pos is not None:
+                dist = np.hypot(cx - self.last_pos[0], cy - self.last_pos[1])
+                if dist < self.search_radius:
+                    score += (1.0 - dist / self.search_radius) * self.w_proximity
+            else:
+                score += self.w_no_history
+
+            # Orange ball color boost
+            mask_temp = np.zeros(frame.shape[:2], dtype=np.uint8)
+            cv2.drawContours(mask_temp, [cnt], -1, 255, -1)
+            mean_bgr = cv2.mean(frame, mask=mask_temp)[:3]
+            pixel = np.uint8([[list(mean_bgr)]])
+            hsv_val = cv2.cvtColor(pixel, cv2.COLOR_BGR2HSV)[0][0]
+            hue, sat, val = int(hsv_val[0]), int(hsv_val[1]), int(hsv_val[2])
+
+            if 5 <= hue <= 25 and sat > 80 and val > 80:
+                score += self.w_color
+
+            # Enclosing circle for radius
+            (ex, ey), radius = cv2.minEnclosingCircle(cnt)
+
             if score > best_score:
                 best_score = score
                 best_candidate = {
-                    'center': (int(x), int(y)),
+                    'center': (int(cx), int(cy)),
                     'radius': radius,
-                    'contour': contour,
+                    'contour': cnt,
                     'circularity': circularity,
-                    'solidity': solidity
+                    'score': score
                 }
-        
+
         return best_candidate
 
     def detect(self, frame, return_debug=False):
         """
         Detect the ball in a frame.
-        
+
         Args:
             frame: BGR image
-            return_debug: If True, return intermediate masks
-        
+            return_debug: If True, return fg_mask in debug dict
+
         Returns:
-            dict with 'found', 'center', 'radius', 'mask', 'confidence', 'debug'
+            dict with 'found', 'center', 'radius', 'contour', 'confidence', 'mask'
         """
         result = {
             'found': False,
@@ -160,59 +158,63 @@ class EnhancedBallTracker:
             'confidence': 0.0,
             'mask': None
         }
-        
-        # Preprocess
-        frame_normalized = self.preprocess(frame)
-        
-        # Detect in both color spaces
-        mask_hsv = self.detect_hsv(frame_normalized)
-        mask_lab = self.detect_lab(frame_normalized)
-        
-        # Fuse masks
-        mask_fused = self.fuse_masks(mask_hsv, mask_lab)
-        
-        # Clean up
-        mask_clean = self.clean_mask(mask_fused)
-        result['mask'] = mask_clean
-        
-        # Find ball
-        candidate = self.find_best_ball(mask_clean)
-        
+
+        fg_mask = self._get_fg_mask(frame)
+        result['mask'] = fg_mask
+
+        if not self._is_warmed_up:
+            if return_debug:
+                result['debug'] = {'fg_mask': fg_mask}
+            return result
+
+        candidate = self.find_best_ball(fg_mask, frame)
+
         if candidate:
             result['found'] = True
             result['center'] = candidate['center']
             result['radius'] = candidate['radius']
             result['contour'] = candidate['contour']
-            result['confidence'] = candidate['circularity'] * candidate['solidity']
-        
+            result['confidence'] = min(1.0, candidate['score'])
+            self.last_pos = candidate['center']
+
         if return_debug:
-            result['debug'] = {
-                'frame_normalized': frame_normalized,
-                'mask_hsv': mask_hsv,
-                'mask_lab': mask_lab,
-                'mask_fused': mask_fused
-            }
-        
+            result['debug'] = {'fg_mask': fg_mask}
+
         return result
 
+    # --- Legacy no-op setters (prevent crashes in consumers) ---
+
     def set_hsv_thresholds(self, lower, upper):
-        """Update HSV thresholds."""
-        self.hsv_lower = np.array(lower, dtype=np.uint8)
-        self.hsv_upper = np.array(upper, dtype=np.uint8)
+        """No-op. HSV thresholds not used with MOG2 detection."""
+        pass
 
     def set_lab_thresholds(self, lower, upper):
-        """Update LAB thresholds."""
-        self.lab_lower = np.array(lower, dtype=np.uint8)
-        self.lab_upper = np.array(upper, dtype=np.uint8)
+        """No-op. LAB thresholds not used with MOG2 detection."""
+        pass
 
     def set_fusion_weight(self, hsv_weight):
-        """
-        Set fusion weight.
-        
-        Args:
-            hsv_weight: 0.0 to 1.0 (0.55 = 55% HSV, 45% LAB)
-        """
-        self.hsv_weight = max(0.0, min(1.0, hsv_weight))
+        """No-op. Fusion weight not used with MOG2 detection."""
+        pass
+
+    # --- New MOG2-specific methods ---
+
+    def reset_background(self):
+        """Recreate MOG2 subtractor and reset tracking state."""
+        self.bg_sub = cv2.createBackgroundSubtractorMOG2(
+            history=300, varThreshold=40, detectShadows=False)
+        self._frame_count = 0
+        self._is_warmed_up = False
+        self.last_pos = None
+
+    def is_ready(self):
+        """Return True once the background model warmup is complete."""
+        return self._is_warmed_up
+
+    def get_warmup_progress(self):
+        """Return warmup progress as 0.0 to 1.0."""
+        if self._is_warmed_up:
+            return 1.0
+        return min(1.0, self._frame_count / self._warmup_frames)
 
 
 # Backwards compatibility

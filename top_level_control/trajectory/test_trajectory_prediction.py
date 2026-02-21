@@ -84,15 +84,8 @@ class TrajectoryTester:
         print(f"[Config] Left={self.cam_left_id}, Right={self.cam_right_id}, {self.frame_width}x{self.frame_height}")
     
     def load_thresholds(self):
-        """Load ball detection thresholds (stereo or single)."""
-        if os.path.exists(self.thresholds_stereo):
-            self.triangulator.load_thresholds(self.thresholds_stereo)
-            print(f"[Thresholds] Loaded stereo thresholds")
-        elif os.path.exists(self.thresholds_single):
-            self.triangulator.load_thresholds(self.thresholds_single)
-            print(f"[Thresholds] Loaded single thresholds")
-        else:
-            print("[Thresholds] No threshold file found, using defaults")
+        """Legacy threshold loading — no-op with MOG2 detection."""
+        print("[Detection] Using MOG2 background subtraction (no thresholds needed)")
     
     def start_cameras(self):
         """Start cameras with DirectShow backend."""
@@ -168,7 +161,7 @@ class TrajectoryTester:
         print("    TRAJECTORY PREDICTION TEST (Arducam OV9782)")
         print("=" * 60)
         print(f"\nRobot Z plane: {self.robot_z} cm")
-        print("\nControls: q=quit r=reset v=velocity t=trajectory p=stats z/x=adjust Z")
+        print("\nControls: q=quit r=reset v=velocity t=trajectory p=stats z/x=adjust Z b=reset-bg")
         print("=" * 60)
         
         # Initialize triangulator
@@ -227,6 +220,17 @@ class TrajectoryTester:
                 
                 # Draw
                 left_vis, right_vis = self.triangulator.draw_results(result)
+
+                # Warmup overlay
+                warmup = self.triangulator.warmup_status()
+                if not warmup['left_ready']:
+                    cv2.putText(left_vis, f"L warming up... {warmup['left_progress']*100:.0f}%",
+                               (10, left_vis.shape[0] - 50),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+                if not warmup['right_ready']:
+                    cv2.putText(right_vis, f"R warming up... {warmup['right_progress']*100:.0f}%",
+                               (10, right_vis.shape[0] - 50),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
                 
                 if self.show_trajectory and self.predictor.is_ready():
                     traj = self.predictor.predict_trajectory(duration=0.5, dt=0.01)
@@ -290,6 +294,10 @@ class TrajectoryTester:
                 elif key == ord('x'):
                     self.robot_z = max(10, self.robot_z - 10)
                     print(f"\n[Robot Z = {self.robot_z}]\n")
+                elif key == ord('b'):
+                    self.triangulator.reset_background()
+                    self.predictor.reset()
+                    print("\n[BG RESET] Background model reset, warming up...\n")
         
         except KeyboardInterrupt:
             pass

@@ -1,7 +1,7 @@
 """
 Tracking Module
 
-Ball detection using HSV + LAB fusion.
+Ball detection using MOG2 background subtraction.
 """
 
 from .ball_tracker import EnhancedBallTracker, BallTracker
