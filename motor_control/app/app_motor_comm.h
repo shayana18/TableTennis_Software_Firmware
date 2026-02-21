@@ -12,6 +12,7 @@ void absMoveSetup(char motor_id);
 int goHome(io_motor_com_t *motor_com, char motor_id, char motor_direction);
 
 void move_rel32(io_motor_com_t *motor_com, char id, long pos);
+void ReadMotorTorqueConst(io_motor_com_t *motor_com, char id);
 void ReadMotorTorqueCurrent(io_motor_com_t *motor_com, char id);
 bool ReadMotorPosition32(io_motor_com_t *motor_com, char id);
 bool ReadMotorPosition32Quiet(io_motor_com_t *motor_com, char id);

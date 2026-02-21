@@ -41,13 +41,16 @@
 typedef struct {
   long motor_pos32;
   long motor_torque_current;
+  long motor_torque_const;
   long motor_speed32;
 
   uint8_t motor_position_ready_flag;
   uint8_t motor_torque_ready_flag;
+  uint8_t motor_torque_current_ready_flag; 
+  uint8_t motor_torque_const_ready; 
   uint8_t motor_speed_ready_flag;
 
-  uint8_t driver_main_gain;
+uint8_t driver_main_gain;
   uint8_t driver_speed_gain;
   uint8_t driver_int_gain;
   uint8_t driver_trq_cons;
@@ -80,20 +83,26 @@ void io_motor_com_make_crc_send(io_motor_com_t *ctx, unsigned char length, unsig
 
 long io_motor_com_get_motor_pos(const io_motor_com_t *ctx);
 long io_motor_com_get_motor_speed(const io_motor_com_t *ctx);
-long io_motor_com_get_motor_torque(const io_motor_com_t *ctx);
+long io_motor_com_get_motor_torque_current(const io_motor_com_t *ctx);
 long io_motor_com_get_driver_config(const io_motor_com_t *ctx);
+long io_motor_com_get_motor_torque_current(const io_motor_com_t *ctx);
+long io_motor_com_get_motor_torque_const(const io_motor_com_t *ctx);
 
 uint8_t io_motor_com_get_motor_position_ready(const io_motor_com_t *ctx);
 uint8_t io_motor_com_get_motor_speed_ready(const io_motor_com_t *ctx);
 uint8_t io_motor_com_get_motor_torque_ready(const io_motor_com_t *ctx);
 uint8_t io_motor_com_get_driver_config_ready(const io_motor_com_t *ctx);
+uint8_t io_motor_com_get_torque_current_ready(const io_motor_com_t *ctx);
+uint8_t io_motor_com_get_torque_const_ready(const io_motor_com_t *ctx);
+
 
 void io_motor_com_set_motor_position_ready(io_motor_com_t *ctx, uint8_t value);
 void io_motor_com_set_motor_speed_ready(io_motor_com_t *ctx, uint8_t value);
 void io_motor_com_set_motor_torque_ready(io_motor_com_t *ctx, uint8_t value);
 void io_motor_com_set_driver_config_ready(io_motor_com_t *ctx, uint8_t value);
+void io_motor_com_set_torque_current_ready(io_motor_com_t *ctx, uint8_t value);
+void io_motor_com_set_torque_const_ready(io_motor_com_t *ctx, uint8_t value);
 
-// Lightweight RX diagnostics to debug motor comm timeouts.
 void io_motor_com_debug_snapshot(uint32_t *rx_packets,
                                  uint32_t *rx_crc_bad,
                                  uint32_t *rx_pos_packets,

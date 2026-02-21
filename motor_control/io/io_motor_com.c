@@ -3,16 +3,6 @@
 #include "hw_uart.h"
 
 #include <stdint.h>
-#include <stdio.h>
-#include <string.h>
-
-// Set to 1 to mirror raw motor UART bytes to laptop UART (binary output).
-// Keep 0 for human-readable terminal output.
-#define IO_DEBUG_RAW_UART_MIRROR 0
-// Set to 1 to print decoded RX packet traces over laptop UART.
-#define IO_DEBUG_PACKET_TRACE 0
-// Set to 1 to print every TX motor packet byte as ASCII hex over laptop UART.
-#define IO_DEBUG_TX_HEX_STREAM 0
 
 static volatile uint32_t s_dbg_rx_packets = 0;
 static volatile uint32_t s_dbg_rx_crc_bad = 0;
@@ -21,68 +11,6 @@ static volatile uint8_t s_dbg_last_id = 0;
 static volatile uint8_t s_dbg_last_func = 0;
 static volatile uint8_t s_dbg_last_crc_ok = 0;
 
-static void io_motor_com_dbg_packet(const io_motor_com_t *ctx,
-                                    char id,
-                                    char func,
-                                    int crc_ok)
-{
-#if !IO_DEBUG_PACKET_TRACE
-  (void)ctx;
-  (void)id;
-  (void)func;
-  (void)crc_ok;
-  return;
-#else
-  char msg[256];
-  size_t off = 0;
-
-  off += (size_t)snprintf(msg + off, sizeof(msg) - off,
-                          "\r\n[DBG] RX pkg len=%u id=%u func=0x%02X crc=%s bytes:",
-                          ctx->read_package_length,
-                          (unsigned char)id,
-                          (unsigned char)func,
-                          crc_ok ? "OK" : "BAD");
-
-  for (uint8_t i = 0; i < ctx->read_package_length && off + 4 < sizeof(msg); i++) {
-    off += (size_t)snprintf(msg + off, sizeof(msg) - off, " %02X",
-                            ctx->read_package_buffer[i]);
-  }
-
-  if (off + 2 < sizeof(msg)) {
-    msg[off++] = '\r';
-    msg[off++] = '\n';
-    msg[off] = '\0';
-  }
-
-  HAL_UART_Transmit(&huart2, (uint8_t *)msg, strlen(msg), HAL_MAX_DELAY);
-#endif
-}
-
-static void io_motor_com_dbg_tx(const unsigned char *buf,
-                                unsigned char len,
-                                char id,
-                                long displacement,
-                                unsigned char func)
-{
-  char msg[256];
-  size_t off = 0;
-
-  off += (size_t)snprintf(msg + off, sizeof(msg) - off,
-                          "\r\n[DBG] TX pkt len=%u id=%u func=0x%02X disp=%ld bytes:",
-                          len, (unsigned char)id, (unsigned char)func, displacement);
-
-  for (uint8_t i = 0; i < len && off + 4 < sizeof(msg); i++) {
-    off += (size_t)snprintf(msg + off, sizeof(msg) - off, " %02X", buf[i]);
-  }
-
-  if (off + 2 < sizeof(msg)) {
-    msg[off++] = '\r';
-    msg[off++] = '\n';
-    msg[off] = '\0';
-  }
-
-  HAL_UART_Transmit(&huart2, (uint8_t *)msg, strlen(msg), HAL_MAX_DELAY);
-}
 
 void io_motor_com_init(io_motor_com_t *ctx, uint8_t *input_storage, uint16_t input_size,
                        uint8_t *output_storage, uint16_t output_size)
@@ -106,13 +34,8 @@ void io_motor_com_read_package(io_motor_com_t *ctx) {
   int cif;
 
   while (__HAL_UART_GET_FLAG(&huart1, UART_FLAG_RXNE)) {
-    HAL_StatusTypeDef status;
-    status = hw_motor_rx(&c, 1, 0); // Receive one byte from UART
+    (void)hw_motor_rx(&c, 1, 0); // Receive one byte from UART
     enqueue(&ctx->input_buffer, c);
-#if IO_DEBUG_RAW_UART_MIRROR
-    uint8_t raw = c;
-    HAL_UART_Transmit(&huart2, &raw, 1, HAL_MAX_DELAY);
-#endif
   }
 
   while (!bufIsEmpty(&ctx->input_buffer)) {
@@ -168,14 +91,13 @@ void io_motor_com_get_function(io_motor_com_t *ctx) {
   if (CRC_Check != 0) {
     s_dbg_rx_crc_bad++;
     s_dbg_last_crc_ok = 0;
-    io_motor_com_dbg_packet(ctx, ID, ReceivedFunction_Code, 0);
+    return;
   }
   else {
     s_dbg_last_crc_ok = 1;
     if (ReceivedFunction_Code == Is_AbsPos32) {
       s_dbg_rx_pos_packets++;
     }
-    io_motor_com_dbg_packet(ctx, ID, ReceivedFunction_Code, 1);
     switch (ReceivedFunction_Code)
     {
       case  Is_AbsPos32:
@@ -187,8 +109,9 @@ void io_motor_com_get_function(io_motor_com_t *ctx) {
     //     MotorSpeed32Ready_Flag = 0x00;
     //     break;
       case  Is_TrqCurrent:
-	      ctx->data.motor_torque_current = io_motor_com_cal_sign_value(ctx->read_package_buffer);
-	    break;
+        ctx->data.motor_torque_current = io_motor_com_cal_sign_value(ctx->read_package_buffer) ;
+        ctx->data.motor_torque_current_ready_flag = 0x00;
+        break;
       case  Is_Status:
         ctx->data.driver_status = (char)io_motor_com_cal_sign_value(ctx->read_package_buffer);
         // Driver_Status=drive status byte data
@@ -197,13 +120,6 @@ void io_motor_com_get_function(io_motor_com_t *ctx) {
         Temp32 = io_motor_com_cal_value(ctx->read_package_buffer);
         ctx->data.driver_config = Temp32;
         ctx->data.driver_config_ready_flag = 0x00;
-#if IO_DEBUG_PACKET_TRACE
-        {
-          char msg[128];
-          snprintf(msg, sizeof(msg), "[DBG] Driver config value: %ld\r\n", Temp32);
-          HAL_UART_Transmit(&huart2, (uint8_t *)msg, strlen(msg), HAL_MAX_DELAY);
-        }
-#endif
         break;
       case  Is_MainGain:
         ctx->data.driver_main_gain = (char)io_motor_com_cal_sign_value(ctx->read_package_buffer);
@@ -218,9 +134,13 @@ void io_motor_com_get_function(io_motor_com_t *ctx) {
         ctx->data.driver_int_gain = ctx->data.driver_int_gain & 0x7f;
         break;
       case  Is_TrqCons:
-        ctx->data.driver_trq_cons = (char)io_motor_com_cal_sign_value(ctx->read_package_buffer);
-        ctx->data.driver_trq_cons = ctx->data.driver_trq_cons & 0x7f;
+      {
+        const long trq_cons = io_motor_com_cal_value(ctx->read_package_buffer);
+        ctx->data.motor_torque_const = trq_cons;
+        ctx->data.driver_trq_cons = (uint8_t)(trq_cons & 0x7f);
+        ctx->data.motor_torque_const_ready = 0x00;
         break;
+      }
       case  Is_HighSpeed:
         ctx->data.driver_high_speed = (char)io_motor_com_cal_sign_value(ctx->read_package_buffer);
         ctx->data.driver_high_speed = ctx->data.driver_high_speed & 0x7f;
@@ -365,14 +285,6 @@ void io_motor_com_make_crc_send(io_motor_com_t *ctx, unsigned char Plength, unsi
       break;
     }
     RS232_HardwareShiftRegister = (char)byte;
-    //Serial.print("RS232_HardwareShiftRegister: ");
-    //Serial.println(RS232_HardwareShiftRegister, DEC);
-    //use &huart1 for production
-#if IO_DEBUG_TX_HEX_STREAM
-    char msg[16];
-    snprintf(msg, sizeof(msg), "%02X ", (uint8_t)RS232_HardwareShiftRegister);
-    hw_laptop_tx((uint8_t *)msg, strlen(msg), HAL_MAX_DELAY);
-#endif
     hw_motor_tx((uint8_t *)&RS232_HardwareShiftRegister, 1, HAL_MAX_DELAY);
   }
 }
@@ -389,9 +301,14 @@ long io_motor_com_get_motor_speed(const io_motor_com_t *ctx)
   return ctx->data.motor_speed32;
 }
 
-long io_motor_com_get_motor_torque(const io_motor_com_t *ctx)
+long io_motor_com_get_motor_torque_current(const io_motor_com_t *ctx)
 {
   return ctx->data.motor_torque_current;
+}
+
+long io_motor_com_get_motor_torque_const(const io_motor_com_t *ctx)
+{
+  return ctx->data.motor_torque_const;
 }
 
 long io_motor_com_get_driver_config(const io_motor_com_t *ctx)
@@ -414,6 +331,16 @@ uint8_t io_motor_com_get_motor_torque_ready(const io_motor_com_t *ctx)
   return ctx->data.motor_torque_ready_flag;
 }
 
+uint8_t io_motor_com_get_torque_current_ready(const io_motor_com_t *ctx)
+{
+  return ctx->data.motor_torque_current_ready_flag; 
+}
+
+uint8_t io_motor_com_get_torque_const_ready(const io_motor_com_t *ctx)
+{
+  return ctx->data.motor_torque_const_ready; 
+}
+
 uint8_t io_motor_com_get_driver_config_ready(const io_motor_com_t *ctx)
 {
   return ctx->data.driver_config_ready_flag;
@@ -434,10 +361,21 @@ void io_motor_com_set_motor_torque_ready(io_motor_com_t *ctx, uint8_t value)
   ctx->data.motor_torque_ready_flag = value;
 }
 
+void io_motor_com_set_torque_current_ready(io_motor_com_t *ctx, uint8_t value)
+{
+    ctx->data.motor_torque_current_ready_flag = value;
+}
+
+void io_motor_com_set_torque_const_ready(io_motor_com_t *ctx, uint8_t value)
+{
+    ctx->data.motor_torque_const_ready = value;
+}
+
 void io_motor_com_set_driver_config_ready(io_motor_com_t *ctx, uint8_t value)
 {
   ctx->data.driver_config_ready_flag = value;
 }
+
 
 void io_motor_com_debug_snapshot(uint32_t *rx_packets,
                                  uint32_t *rx_crc_bad,

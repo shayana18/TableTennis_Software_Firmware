@@ -5,23 +5,50 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "hw_uart.h"
 #include "io_motor_com.h"
 #include "main.h"
 
 #define MOTOR_POS_READ_TIMEOUT_MS 10U
 #define MOTOR_POS_READ_RETRIES 2U
 #define MOTOR_POS_RETRY_GAP_MS 2U
+#define MOTOR_UART_RECOVER_DEBUG 0U
+
+#define TORQUE_CURRENT_READING_MAX 32767
+#define MOTOR_RMS_CURRENT 8.4f
 
 static void motor_uart_recover_and_drain(void)
 {
   uint8_t dump = 0;
+  const uint8_t had_ore = (__HAL_UART_GET_FLAG(&huart1, UART_FLAG_ORE) != RESET);
+  const uint8_t had_fe = (__HAL_UART_GET_FLAG(&huart1, UART_FLAG_FE) != RESET);
+  const uint8_t had_ne = (__HAL_UART_GET_FLAG(&huart1, UART_FLAG_NE) != RESET);
+
+#if MOTOR_UART_RECOVER_DEBUG
+  if (had_ore) {
+    static const char msg[] = "UART1 RX ERR: ORE\r\n";
+    hw_laptop_tx((const uint8_t *)msg, (uint16_t)(sizeof(msg) - 1U), 20U);
+  }
+  if (had_fe) {
+    static const char msg[] = "UART1 RX ERR: FE\r\n";
+    hw_laptop_tx((const uint8_t *)msg, (uint16_t)(sizeof(msg) - 1U), 20U);
+  }
+  if (had_ne) {
+    static const char msg[] = "UART1 RX ERR: NE\r\n";
+    hw_laptop_tx((const uint8_t *)msg, (uint16_t)(sizeof(msg) - 1U), 20U);
+  }
+#else
+  (void)had_ore;
+  (void)had_fe;
+  (void)had_ne;
+#endif
 
   __HAL_UART_CLEAR_OREFLAG(&huart1);
   __HAL_UART_CLEAR_FEFLAG(&huart1);
   __HAL_UART_CLEAR_NEFLAG(&huart1);
 
   while (__HAL_UART_GET_FLAG(&huart1, UART_FLAG_RXNE)) {
-    (void)HAL_UART_Receive(&huart1, &dump, 1, 0);
+    (void)hw_motor_rx(&dump, 1, 0);
   }
 }
 
@@ -204,14 +231,82 @@ void move_rel32(io_motor_com_t *motor_com, char ID, long pos)
  * Date: 2019-02-21
  * Purpose: Executes a read from the DMM drive to obtain motor torque
  * */
+
+void ReadMotorTorqueConst(io_motor_com_t *motor_com, char ID)
+{
+  if (motor_com == NULL) {
+    return;
+  }
+
+  for (uint8_t attempt = 0; attempt < MOTOR_POS_READ_RETRIES; attempt++) {
+    motor_uart_recover_and_drain();
+
+    // No dedicated read function code for torque constant; use General_Read + IS code.
+    io_motor_com_send_package(motor_com, ID, Is_TrqCons, (char)General_Read);
+    io_motor_com_set_torque_const_ready(motor_com, 0xff);
+    const uint32_t t0 = HAL_GetTick();
+
+    while ((HAL_GetTick() - t0) < MOTOR_POS_READ_TIMEOUT_MS) {
+      io_motor_com_read_package(motor_com);
+      if (io_motor_com_get_torque_const_ready(motor_com) == 0x00) {
+        const long torque_const = io_motor_com_get_motor_torque_const(motor_com);
+        char msg[64];
+        snprintf(msg, sizeof(msg), "M%u torque_const=%ld\r\n", (unsigned char)ID, torque_const);
+        hw_laptop_tx((const uint8_t *)msg, (uint16_t)strlen(msg), 20U);
+        return;
+      }
+    }
+
+    if ((attempt + 1U) < MOTOR_POS_READ_RETRIES) {
+      HAL_Delay(MOTOR_POS_RETRY_GAP_MS);
+    }
+  }
+
+  {
+    char msg[48];
+    snprintf(msg, sizeof(msg), "ERR: torque const timeout id=%u\r\n", (unsigned char)ID);
+    hw_laptop_tx((const uint8_t *)msg, (uint16_t)strlen(msg), 20U);
+  }
+}
+
 void ReadMotorTorqueCurrent(io_motor_com_t *motor_com, char ID)
 {
-  // No dedicated read function code for torque current; use General_Read + IS code.
-  io_motor_com_send_package(motor_com, ID , Is_TrqCurrent, (char)General_Read);
-  io_motor_com_set_motor_torque_ready(motor_com, 0xff);
-  while(io_motor_com_get_motor_torque_ready(motor_com) != 0x00)
+  if (motor_com == NULL) {
+    return;
+  }
+
+  for (uint8_t attempt = 0; attempt < MOTOR_POS_READ_RETRIES; attempt++) {
+    motor_uart_recover_and_drain();
+
+    // No dedicated read function code for torque current; use General_Read + IS code.
+    io_motor_com_set_torque_current_ready(motor_com, 0xff);
+    io_motor_com_send_package(motor_com, ID, Is_TrqCurrent, (char)General_Read);
+    const uint32_t t0 = HAL_GetTick();
+
+    while ((HAL_GetTick() - t0) < MOTOR_POS_READ_TIMEOUT_MS) {
+      io_motor_com_read_package(motor_com);
+      if (io_motor_com_get_torque_current_ready(motor_com) == 0x00) {
+        const long raw = io_motor_com_get_motor_torque_current(motor_com);
+        const float trq_ratio = (float)raw / (float)TORQUE_CURRENT_READING_MAX;
+        const long current_ma = (long)(trq_ratio * (MOTOR_RMS_CURRENT * 1000.0f));
+        char msg[96];
+        snprintf(msg, sizeof(msg),
+                 "M%u raw=%ld current=%ldmA\r\n",
+                 (unsigned char)ID, raw, pct_int, pct_frac, current_ma);
+        hw_laptop_tx((const uint8_t *)msg, (uint16_t)strlen(msg), 20U);
+        return;
+      }
+    }
+
+    if ((attempt + 1U) < MOTOR_POS_READ_RETRIES) {
+      HAL_Delay(MOTOR_POS_RETRY_GAP_MS);
+    }
+  }
+
   {
-    io_motor_com_read_package(motor_com);
+    char msg[48];
+    snprintf(msg, sizeof(msg), "ERR: torque timeout id=%u\r\n", (unsigned char)ID);
+    hw_laptop_tx((const uint8_t *)msg, (uint16_t)strlen(msg), 20U);
   }
 }
 
@@ -222,12 +317,7 @@ void ReadMotorTorqueCurrent(io_motor_com_t *motor_com, char ID)
  * */
 static bool read_motor_position32_impl(io_motor_com_t *motor_com, char ID, bool log_timeout)
 {
-  uint32_t rx_start = 0, crc_start = 0, pos_start = 0;
-  const uint32_t t_begin = HAL_GetTick();
-  uint8_t last_id = 0, last_func = 0, last_crc_ok = 0;
-  io_motor_com_debug_snapshot(&rx_start, &crc_start, &pos_start,
-                              &last_id, &last_func, &last_crc_ok);
-
+  
   for (uint8_t attempt = 0; attempt < MOTOR_POS_READ_RETRIES; attempt++) {
     motor_uart_recover_and_drain();
 
@@ -240,15 +330,7 @@ static bool read_motor_position32_impl(io_motor_com_t *motor_com, char ID, bool 
       io_motor_com_read_package(motor_com);
 
       if (io_motor_com_get_motor_position_ready(motor_com) == 0x00) {
-        uint8_t got_id = 0, got_func = 0, got_crc_ok = 0;
-        io_motor_com_debug_snapshot(NULL, NULL, NULL, &got_id, &got_func, &got_crc_ok);
-
-        if (got_crc_ok && got_func == (uint8_t)Is_AbsPos32 && got_id == (uint8_t)ID) {
-          return true;
-        }
-
-        // Ignore stale/mismatched packets and keep waiting for requested ID.
-        io_motor_com_set_motor_position_ready(motor_com, 0xff);
+        return true;
       }
     }
 
@@ -258,21 +340,8 @@ static bool read_motor_position32_impl(io_motor_com_t *motor_com, char ID, bool 
   }
 
   if (log_timeout) {
-    uint32_t rx_end = 0, crc_end = 0, pos_end = 0;
-    io_motor_com_debug_snapshot(&rx_end, &crc_end, &pos_end,
-                                &last_id, &last_func, &last_crc_ok);
-    char dbg[192];
-    snprintf(dbg, sizeof(dbg),
-             "ERR: pos timeout id=%d dt=%lums rx+%lu pos+%lu crc+%lu last=%u/%02X/%u\r\n",
-             ID,
-             (unsigned long)(HAL_GetTick() - t_begin),
-             (unsigned long)(rx_end - rx_start),
-             (unsigned long)(pos_end - pos_start),
-             (unsigned long)(crc_end - crc_start),
-             (unsigned)last_id,
-             (unsigned)last_func,
-             (unsigned)last_crc_ok);
-    HAL_UART_Transmit(&huart2, (uint8_t *)dbg, strlen(dbg), HAL_MAX_DELAY);
+    static const char msg[] = "ERR: pos timeout\r\n";
+    HAL_UART_Transmit(&huart2, (uint8_t *)msg, sizeof(msg) - 1U, HAL_MAX_DELAY);
   }
 
   return false;
@@ -311,11 +380,6 @@ void ReadMotorSpeed32(io_motor_com_t *motor_com, char ID)
  * */
 void ReadDriverConfig(io_motor_com_t *motor_com, char ID)
 {
-  char dbg_msg[96];
-
-  snprintf(dbg_msg, sizeof(dbg_msg), "\r\n[DBG] ReadDriverConfig start (ID=%d)\r\n", ID);
-  HAL_UART_Transmit(&huart2, (uint8_t *)dbg_msg, strlen(dbg_msg), HAL_MAX_DELAY);
-
   io_motor_com_set_driver_config_ready(motor_com, 0xff);
   io_motor_com_send_package(motor_com, ID, 0x01, (char)0x06);
 
@@ -323,8 +387,6 @@ void ReadDriverConfig(io_motor_com_t *motor_com, char ID)
   {
     io_motor_com_read_package(motor_com);
   }
-
-  HAL_UART_Transmit(&huart2, (uint8_t *)"[DBG] ReadDriverConfig response received\r\n", strlen("[DBG] ReadDriverConfig response received\r\n"), HAL_MAX_DELAY);
 }
 /* Function Name: ReadMotorTorqueCurrent
  * Author: Tianyu Li

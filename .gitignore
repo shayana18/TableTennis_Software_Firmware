@@ -13,3 +13,4 @@ robot_ik_control/.venv/
 __pycache__/
 **/build/
 .cache/
+**/build-release/

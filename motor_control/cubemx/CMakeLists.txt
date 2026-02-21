@@ -59,8 +59,6 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     ../hw
 )
 
-target_link_options(${CMAKE_PROJECT_NAME} PRIVATE -u _printf_float)
-
 # Add project symbols (macros)
 target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined symbols
