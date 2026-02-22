@@ -151,18 +151,22 @@ void robot_runtime_scan_motor_ids(char first_id, char last_id)
     last_id = tmp;
   }
 
-  char msg[128];
-  snprintf(msg, sizeof(msg), "MOTOR BUS SCAN ids=%d..%d\r\n", first_id, last_id);
-  robot_runtime_send_status(msg);
+  /* Disabled formatted scan status prints to reduce flash size.
+   * This scan helper currently has no call sites in the runtime path. */
+  // char msg[128];
+  // snprintf(msg, sizeof(msg), "MOTOR BUS SCAN ids=%d..%d\r\n", first_id, last_id);
+  // robot_runtime_send_status(msg);
 
   for (char id = first_id; id <= last_id; id++) {
     if (ReadMotorPosition32Quiet(s_motor_com, id)) {
-      long pos = io_motor_com_get_motor_pos(s_motor_com);
-      snprintf(msg, sizeof(msg), "MOTOR BUS: id=%d OK pos=%ld\r\n", id, pos);
-      robot_runtime_send_status(msg);
+      /* Disabled formatted scan status print to reduce flash size. */
+      // long pos = io_motor_com_get_motor_pos(s_motor_com);
+      // snprintf(msg, sizeof(msg), "MOTOR BUS: id=%d OK pos=%ld\r\n", id, pos);
+      // robot_runtime_send_status(msg);
     } else {
-      snprintf(msg, sizeof(msg), "MOTOR BUS: id=%d no response\r\n", id);
-      robot_runtime_send_status(msg);
+      /* Disabled formatted scan status print to reduce flash size. */
+      // snprintf(msg, sizeof(msg), "MOTOR BUS: id=%d no response\r\n", id);
+      // robot_runtime_send_status(msg);
     }
   }
 }

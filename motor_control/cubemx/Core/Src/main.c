@@ -52,7 +52,7 @@
 
 /* Private variables ---------------------------------------------------------*/
 
-COM_InitTypeDef BspCOMInit;
+// COM_InitTypeDef BspCOMInit;  // Disabled BSP COM init to reduce flash size.
 
 TIM_HandleTypeDef htim1;
 TIM_HandleTypeDef htim3;
@@ -147,22 +147,19 @@ int main(void)
   Turn_const_speed(&motor_com, ROBOT_MOTOR_3_ID, 0);
   /* USER CODE END 2 */
 
-  /* Initialize leds */
-  BSP_LED_Init(LED_GREEN);
-
-  /* Initialize USER push-button, will be used to trigger an interrupt each time it's pressed.*/
-  BSP_PB_Init(BUTTON_USER, BUTTON_MODE_EXTI);
-
-  /* Initialize COM1 port (115200, 8 bits (7-bit data + 1 stop bit), no parity */
-  BspCOMInit.BaudRate   = 115200;
-  BspCOMInit.WordLength = COM_WORDLENGTH_8B;
-  BspCOMInit.StopBits   = COM_STOPBITS_1;
-  BspCOMInit.Parity     = COM_PARITY_NONE;
-  BspCOMInit.HwFlowCtl  = COM_HWCONTROL_NONE;
-  if (BSP_COM_Init(COM1, &BspCOMInit) != BSP_ERROR_NONE)
-  {
-    Error_Handler();
-  }
+  /* Disabled BSP demo peripherals (LED/button/COM1) to reduce flash size.
+   * Robot runtime uses direct HAL UART handles instead of BSP COM. */
+  // BSP_LED_Init(LED_GREEN);
+  // BSP_PB_Init(BUTTON_USER, BUTTON_MODE_EXTI);
+  // BspCOMInit.BaudRate   = 115200;
+  // BspCOMInit.WordLength = COM_WORDLENGTH_8B;
+  // BspCOMInit.StopBits   = COM_STOPBITS_1;
+  // BspCOMInit.Parity     = COM_PARITY_NONE;
+  // BspCOMInit.HwFlowCtl  = COM_HWCONTROL_NONE;
+  // if (BSP_COM_Init(COM1, &BspCOMInit) != BSP_ERROR_NONE)
+  // {
+  //   Error_Handler();
+  // }
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */

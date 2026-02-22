@@ -249,10 +249,12 @@ void ReadMotorTorqueConst(io_motor_com_t *motor_com, char ID)
     while ((HAL_GetTick() - t0) < MOTOR_POS_READ_TIMEOUT_MS) {
       io_motor_com_read_package(motor_com);
       if (io_motor_com_get_torque_const_ready(motor_com) == 0x00) {
-        const long torque_const = io_motor_com_get_motor_torque_const(motor_com);
-        char msg[64];
-        snprintf(msg, sizeof(msg), "M%u torque_const=%ld\r\n", (unsigned char)ID, torque_const);
-        hw_laptop_tx((const uint8_t *)msg, (uint16_t)strlen(msg), 20U);
+        /* Disabled formatted debug print to reduce flash size.
+         * This torque debug helper is not used in the current runtime path. */
+        // const long torque_const = io_motor_com_get_motor_torque_const(motor_com);
+        // char msg[64];
+        // snprintf(msg, sizeof(msg), "M%u torque_const=%ld\r\n", (unsigned char)ID, torque_const);
+        // hw_laptop_tx((const uint8_t *)msg, (uint16_t)strlen(msg), 20U);
         return;
       }
     }
@@ -263,9 +265,11 @@ void ReadMotorTorqueConst(io_motor_com_t *motor_com, char ID)
   }
 
   {
-    char msg[48];
-    snprintf(msg, sizeof(msg), "ERR: torque const timeout id=%u\r\n", (unsigned char)ID);
-    hw_laptop_tx((const uint8_t *)msg, (uint16_t)strlen(msg), 20U);
+    /* Disabled formatted timeout debug print to reduce flash size.
+     * This torque debug helper is not used in the current runtime path. */
+    // char msg[48];
+    // snprintf(msg, sizeof(msg), "ERR: torque const timeout id=%u\r\n", (unsigned char)ID);
+    // hw_laptop_tx((const uint8_t *)msg, (uint16_t)strlen(msg), 20U);
   }
 }
 
@@ -286,14 +290,16 @@ void ReadMotorTorqueCurrent(io_motor_com_t *motor_com, char ID)
     while ((HAL_GetTick() - t0) < MOTOR_POS_READ_TIMEOUT_MS) {
       io_motor_com_read_package(motor_com);
       if (io_motor_com_get_torque_current_ready(motor_com) == 0x00) {
-        const long raw = io_motor_com_get_motor_torque_current(motor_com);
-        const float trq_ratio = (float)raw / (float)TORQUE_CURRENT_READING_MAX;
-        const long current_ma = (long)(trq_ratio * (MOTOR_RMS_CURRENT * 1000.0f));
-        char msg[96];
-        snprintf(msg, sizeof(msg),
-                 "M%u raw=%ld current=%ldmA\r\n",
-                 (unsigned char)ID, raw, current_ma);
-        hw_laptop_tx((const uint8_t *)msg, (uint16_t)strlen(msg), 20U);
+        /* Disabled formatted debug print to reduce flash size.
+         * This torque debug helper is not used in the current runtime path. */
+        // const long raw = io_motor_com_get_motor_torque_current(motor_com);
+        // const float trq_ratio = (float)raw / (float)TORQUE_CURRENT_READING_MAX;
+        // const long current_ma = (long)(trq_ratio * (MOTOR_RMS_CURRENT * 1000.0f));
+        // char msg[96];
+        // snprintf(msg, sizeof(msg),
+        //          "M%u raw=%ld current=%ldmA\r\n",
+        //          (unsigned char)ID, raw, current_ma);
+        // hw_laptop_tx((const uint8_t *)msg, (uint16_t)strlen(msg), 20U);
         return;
       }
     }
@@ -304,9 +310,11 @@ void ReadMotorTorqueCurrent(io_motor_com_t *motor_com, char ID)
   }
 
   {
-    char msg[48];
-    snprintf(msg, sizeof(msg), "ERR: torque timeout id=%u\r\n", (unsigned char)ID);
-    hw_laptop_tx((const uint8_t *)msg, (uint16_t)strlen(msg), 20U);
+    /* Disabled formatted timeout debug print to reduce flash size.
+     * This torque debug helper is not used in the current runtime path. */
+    // char msg[48];
+    // snprintf(msg, sizeof(msg), "ERR: torque timeout id=%u\r\n", (unsigned char)ID);
+    // hw_laptop_tx((const uint8_t *)msg, (uint16_t)strlen(msg), 20U);
   }
 }
 
