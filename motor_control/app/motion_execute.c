@@ -1,21 +1,19 @@
 #include "motion_execute.h"
 
 #include <math.h>
-#include <stdio.h>
 
 #include "main.h"
 #include "robot_runtime.h"
 
 static volatile uint8_t s_motion_tick_pending = 0U;
 static uint32_t s_tick_ms_accum = 0U;
-// Set to 1 for qdot telemetry over UART2. Keep 0 in production to save FLASH.
+
+#if 0
+// Legacy velocity-control configuration and helpers (disabled).
+// Re-enable by moving this block out of #if 0 and switching tick path below.
 #define MOTION_DEBUG_QDOT 0
 #define MOTION_JOINT_CORRECTION_KP 1.35f
 #define MOTION_MAX_FB_MISS_TICKS 3U
-
-// Pre-computed motion profile constants (independent of targets)
-static const float s_ramp_time = MAX_CART_VEL / MAX_CART_ACC;
-static const float s_ramp_dist = 0.5f * MAX_CART_ACC * (MAX_CART_VEL / MAX_CART_ACC) * (MAX_CART_VEL / MAX_CART_ACC);
 
 static bool speed_cmd_exceeds_limit(float cmd)
 {
@@ -28,6 +26,40 @@ static float joint_deg_s_to_speed_cmd(float joint_deg_per_s)
   const float rpm = (joint_deg_per_s / 6.0f);
   return rpm * JOINT_GEAR_RATIO;
 }
+
+static float motion_profile_speed(const move_plan *plan, float t_s)
+{
+  const float t_acc = plan->t2 - plan->t1;
+  const float a = MAX_CART_ACC;
+
+  if (t_s <= plan->t1) {
+    return 0.0f;
+  }
+
+  if (t_s < plan->t2) {
+    return a * (t_s - plan->t1);
+  }
+
+  const float v_peak = a * t_acc;
+  if (t_s < plan->t3) {
+    return v_peak;
+  }
+
+  if (t_s < plan->T) {
+    return v_peak - a * (t_s - plan->t3);
+  }
+
+  if (t_s >= plan->T) {
+    return 0.0f;
+  }
+
+  return 0.0f;
+}
+#endif
+
+// Pre-computed motion profile constants (independent of targets)
+static const float s_ramp_time = MAX_CART_VEL / MAX_CART_ACC;
+static const float s_ramp_dist = 0.5f * MAX_CART_ACC * (MAX_CART_VEL / MAX_CART_ACC) * (MAX_CART_VEL / MAX_CART_ACC);
 
 static float unwrap_deg_near(float angle_deg, float ref_deg)
 {
@@ -70,41 +102,12 @@ static float motion_profile_distance(const move_plan *plan, float t_s)
   }
 
   if (t_s < plan->T) { 
-    const float dt = t_s - plan->t3;
-    const float d_cruise = v_peak * t_cruise;
-    return d_acc + d_cruise + v_peak * dt - 0.5f * a * dt * dt;
+  const float dt = t_s - plan->t3;
+  const float d_cruise = v_peak * t_cruise;
+  return d_acc + d_cruise + v_peak * dt - 0.5f * a * dt * dt;
   }
 
   return plan->D;
-}
-
-static float motion_profile_speed(const move_plan *plan, float t_s)
-{
-  const float t_acc = plan->t2 - plan->t1;
-  const float a = MAX_CART_ACC;
-
-  if (t_s <= plan->t1) {
-    return 0.0f;
-  }
-
-  if (t_s < plan->t2) {
-    return a * (t_s - plan->t1);
-  }
-
-  const float v_peak = a * t_acc;
-  if (t_s < plan->t3) {
-    return v_peak;
-  }
-
-  if (t_s < plan->T) {
-    return v_peak - a * (t_s - plan->t3);
-  }
-
-  if (t_s >= plan->T) {
-    return 0.0f;
-  }
-
-  return 0.0f;
 }
 
 static void motion_abort(robot_t *robot, const char *reason)
@@ -123,8 +126,8 @@ static void motion_abort(robot_t *robot, const char *reason)
 
 static void motion_finish(robot_t *robot)
 {
-
-  robot_runtime_stop_joint_speed();
+  // Legacy velocity-mode stop behavior:
+  // robot_runtime_stop_joint_speed();
 
   move_plan *plan = &robot->current_move_plan;
 
@@ -183,6 +186,7 @@ void motion_execute_make_home_target(robot_t *robot)
 
 void motion_execute_plan_strike(robot_t *robot)
 {
+  // Temporary strike motion
   robot->current_target.type = TARGET_STRIKE;
   robot->current_target.pos.x += 50.0f;  // mm
   robot->current_target.t_arrival_s = 2.0f;
@@ -220,8 +224,8 @@ void motion_execute_plan(robot_t *robot)
     return;
   }
 
-  // Seed previous joint state from live encoder readings so the first execute
-  // tick can compute qdot immediately (no one-tick startup delay).
+  // Seed previous joint state from live encoder readings so unwrap/reference
+  // logic has a valid starting point on the first execute tick.
   float q1_now, q2_now, q3_now;
   if (robot_get_joint_angles(&q1_now, &q2_now, &q3_now)) {
     plan->prev_joint_deg[0] = q1_now;
@@ -290,6 +294,7 @@ void motion_execute_tick(robot_t *robot)
   }
 
   const uint32_t now_ms = HAL_GetTick();
+  // I 
   const float t_s = ((float)(now_ms - plan->t_start_ms)) * 0.001f;
 
   float s = motion_profile_distance(plan, t_s);
@@ -306,8 +311,6 @@ void motion_execute_tick(robot_t *robot)
       plan->start_pos.z + plan->dir.z * s,
   };
 
-  float q_diff_1, q_diff_2, q_diff_3;
-
   float q1_ik;
   float q2_ik;
   float q3_ik;
@@ -317,17 +320,22 @@ void motion_execute_tick(robot_t *robot)
     return;
   }
 
-
   if (plan->prev_joint_valid) {
+    q1_ik = unwrap_deg_near(q1_ik, plan->prev_joint_deg[0]);
+    q2_ik = unwrap_deg_near(q2_ik, plan->prev_joint_deg[1]);
+    q3_ik = unwrap_deg_near(q3_ik, plan->prev_joint_deg[2]);
+  }
 
-    // const float q1_prev = plan->prev_joint_deg[0];
-    // const float q2_prev = plan->prev_joint_deg[1];
-    // const float q3_prev = plan->prev_joint_deg[2];
+  if (!motion_execute_safety_check_joint_limits(q1_ik, q2_ik, q3_ik) &&
+      (robot->current_target.type != TARGET_HOME)) {
+    motion_abort(robot, "PATH_ABORT: ROBOT JOINT LIMITS EXCEEDED\r\n");
+    return;
+  }
 
-    // q1_ik = unwrap_deg_near(q1_ik, q1_prev);
-    // q2_ik = unwrap_deg_near(q2_ik, q2_prev);
-    // q3_ik = unwrap_deg_near(q3_ik, q3_prev);
-
+  // velocity-control stuff (commented out)
+/*
+  float q_diff_1, q_diff_2, q_diff_3;
+  if (plan->prev_joint_valid) {
     float q1_prev, q2_prev, q3_prev;
     if (robot_get_joint_angles(&q1_prev, &q2_prev, &q3_prev)) {
       plan->last_feedback_deg[0] = q1_prev;
@@ -335,8 +343,8 @@ void motion_execute_tick(robot_t *robot)
       plan->last_feedback_deg[2] = q3_prev;
       plan->feedback_valid = true;
       plan->feedback_miss_ticks = 0U;
-      //robot_runtime_send_status("WARN: q read success\r\n");
-    } else if (plan->feedback_valid && (plan->feedback_miss_ticks < MOTION_MAX_FB_MISS_TICKS)) {
+    } else if (plan->feedback_valid &&
+               (plan->feedback_miss_ticks < MOTION_MAX_FB_MISS_TICKS)) {
       plan->feedback_miss_ticks++;
       q1_prev = plan->prev_joint_deg[0];
       q2_prev = plan->prev_joint_deg[1];
@@ -347,118 +355,90 @@ void motion_execute_tick(robot_t *robot)
       return;
     }
 
-      // Add something to ensure current joint angles are not outside of motor travel limits
-
-
-      if (!motion_execute_safety_check_joint_limits(q1_prev, q2_prev, q3_prev) && !(robot->current_target.type == TARGET_HOME)) {
-        motion_abort(robot, "PATH_ABORT: ROBOT JOINT LIMITS EXCEEDED\r\n");
-        return;
-      }
-
-      const float v_cart = motion_profile_speed(plan, t_s);
-      const vec3 c_dot = {
-          plan->dir.x * v_cart,
-          plan->dir.y * v_cart,
-          plan->dir.z * v_cart,
-      };
-
-      const float theta_deg[3] = {q1_prev, q2_prev, q3_prev};
-      float Jinv[3][3];
-      if (robot_delta_inv_jacobian(theta_deg, setpoint, Jinv) != 0) {
-        motion_abort(robot, "PATH_ABORT: JAC_SINGULAR\r\n");
-        return;
-      }
-
-      float qdot1 = Jinv[0][0] * c_dot.x + Jinv[0][1] * c_dot.y + Jinv[0][2] * c_dot.z;
-      float qdot2 = Jinv[1][0] * c_dot.x + Jinv[1][1] * c_dot.y + Jinv[1][2] * c_dot.z;
-      float qdot3 = Jinv[2][0] * c_dot.x + Jinv[2][1] * c_dot.y + Jinv[2][2] * c_dot.z;
-
-      q1_ik = unwrap_deg_near(q1_ik, q1_prev);
-      q2_ik = unwrap_deg_near(q2_ik, q2_prev);
-      q3_ik = unwrap_deg_near(q3_ik, q3_prev);
-
-      q_diff_1 = q1_ik - q1_prev;
-      q_diff_2 = q2_ik - q2_prev; 
-      q_diff_3 = q3_ik - q3_prev;
-
-      // Small correction so joint commands converge to IK target at the setpoint.
-      qdot1 += MOTION_JOINT_CORRECTION_KP * q_diff_1;
-      qdot2 += MOTION_JOINT_CORRECTION_KP * q_diff_2;
-      qdot3 += MOTION_JOINT_CORRECTION_KP * q_diff_3;
-
-      // // debug prints
-      // char msg[96];
-      // snprintf(msg, sizeof(msg), "q_ik(cdeg): %ld %ld %ld\r\n",
-      //          (long)lroundf(q1_ik * 100.0f),
-      //          (long)lroundf(q2_ik * 100.0f),
-      //          (long)lroundf(q3_ik * 100.0f));
-      // robot_runtime_send_status(msg);
-      // snprintf(msg, sizeof(msg), "q_meas(cdeg): %ld %ld %ld\r\n",
-      //          (long)lroundf(q1_prev * 100.0f),
-      //          (long)lroundf(q2_prev * 100.0f),
-      //          (long)lroundf(q3_prev * 100.0f));
-      // robot_runtime_send_status(msg);
-      // snprintf(msg, sizeof(msg), "qdot(cdeg/s): %ld %ld %ld\r\n",
-      //          (long)lroundf(qdot1 * 100.0f),
-      //          (long)lroundf(qdot2 * 100.0f),
-      //          (long)lroundf(qdot3 * 100.0f));
-      // robot_runtime_send_status(msg);
-
-
-      const float q1_cmd = joint_deg_s_to_speed_cmd(qdot1);
-      const float q2_cmd = joint_deg_s_to_speed_cmd(qdot2);
-      const float q3_cmd = joint_deg_s_to_speed_cmd(qdot3);
-
-      const bool exceeded1 = speed_cmd_exceeds_limit(q1_cmd);
-      const bool exceeded2 = speed_cmd_exceeds_limit(q2_cmd);
-      const bool exceeded3 = speed_cmd_exceeds_limit(q3_cmd);
-
-      if (exceeded1 || exceeded2 || exceeded3) {
-        if (exceeded1) {
-          robot_runtime_send_status("CMD1 EXCEEDED\r\n");
-        } else if (exceeded2) {
-          robot_runtime_send_status("CMD2 EXCEEDED\r\n");
-        } else if (exceeded3) {
-          robot_runtime_send_status("CMD3 EXCEEDED\r\n");
-        }
-        motion_abort(robot, "PATH_ABORT: MOTOR_SPEED_EXCEEDED\r\n");
-        return;
-      }
-
-      const long cmd1 = (long)lroundf(q1_cmd);
-      const long cmd2 = (long)lroundf(q2_cmd);
-      const long cmd3 = (long)lroundf(q3_cmd);
-      robot_runtime_set_joint_speed(cmd1, cmd2, cmd3);
-  }
-
-    plan->prev_joint_deg[0] = q1_ik;
-    plan->prev_joint_deg[1] = q2_ik;
-    plan->prev_joint_deg[2] = q3_ik;
-    plan->prev_joint_valid = true;
-    plan->prev_tick_ms = now_ms;
-    robot->current_pos = setpoint;
-
-    // if (t_s >= (plan->T * 1.1f)) {
-    //   motion_finish(robot);
-    //   return;
-    // } else if (t_s >= (plan->T)) {
-    // const bool joints_at_target = (fabsf(q_diff_1) <= Q_TOLERANCE) && (fabsf(q_diff_2) <= Q_TOLERANCE) 
-    //                                 && (fabsf(q_diff_3) <= Q_TOLERANCE);
-    //   if (joints_at_target) {
-    //     motion_finish(robot);
-    //     return;
-    //   }
-    // }
-
-    if (t_s >= plan->T) {
-      motion_finish(robot);
+    if (!motion_execute_safety_check_joint_limits(q1_prev, q2_prev, q3_prev) &&
+        !(robot->current_target.type == TARGET_HOME)) {
+      motion_abort(robot, "PATH_ABORT: ROBOT JOINT LIMITS EXCEEDED\r\n");
       return;
     }
+
+    const float v_cart = motion_profile_speed(plan, t_s);
+    const vec3 c_dot = {
+        plan->dir.x * v_cart,
+        plan->dir.y * v_cart,
+        plan->dir.z * v_cart,
+    };
+
+    const float theta_deg[3] = {q1_prev, q2_prev, q3_prev};
+    float Jinv[3][3];
+    if (robot_delta_inv_jacobian(theta_deg, setpoint, Jinv) != 0) {
+      motion_abort(robot, "PATH_ABORT: JAC_SINGULAR\r\n");
+      return;
+    }
+
+    float qdot1 = Jinv[0][0] * c_dot.x + Jinv[0][1] * c_dot.y + Jinv[0][2] * c_dot.z;
+    float qdot2 = Jinv[1][0] * c_dot.x + Jinv[1][1] * c_dot.y + Jinv[1][2] * c_dot.z;
+    float qdot3 = Jinv[2][0] * c_dot.x + Jinv[2][1] * c_dot.y + Jinv[2][2] * c_dot.z;
+
+    q1_ik = unwrap_deg_near(q1_ik, q1_prev);
+    q2_ik = unwrap_deg_near(q2_ik, q2_prev);
+    q3_ik = unwrap_deg_near(q3_ik, q3_prev);
+
+    q_diff_1 = q1_ik - q1_prev;
+    q_diff_2 = q2_ik - q2_prev;
+    q_diff_3 = q3_ik - q3_prev;
+
+    qdot1 += MOTION_JOINT_CORRECTION_KP * q_diff_1;
+    qdot2 += MOTION_JOINT_CORRECTION_KP * q_diff_2;
+    qdot3 += MOTION_JOINT_CORRECTION_KP * q_diff_3;
+
+    const float q1_cmd = joint_deg_s_to_speed_cmd(qdot1);
+    const float q2_cmd = joint_deg_s_to_speed_cmd(qdot2);
+    const float q3_cmd = joint_deg_s_to_speed_cmd(qdot3);
+
+    const bool exceeded1 = speed_cmd_exceeds_limit(q1_cmd);
+    const bool exceeded2 = speed_cmd_exceeds_limit(q2_cmd);
+    const bool exceeded3 = speed_cmd_exceeds_limit(q3_cmd);
+
+    if (exceeded1 || exceeded2 || exceeded3) {
+      if (exceeded1) {
+        robot_runtime_send_status("CMD1 EXCEEDED\r\n");
+      } else if (exceeded2) {
+        robot_runtime_send_status("CMD2 EXCEEDED\r\n");
+      } else if (exceeded3) {
+        robot_runtime_send_status("CMD3 EXCEEDED\r\n");
+      }
+      motion_abort(robot, "PATH_ABORT: MOTOR_SPEED_EXCEEDED\r\n");
+      return;
+    }
+
+    const long cmd1 = (long)lroundf(q1_cmd);
+    const long cmd2 = (long)lroundf(q2_cmd);
+    const long cmd3 = (long)lroundf(q3_cmd);
+    robot_runtime_set_joint_speed(cmd1, cmd2, cmd3);
+  }
+*/
+
+  robot_runtime_set_joint_position_abs_deg(q1_ik, q2_ik, q3_ik);
+
+  plan->prev_joint_deg[0] = q1_ik;
+  plan->prev_joint_deg[1] = q2_ik;
+  plan->prev_joint_deg[2] = q3_ik;
+  plan->prev_joint_valid = true;
+  plan->prev_tick_ms = now_ms;
+  robot->current_pos = setpoint;
+
+  if (t_s >= plan->T) {
+    motion_finish(robot);
+    return;
+  }
 }
 
 
 
 void motion_execute_stop_all(void)
 {
-  robot_runtime_stop_joint_speed();
+  // Legacy velocity-mode behavior:
+  // robot_runtime_stop_joint_speed();
+
+  // In position-control mode we avoid overriding the final absolute target.
 }

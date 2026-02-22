@@ -29,10 +29,10 @@
 // Workspace bounds (mm)
 #define LIMIT_POS_X 500.0f
 #define LIMIT_NEG_X -500.0f
-#define LIMIT_POS_Y 300.0f
-#define LIMIT_NEG_Y -300.0f
+#define LIMIT_POS_Y 350.0f
+#define LIMIT_NEG_Y -350.0f
 #define LIMIT_POS_Z -700.0f
-#define LIMIT_NEG_Z -1000.0f
+#define LIMIT_NEG_Z -1100.0f
 
 // Motion execution configuration
 #define MOTION_EXECUTE_PERIOD_MS 10U
@@ -132,3 +132,5 @@ bool robot_get_joint_angles(float *q1_deg, float *q2_deg, float *q3_deg);
 void set_idle(robot_t *robot);
 void stop_motion(void);
 void safety_enter_fault_mode(void);
+
+void print_joint_angles();

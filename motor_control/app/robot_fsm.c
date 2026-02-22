@@ -24,6 +24,19 @@ void delta_fsm_init(robot_t *robot)
   robot->flag_pc_error = false;
 
   motion_execute_reset_scheduler();
+
+  // Print Current Joint Angle at Home Completion [ DO NOT DELETE - USEFUL FOR DEBUGGING ]
+  print_joint_angles();
+}
+
+void delta_fsm_bind_io(mailbox_t *mailbox, io_motor_com_t *motor_com)
+{
+  robot_runtime_bind(mailbox, motor_com);
+}
+
+void delta_fsm_on_timer_tick(void)
+{
+  motion_execute_on_timer_tick();
 }
 
 void delta_fsm(robot_t *robot)
@@ -44,8 +57,9 @@ void delta_fsm(robot_t *robot)
       break;
       
     case STATE_IDLE:
-      robot_runtime_pop_target(&robot->current_target);
-      if(robot->current_target.type == TARGET_INTERCEPT)
+      if (!robot_runtime_pop_target(&robot->current_target)) {
+        break;
+      } else if(robot->current_target.type == TARGET_INTERCEPT)
       {
         robot->state = STATE_PLAN;
       }
@@ -99,6 +113,15 @@ void delta_fsm(robot_t *robot)
       }
 
       if (robot->flag_path_done) {
+
+        // Simple logic chain: Just set robot state to IDLE
+        robot->state = STATE_IDLE;
+        set_idle(robot);
+        robot_runtime_send_status("STATE: IDLE\r\n");
+        print_joint_angles();
+        
+        // True logic chain
+        /*
         if (robot->current_target.type == TARGET_INTERCEPT) {
           robot->state = STATE_STRIKE;
           robot_runtime_send_status("STATE: STRIKE\r\n");
@@ -112,10 +135,12 @@ void delta_fsm(robot_t *robot)
           robot_runtime_send_status("REACHED HOME\r\n");
           robot_runtime_send_status("STATE: IDLE\r\n");
         } else {
-          robot->state = STATE_IDLE;
-          set_idle(robot);
-          robot_runtime_send_status("STATE: IDLE\r\n");
+        robot->state = STATE_IDLE;
+        set_idle(robot);
+        robot_runtime_send_status("STATE: IDLE\r\n");
         }
+        */
+
       }
       break;
 

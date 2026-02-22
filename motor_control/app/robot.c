@@ -347,3 +347,18 @@ void safety_enter_fault_mode(void)
   // TODO: add platform specific fault outputs and motor disable handling.
 }
 
+void print_joint_angles(){
+  float sample_q1, sample_q2, sample_q3;
+  if (!robot_get_joint_angles(&sample_q1, &sample_q2, &sample_q3)) {
+    robot_runtime_send_status("ERR: no init q\r\n");
+  } else {
+    long q1_cdeg = (long)lroundf(sample_q1); // centi-deg
+    long q2_cdeg = (long)lroundf(sample_q2);
+    long q3_cdeg = (long)lroundf(sample_q3);
+
+    char msg[96];
+    snprintf(msg, sizeof(msg), "COMPLETED Q: %ld %ld %ld\r\n", q1_cdeg, q2_cdeg, q3_cdeg);
+    robot_runtime_send_status(msg);
+  }
+}
+

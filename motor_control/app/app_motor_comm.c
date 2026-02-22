@@ -9,8 +9,8 @@
 #include "io_motor_com.h"
 #include "main.h"
 
-#define MOTOR_POS_READ_TIMEOUT_MS 10U
-#define MOTOR_POS_READ_RETRIES 2U
+#define MOTOR_POS_READ_TIMEOUT_MS 100U
+#define MOTOR_POS_READ_RETRIES 3U
 #define MOTOR_POS_RETRY_GAP_MS 2U
 #define MOTOR_UART_RECOVER_DEBUG 0U
 
@@ -292,7 +292,7 @@ void ReadMotorTorqueCurrent(io_motor_com_t *motor_com, char ID)
         char msg[96];
         snprintf(msg, sizeof(msg),
                  "M%u raw=%ld current=%ldmA\r\n",
-                 (unsigned char)ID, raw, pct_int, pct_frac, current_ma);
+                 (unsigned char)ID, raw, current_ma);
         hw_laptop_tx((const uint8_t *)msg, (uint16_t)strlen(msg), 20U);
         return;
       }

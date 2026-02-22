@@ -76,6 +76,33 @@ void robot_runtime_stop_joint_speed(void)
   robot_runtime_set_joint_speed(0, 0, 0);
 }
 
+static long robot_runtime_joint_deg_to_motor_tick(float q_deg)
+{
+  const float ticks_per_joint_deg = ((float)PULSES_PER_REV * JOINT_GEAR_RATIO) / 360.0f;
+  const float motor_tick = (q_deg - ENCODER_ZERO_TO_IK_OFFSET) * ticks_per_joint_deg * ROBOT_JOINT_SIGN;
+  return (long)lroundf(motor_tick);
+}
+
+void robot_runtime_set_joint_position_abs_ticks(long q1_tick, long q2_tick, long q3_tick)
+{
+  if (s_motor_com == NULL) {
+    return;
+  }
+
+  move_abs32(s_motor_com, ROBOT_MOTOR_1_ID, q1_tick);
+  move_abs32(s_motor_com, ROBOT_MOTOR_2_ID, q2_tick);
+  move_abs32(s_motor_com, ROBOT_MOTOR_3_ID, q3_tick);
+}
+
+void robot_runtime_set_joint_position_abs_deg(float q1_deg, float q2_deg, float q3_deg)
+{
+  const long q1_tick = robot_runtime_joint_deg_to_motor_tick(q1_deg);
+  const long q2_tick = robot_runtime_joint_deg_to_motor_tick(q2_deg);
+  const long q3_tick = robot_runtime_joint_deg_to_motor_tick(q3_deg);
+
+  robot_runtime_set_joint_position_abs_ticks(q1_tick, q2_tick, q3_tick);
+}
+
 
 
 bool robot_runtime_get_joint_ticks(long *q1_tick, long *q2_tick, long *q3_tick)
