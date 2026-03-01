@@ -27,8 +27,8 @@
 #define LOWER_ARM_LENGTH 1000		// (mm)
 
 // TO FILL IN WITH REAL VALUES
-#define LIMIT_POS_X
-#define LIMIT_NEG_X
+#define ELLIPSE_RADIUS_X_LIMIT
+#define ELLIPSE_RADIUS_Y_LIMIT
 #define LIMIT_POS_Y
 #define LIMIT_NEG_Y
 #define LIMIT_POS_Z

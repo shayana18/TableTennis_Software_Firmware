@@ -71,15 +71,15 @@ float robot_calc_dist(vec3 current, vec3 target, float *out_dx, float *out_dy, f
 
 bool robot_target_in_workspace(vec3 pos)
 {
-  if (pos.x < LIMIT_NEG_X || pos.x > LIMIT_POS_X) {
+  // Ellipse Formula
+  float value = (pos.x * pos.x) / (ELLIPSE_RADIUS_X * ELLIPSE_RADIUS_X) + (pos.y * pos.y) / (ELLIPSE_RADIUS_Y * ELLIPSE_RADIUS_Y);
+
+  if (value > 1.0f) {
     return false;
+    } else if (pos.z > LIMIT_POS_Z || pos.z < LIMIT_NEG_Z) {
+    return false; 
   }
-  if (pos.y < LIMIT_NEG_Y || pos.y > LIMIT_POS_Y) {
-    return false;
-  }
-  if (pos.z < LIMIT_NEG_Z || pos.z > LIMIT_POS_Z) {
-    return false;
-  }
+
   return true;
 }
 

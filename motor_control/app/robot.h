@@ -11,28 +11,26 @@
 #define MAX_JOINT_VEL 3000.0L      // RPM, Conservative values
 #define MAX_JOINT_ACC 1000.0L     // RPM/s, Conservative Values
 
-#define MAX_CART_VEL 4000.0f     // mm/s Default: 4000
-#define MAX_CART_ACC 20000.0f    // mm/s^2  default: 20000
+#define MAX_CART_VEL 500.0f     // mm/s Default: 4000
+#define MAX_CART_ACC 2000.0f    // mm/s^2  default: 20000
 
 // Home position (mm)
 #define HOME_X 0.0f
 #define HOME_Y 0.0f
 #define HOME_Z -900.0f
-#define HOME_TIME 5.0f
+#define HOME_TIME 3.0f
 
 // Delta geometry (mm)
 #define BASE_RADIUS 165.0f
 #define EE_RADIUS 50.0f
 #define UPPER_ARM_LENGTH 350.0f
-#define LOWER_ARM_LENGTH 1000.0f
+#define LOWER_ARM_LENGTH 980.0f
 
-// Workspace bounds (mm)
-#define LIMIT_POS_X 500.0f
-#define LIMIT_NEG_X -500.0f
-#define LIMIT_POS_Y 350.0f
-#define LIMIT_NEG_Y -350.0f
-#define LIMIT_POS_Z -700.0f
-#define LIMIT_NEG_Z -1100.0f
+// Workspace bounds (mm) - Elliptic Cylinder
+#define ELLIPSE_RADIUS_X 680.0f
+#define ELLIPSE_RADIUS_Y 440.0f
+#define LIMIT_POS_Z -800.0f
+#define LIMIT_NEG_Z -1000.0f
 
 // Motion execution configuration
 #define MOTION_EXECUTE_PERIOD_MS 10U

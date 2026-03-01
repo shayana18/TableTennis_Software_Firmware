@@ -50,10 +50,11 @@ void delta_fsm(robot_t *robot)
 
   switch (robot->state) {
     case STATE_OFF:
+
+    // TO Implement: Limit switch logic
       robot_runtime_send_status("STATE: OFF\r\n");
       robot->state = STATE_IDLE;
-      robot_runtime_send_status("STATE: UNHOMED\r\n");
-      robot_runtime_send_status("WAITING FOR HOME TARGET\r\n");
+      robot_runtime_send_status("STATE: IDLE\r\n");
       break;
       
     case STATE_IDLE:
@@ -62,13 +63,10 @@ void delta_fsm(robot_t *robot)
       } else if(robot->current_target.type == TARGET_INTERCEPT)
       {
         robot->state = STATE_PLAN;
+        robot_runtime_send_status("STATE: PLAN\r\n");
       }
       else if(robot->current_target.type == TARGET_HOME)
       {
-        // float q1, q2, q3;
-        // if (!robot_runtime_get_joint_angles(&q1, &q2, &q3) ||!motion_execute_safety_check_joint_limits(q1, q2, q3)) {
-        //   robot_runtime_send_status("CURRENT ROBOT JOINTS ARE INVALID\r\n");
-        // } else 
           robot_runtime_send_status("HOMING...\r\n");
           motion_execute_make_home_target(robot);
           robot->state = STATE_PLAN;
@@ -79,7 +77,7 @@ void delta_fsm(robot_t *robot)
 
     case STATE_PLAN:
       if (!robot_target_in_workspace(robot->current_target.pos)) {
-        robot_runtime_send_status("TARGET IS INVALID\r\n");
+        robot_runtime_send_status("TARGET OUT OF WORKSPACE\r\n");
         robot->state = STATE_IDLE;
         set_idle(robot);
         robot_runtime_send_status("STATE: IDLE\r\n");
@@ -87,6 +85,7 @@ void delta_fsm(robot_t *robot)
         motion_execute_plan(robot);
         motion_execute_start(robot);
         if (!robot->flag_ready_to_move) {
+          robot_runtime_send_status("Planning Failed\r\n");
           robot->state = STATE_IDLE;
           set_idle(robot);
           robot_runtime_send_status("STATE: IDLE\r\n");

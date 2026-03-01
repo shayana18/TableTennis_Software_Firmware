@@ -23,7 +23,7 @@ bool safety_check_joint_limits() {
 
 bool safety_check_target(vec3 pos) {
 
-	if (pos.x < LIMIT_NEG_X || pos.x > LIMIT_POS_X) {
+	if (pos.x < ELLIPSE_RADIUS_Y_LIMIT || pos.x > ELLIPSE_RADIUS_X_LIMIT) {
 		return false;
 	}
 	if (pos.y < LIMIT_NEG_Y || pos.y > LIMIT_POS_Y) {
