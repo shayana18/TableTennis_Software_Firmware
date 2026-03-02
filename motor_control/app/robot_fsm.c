@@ -26,6 +26,7 @@ void delta_fsm_init(robot_t *robot)
   motion_execute_reset_scheduler();
 
   // Print Current Joint Angle at Home Completion [ DO NOT DELETE - USEFUL FOR DEBUGGING ]
+  robot_runtime_send_status("new Program 1");
   print_joint_angles();
 }
 
@@ -164,6 +165,7 @@ void delta_fsm(robot_t *robot)
       break;
 
     case STATE_FAULT:
+    
     default:
       safety_enter_fault_mode();
       motion_execute_stop_all();

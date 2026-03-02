@@ -2,6 +2,7 @@
 #include "robot_runtime.h"
 #include "motion_execute.h" 
 #include <math.h>
+#include <stdio.h>
 
 #define PI_F 3.14159265358979323846f
 #define DTR (PI_F / 180.0f)
@@ -337,6 +338,7 @@ void stop_motion(void)
 void set_idle(robot_t *robot)
 {
   motion_execute_stop_all();
+  robot_runtime_clear_mailbox();
   if (robot != NULL) {
     robot->flag_ready_to_move = false;
   }
@@ -361,4 +363,5 @@ void print_joint_angles(){
     robot_runtime_send_status(msg);
   }
 }
+
 

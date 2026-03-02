@@ -42,7 +42,8 @@ bool mailbox_mail_received(mailbox_t *mb, target_t *out_target)
     return true;
 }
 
-bool mailbox_mail_recieved(mailbox_t *mb, target_t *out_target)
+void mailbox_clear(mailbox_t *mb)
 {
-    return mailbox_mail_received(mb, out_target);
+    mb->new_interception_point_in = false;
+    memset(mb->data, 0, sizeof(mb->data));
 }

@@ -45,6 +45,13 @@ bool robot_runtime_pop_target(robot_target_t *out_target)
   return true;
 }
 
+void robot_runtime_clear_mailbox()
+{
+  if (s_mailbox != NULL) {
+    mailbox_clear(s_mailbox);
+  }
+}
+
 void robot_runtime_set_joint_speed(long cmd1, long cmd2, long cmd3)
 {
   if (s_motor_com == NULL) {

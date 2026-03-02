@@ -19,3 +19,5 @@ void robot_runtime_set_joint_position_abs_deg(float q1_deg, float q2_deg, float 
 bool robot_runtime_get_joint_ticks(long *q1_tick, long *q2_tick, long *q3_tick);
 
 void robot_runtime_scan_motor_ids(char first_id, char last_id);
+
+void robot_runtime_clear_mailbox(void);

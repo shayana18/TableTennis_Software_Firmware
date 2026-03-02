@@ -6,31 +6,35 @@
 #include "shared_types.h"
 
 // Robot motion limits
-#define MAX_JOINT_ANGLE_LIMIT ENCODER_ZERO_TO_IK_OFFSET - 5.0f // degrees
-#define MIN_JOINT_ANGLE_LIMIT -70.0f
+#define MAX_JOINT_ANGLE_LIMIT ENCODER_ZERO_TO_IK_OFFSET // degrees
+#define MIN_JOINT_ANGLE_LIMIT -75.0f  // Low stop limit is 80 deg
 #define MAX_JOINT_VEL 3000.0L      // RPM, Conservative values
 #define MAX_JOINT_ACC 1000.0L     // RPM/s, Conservative Values
 
-#define MAX_CART_VEL 500.0f     // mm/s Default: 4000
+#define MAX_CART_VEL 2000.0f     // mm/s Default: 4000
 #define MAX_CART_ACC 2000.0f    // mm/s^2  default: 20000
 
 // Home position (mm)
 #define HOME_X 0.0f
 #define HOME_Y 0.0f
 #define HOME_Z -900.0f
-#define HOME_TIME 3.0f
+#define HOME_TIME 2.0f
 
 // Delta geometry (mm)
 #define BASE_RADIUS 165.0f
 #define EE_RADIUS 50.0f
 #define UPPER_ARM_LENGTH 350.0f
-#define LOWER_ARM_LENGTH 980.0f
+#define LOWER_ARM_LENGTH 1000.0f
 
 // Workspace bounds (mm) - Elliptic Cylinder
-#define ELLIPSE_RADIUS_X 680.0f
-#define ELLIPSE_RADIUS_Y 440.0f
-#define LIMIT_POS_Z -800.0f
-#define LIMIT_NEG_Z -1000.0f
+#define ELLIPSE_RADIUS_X 600.0f
+#define ELLIPSE_RADIUS_Y 550.0f
+#define LIMIT_POS_Z -650.0f
+#define LIMIT_NEG_Z -1050.0f
+
+// Paddle Workspace Bounds (mm)
+#define ELLIPSE_RADIUS_X_PADDLE 820.0f
+#define ELLIPSE_RADIUS_Y_PADDLE 550.0f
 
 // Motion execution configuration
 #define MOTION_EXECUTE_PERIOD_MS 10U
@@ -48,6 +52,8 @@
 // Set to -1.0f for a motor if commanded Z motion is inverted.
 #define ROBOT_JOINT_SIGN -1.0f
 #define Q_TOLERANCE 0.5 // degrees
+
+#define BUFFER_TIME 0.05f // seconds, Time buffer to account for communication and execution delays when planning to target arrival time.
 
 
 // Motor IDs on the daisy-chain
