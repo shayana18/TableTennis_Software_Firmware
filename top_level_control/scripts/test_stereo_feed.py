@@ -83,8 +83,11 @@ def main():
                 if elapsed > 0:
                     fps_display = (len(fps_timestamps) - 1) / elapsed
 
-            ret_left, frame_left = cap_left.read()
-            ret_right, frame_right = cap_right.read()
+            # grab()/retrieve() ensures both frames come from the same trigger pulse
+            if not cap_left.grab() or not cap_right.grab():
+                continue
+            ret_left, frame_left = cap_left.retrieve()
+            ret_right, frame_right = cap_right.retrieve()
 
             if not ret_left or not ret_right:
                 continue

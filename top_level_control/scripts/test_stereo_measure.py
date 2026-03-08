@@ -87,11 +87,8 @@ class StereoMeasureTool:
         self.display_height = int(self.display_width * self.frame_height / self.frame_width)
 
     def load_thresholds(self):
-        """Load ball detection thresholds."""
-        if os.path.exists(self.thresholds_stereo):
-            self.triangulator.load_thresholds(self.thresholds_stereo)
-        elif os.path.exists(self.thresholds_single):
-            self.triangulator.load_thresholds(self.thresholds_single)
+        """No-op: MOG2 detection doesn't use HSV/LAB thresholds."""
+        pass
 
     def check_calibration(self):
         """Check if calibration files exist."""
@@ -152,11 +149,15 @@ class StereoMeasureTool:
         if not result['found_3d']:
             return
 
+        det = result['left_detection']
+        if det is None:
+            return
+
         X, Y, Z = result['position_3d']
         self.auto_position_3d = (X, Y, Z)
 
-        # Get pixel radius from left detection (use left camera focal length)
-        radius_px = result['left_detection']['radius']
+        # Compute pixel radius from contour area (BallDetector gives area, not radius)
+        radius_px = np.sqrt(det['area'] / np.pi)
         fx = self.triangulator.cmtx0[0, 0]  # focal length in pixels
 
         # Physical diameter = 2 * (radius_px * Z) / fx
@@ -174,9 +175,16 @@ class StereoMeasureTool:
         pt_b_left = self.click_points[2]
         pt_b_right = self.click_points[3]
 
+        # Undistort + rectify pixel coords before triangulation
+        tri = self.triangulator
+        pt_a_left_u = tri._rectify_point(pt_a_left, tri.cmtx0, tri.dist0, tri.R_rect0, tri.P_rect0)
+        pt_a_right_u = tri._rectify_point(pt_a_right, tri.cmtx1, tri.dist1, tri.R_rect1, tri.P_rect1)
+        pt_b_left_u = tri._rectify_point(pt_b_left, tri.cmtx0, tri.dist0, tri.R_rect0, tri.P_rect0)
+        pt_b_right_u = tri._rectify_point(pt_b_right, tri.cmtx1, tri.dist1, tri.R_rect1, tri.P_rect1)
+
         # Triangulate both points
-        pos_a = self.triangulator.triangulate(pt_a_left, pt_a_right)
-        pos_b = self.triangulator.triangulate(pt_b_left, pt_b_right)
+        pos_a = tri.triangulate(pt_a_left_u, pt_a_right_u)
+        pos_b = tri.triangulate(pt_b_left_u, pt_b_right_u)
 
         # 3D Euclidean distance
         distance = np.linalg.norm(pos_a - pos_b)
@@ -212,14 +220,15 @@ class StereoMeasureTool:
             # Draw detection circles on display (scaled)
             for det, img in [(result['left_detection'], left_small),
                              (result['right_detection'], right_small)]:
-                if det and det['found']:
+                if det is not None:
                     cx = int(det['center'][0] * self.display_width / self.frame_width)
                     cy = int(det['center'][1] * self.display_height / self.frame_height)
-                    r = int(det['radius'] * self.display_width / self.frame_width)
-                    cv2.circle(img, (cx, cy), r, (0, 255, 0), 2)
+                    radius_px = np.sqrt(det['area'] / np.pi)
+                    r = int(radius_px * self.display_width / self.frame_width)
+                    cv2.circle(img, (cx, cy), max(r, 3), (0, 255, 0), 2)
                     cv2.circle(img, (cx, cy), 2, (0, 0, 255), -1)
                     # Show pixel radius
-                    cv2.putText(img, f"r={det['radius']:.0f}px", (cx + r + 5, cy),
+                    cv2.putText(img, f"r={radius_px:.0f}px", (cx + r + 5, cy),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 0), 1)
         else:
             cv2.putText(left_small, "Point ball at cameras to measure", (10, h - 20),
@@ -365,22 +374,25 @@ class StereoMeasureTool:
                     if self.mode == 'auto':
                         self.compute_auto_measurement(result)
                 else:
-                    # Re-detect on frozen frames (for auto mode consistency)
+                    # Re-detect on frozen frames using BallDetector directly
+                    best_l, _, _, _ = self.triangulator.detector_left.detect(self.frozen_left)
+                    best_r, _, _, _ = self.triangulator.detector_right.detect(self.frozen_right)
                     result = {
                         'left_frame': self.frozen_left,
                         'right_frame': self.frozen_right,
-                        'left_detection': self.triangulator.tracker_left.detect(self.frozen_left),
-                        'right_detection': self.triangulator.tracker_right.detect(self.frozen_right),
+                        'left_detection': best_l,
+                        'right_detection': best_r,
                         'found_3d': False,
                         'position_3d': None,
                     }
-                    # Triangulate on frozen
-                    ld = result['left_detection']
-                    rd = result['right_detection']
-                    if ld['found'] and rd['found']:
-                        disp = ld['center'][0] - rd['center'][0]
+                    # Triangulate on frozen (with rectification)
+                    if best_l is not None and best_r is not None:
+                        tri = self.triangulator
+                        pt_l = tri._rectify_point(best_l['center'], tri.cmtx0, tri.dist0, tri.R_rect0, tri.P_rect0)
+                        pt_r = tri._rectify_point(best_r['center'], tri.cmtx1, tri.dist1, tri.R_rect1, tri.P_rect1)
+                        disp = pt_l[0] - pt_r[0]
                         if disp > 0:
-                            pos = self.triangulator.triangulate(ld['center'], rd['center'])
+                            pos = tri.triangulate(pt_l, pt_r)
                             if pos[2] > 0:
                                 result['found_3d'] = True
                                 result['position_3d'] = tuple(pos)

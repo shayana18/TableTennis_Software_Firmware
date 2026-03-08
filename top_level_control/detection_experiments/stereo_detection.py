@@ -224,8 +224,11 @@ if __name__ == '__main__':
     # Build background
     print("\nRemove ball from view, press SPACE...")
     while True:
-        ret_l, frame_l = cap_left.read()
-        ret_r, frame_r = cap_right.read()
+        # grab()/retrieve() ensures both frames from same trigger pulse
+        if not cap_left.grab() or not cap_right.grab():
+            continue
+        ret_l, frame_l = cap_left.retrieve()
+        ret_r, frame_r = cap_right.retrieve()
         if not ret_l or not ret_r:
             continue
         preview = np.hstack([
@@ -243,8 +246,10 @@ if __name__ == '__main__':
     print("Learning background (3 seconds)...")
     t_start = time.time()
     while time.time() - t_start < 3.0:
-        ret_l, frame_l = cap_left.read()
-        ret_r, frame_r = cap_right.read()
+        if not cap_left.grab() or not cap_right.grab():
+            continue
+        ret_l, frame_l = cap_left.retrieve()
+        ret_r, frame_r = cap_right.retrieve()
         if not ret_l or not ret_r:
             continue
         roi_l, _, _ = get_roi(frame_l, ROI_LEFT)
@@ -260,8 +265,10 @@ if __name__ == '__main__':
     actual_fps  = 0
 
     while True:
-        ret_l, frame_l = cap_left.read()
-        ret_r, frame_r = cap_right.read()
+        if not cap_left.grab() or not cap_right.grab():
+            continue
+        ret_l, frame_l = cap_left.retrieve()
+        ret_r, frame_r = cap_right.retrieve()
         if not ret_l or not ret_r:
             continue
 
@@ -327,8 +334,10 @@ if __name__ == '__main__':
             print("Reset! Remove ball for 2 seconds...")
             t_start = time.time()
             while time.time() - t_start < 2.0:
-                ret_l, fl = cap_left.read()
-                ret_r, fr = cap_right.read()
+                if not cap_left.grab() or not cap_right.grab():
+                    continue
+                ret_l, fl = cap_left.retrieve()
+                ret_r, fr = cap_right.retrieve()
                 if not ret_l or not ret_r:
                     continue
                 rl, _, _ = get_roi(fl, ROI_LEFT)

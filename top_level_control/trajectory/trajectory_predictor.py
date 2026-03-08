@@ -57,6 +57,71 @@ MAX_CART_ACC  = 20000.0            # mm/s²
 
 CM_TO_MM = 10.0
 
+# ================================================================
+# CAMERA POSE IN ROBOT FRAME — MEASURE AND UPDATE THESE
+# ================================================================
+#
+# These define camera 0's position and orientation relative to the
+# robot base frame. Used to build the rotation matrix + translation
+# that converts triangulated camera coords (cm) → robot coords (mm).
+#
+# The camera has a 20° downward pitch, so cam_Y and cam_Z are NOT
+# aligned with true vertical/horizontal. A simple axis swap would
+# give ~100mm errors at typical depths. The rotation matrix fixes this.
+#
+# ┌─────────────────────────────────────────────────────────────────┐
+# │  HOW TO MEASURE                                                │
+# │                                                                │
+# │  Stand behind the robot, looking toward the net.               │
+# │  Robot base plate center = origin (0, 0, 0).                   │
+# │                                                                │
+# │  Robot frame:                                                  │
+# │    +X = to robot's RIGHT (across table width)                  │
+# │    +Y = toward the NET (along table length)                    │
+# │    +Z = UP (positive = above base plate)                       │
+# │    Note: workspace Z is negative because end-effector hangs    │
+# │    below the base plate (-700 to -1100 mm).                    │
+# │                                                                │
+# │  1. POSITION (mm) — tape measure from robot base center        │
+# │     to camera 0 lens center:                                   │
+# │       CAM_POSE_X_MM : lateral offset                           │
+# │         (+) = camera is to robot's right                       │
+# │         (-) = camera is to robot's left                        │
+# │       CAM_POSE_Y_MM : along-table offset                      │
+# │         (+) = camera is toward net from robot                  │
+# │         (-) = camera is behind robot                           │
+# │       CAM_POSE_Z_MM : vertical offset                         │
+# │         (+) = camera is above base plate                       │
+# │         (-) = camera is below base plate                       │
+# │                                                                │
+# │  2. YAW (degrees) — horizontal angle of camera view direction  │
+# │     Measured from robot +X axis, looking down from above:      │
+# │       0°   = camera looks along robot +X (across table)        │
+# │       90°  = camera looks along robot +Y (toward net)          │
+# │       180° = camera looks along robot -X (opposite side)       │
+# │     Your camera looks across the table → yaw ≈ 0° or 180°     │
+# │     depending on which side the camera is on.                  │
+# │                                                                │
+# │  3. PITCH (degrees) — downward tilt from horizontal            │
+# │       0°  = camera is level                                    │
+# │       20° = camera tilted 20° DOWNWARD (your fixed stand)      │
+# │     Positive = looking down.                                   │
+# │                                                                │
+# │  4. ROLL (degrees) — tilt around viewing axis                  │
+# │       0° = camera is level (horizon is horizontal in image)    │
+# │     Positive = clockwise when looking through the camera.      │
+# │                                                                │
+# │  After measuring, update the values below OR call              │
+# │  predictor.set_camera_pose(x, y, z, yaw, pitch, roll).        │
+# └─────────────────────────────────────────────────────────────────┘
+#
+CAM_POSE_X_MM   = 0.0      # PLACEHOLDER — measure lateral offset from robot center
+CAM_POSE_Y_MM   = 0.0      # PLACEHOLDER — measure along-table offset from robot center
+CAM_POSE_Z_MM   = 0.0      # PLACEHOLDER — measure vertical offset from robot base plate
+CAM_POSE_YAW    = 0.0      # degrees — PLACEHOLDER (0° if camera looks along robot +X)
+CAM_POSE_PITCH  = 20.0     # degrees — camera tilted 20° downward (known from fixed stand)
+CAM_POSE_ROLL   = 0.0      # degrees — PLACEHOLDER (0° if camera is level)
+
 
 class TrajectoryPredictor:
     """
@@ -116,10 +181,14 @@ class TrajectoryPredictor:
         self._y_min_since_reset = None    # track min Y for bounce threshold
         self._rising_count = 0            # consecutive rising frames
 
-        # Camera-to-robot transform (set via set_table_calibration)
-        self._cam_z_center = None   # camera Z at table center-width (cm)
-        self._cam_y_table = None    # camera Y at table surface (cm)
-        self._robot_z_offset = ROBOT_HOME[2]  # robot Z at table surface (mm)
+        # Camera-to-robot rigid transform (rotation + translation)
+        # Built from camera pose measurements. Call set_camera_pose() to update.
+        self._R_cam_to_robot = None   # 3x3 rotation matrix
+        self._t_cam_to_robot = None   # 3-element translation vector (mm)
+        self._cam_pose_set = False
+        self._build_transform(
+            pos_mm=(CAM_POSE_X_MM, CAM_POSE_Y_MM, CAM_POSE_Z_MM),
+            yaw=CAM_POSE_YAW, pitch=CAM_POSE_PITCH, roll=CAM_POSE_ROLL)
 
     # ================================================================
     # CALIBRATION
@@ -130,23 +199,86 @@ class TrajectoryPredictor:
         self.robot_x_cam = camera_x
         print(f"[Predictor] Robot endline at camera X = {camera_x:.1f} cm")
 
-    def set_table_calibration(self, cam_z_center, cam_y_table,
-                              robot_z_offset=None):
+    def set_camera_pose(self, x_mm, y_mm, z_mm, yaw, pitch, roll):
         """
-        Set camera coordinates of table reference points.
+        Set camera pose in robot frame and rebuild the transform.
+
+        See the HOW TO MEASURE block at the top of this file for details.
 
         Args:
-            cam_z_center: Camera Z at center of table width (cm)
-            cam_y_table: Camera Y at table surface level (cm)
-            robot_z_offset: Robot Z at table surface (mm), default ROBOT_HOME[2]
+            x_mm:  lateral offset from robot center (mm, + = robot's right)
+            y_mm:  along-table offset from robot center (mm, + = toward net)
+            z_mm:  vertical offset from robot base plate (mm, + = above)
+            yaw:   horizontal angle from robot +X axis (degrees)
+            pitch: downward tilt from horizontal (degrees, + = looking down)
+            roll:  rotation around viewing axis (degrees, + = clockwise)
         """
-        self._cam_z_center = cam_z_center
-        self._cam_y_table = cam_y_table
-        if robot_z_offset is not None:
-            self._robot_z_offset = robot_z_offset
-        print(f"[Predictor] Table: Z_center={cam_z_center:.1f}, "
-              f"Y_surface={cam_y_table:.1f} cm, "
-              f"robot_z_offset={self._robot_z_offset:.0f} mm")
+        self._build_transform(pos_mm=(x_mm, y_mm, z_mm),
+                              yaw=yaw, pitch=pitch, roll=roll)
+        self._cam_pose_set = True
+        print(f"[Predictor] Camera pose: pos=({x_mm:.0f}, {y_mm:.0f}, {z_mm:.0f}) mm, "
+              f"yaw={yaw:.1f}° pitch={pitch:.1f}° roll={roll:.1f}°")
+
+    def _build_transform(self, pos_mm, yaw, pitch, roll):
+        """
+        Build rotation matrix R and translation t for camera → robot transform.
+
+            p_robot_mm = R @ (p_cam_cm * CM_TO_MM) + t
+
+        Two stages:
+          1. R_optical: converts OpenCV camera axes to a standard frame
+             where forward = +X, right = +Y, up = +Z (pure axis swap).
+          2. R_euler: applies the camera's physical orientation
+             (yaw / pitch / roll) in the robot base frame.
+
+        OpenCV camera axes:
+            cam_x = right, cam_y = down, cam_z = forward
+
+        Standard frame (at yaw=pitch=roll=0):
+            +X = camera forward (across table width)
+            +Y = camera right (along table length)
+            +Z = camera up (vertical)
+        """
+        # Stage 1: OpenCV optical axes → standard frame
+        #   cam_z (forward) → +X
+        #   cam_x (right)   → +Y
+        #   cam_y (down)    → -Z
+        R_optical = np.array([
+            [0.0, 0.0, 1.0],
+            [1.0, 0.0, 0.0],
+            [0.0, -1.0, 0.0],
+        ])
+
+        # Stage 2: Euler rotation ZYX (yaw → pitch → roll)
+        yaw_r = math.radians(yaw)
+        pitch_r = math.radians(pitch)
+        roll_r = math.radians(roll)
+
+        cy, sy = math.cos(yaw_r), math.sin(yaw_r)
+        cp, sp = math.cos(pitch_r), math.sin(pitch_r)
+        cr, sr = math.cos(roll_r), math.sin(roll_r)
+
+        # Rz(yaw): rotation about vertical (+Z)
+        Rz = np.array([[cy, -sy, 0.0],
+                        [sy,  cy, 0.0],
+                        [0.0, 0.0, 1.0]])
+
+        # Ry(pitch): rotation about +Y — positive pitch tilts forward (+X)
+        # direction downward (-Z), i.e. camera looks down
+        Ry = np.array([[ cp, 0.0, sp],
+                        [0.0, 1.0, 0.0],
+                        [-sp, 0.0, cp]])
+
+        # Rx(roll): rotation about +X (camera forward after yaw+pitch)
+        Rx = np.array([[1.0, 0.0, 0.0],
+                        [0.0, cr, -sr],
+                        [0.0, sr,  cr]])
+
+        R_euler = Rz @ Ry @ Rx
+
+        # Combined: camera optical frame → robot base frame
+        self._R_cam_to_robot = R_euler @ R_optical
+        self._t_cam_to_robot = np.array(pos_mm, dtype=float)
 
     # ================================================================
     # OUTLIER REJECTION
@@ -454,35 +586,32 @@ class TrajectoryPredictor:
 
     def cam_to_robot(self, cam_x, cam_y, cam_z):
         """
-        Transform camera coords (cm) → robot coords (mm).
+        Transform camera coords (cm) → robot coords (mm) using rigid transform.
 
-        Camera axes:
-            cam_x = along table LENGTH (ball travel direction)
-            cam_y = vertical (down = positive)
-            cam_z = across table WIDTH (depth from camera)
+            p_robot = R_cam_to_robot @ (p_cam * CM_TO_MM) + t_cam_to_robot
 
-        Robot axes (delta robot, from robot.h):
-            robot_x = horizontal, across table width    (±500mm)
-            robot_y = horizontal, along table length    (±350mm)
-            robot_z = vertical (down = more negative)   (-1100 to -700mm)
-
-        Camera → Robot:
-            robot_x = (cam_z - z_center) * 10           [lateral, mm]
-            robot_y = -(cam_x - x_end) * 10             [along table, approaching = negative]
-            robot_z = -(cam_y - y_table) * 10 + z_off   [vertical, table surface = z_offset]
+        The rotation matrix R accounts for the camera's orientation (including
+        the 20° pitch), so cam_Y and cam_Z are properly decomposed into true
+        vertical and horizontal components.
 
         Returns (robot_x_mm, robot_y_mm, robot_z_mm).
         """
-        z_center = self._cam_z_center if self._cam_z_center is not None else 0.0
-        y_table = self._cam_y_table if self._cam_y_table is not None else 0.0
-        x_end = self.robot_x_cam if self.robot_x_cam is not None else 0.0
-        z_off = self._robot_z_offset
+        p_cam_mm = np.array([cam_x, cam_y, cam_z]) * CM_TO_MM
+        p_robot = self._R_cam_to_robot @ p_cam_mm + self._t_cam_to_robot
+        return (float(p_robot[0]), float(p_robot[1]), float(p_robot[2]))
 
-        robot_x = (cam_z - z_center) * CM_TO_MM              # cam Z → robot X (lateral)
-        robot_y = -(cam_x - x_end) * CM_TO_MM                # cam X → robot Y (approaching = negative)
-        robot_z = -(cam_y - y_table) * CM_TO_MM + z_off      # cam Y → robot Z (vertical)
+    def robot_to_cam(self, robot_x, robot_y, robot_z):
+        """
+        Inverse transform: robot coords (mm) → camera coords (cm).
 
-        return (robot_x, robot_y, robot_z)
+            p_cam = R^T @ (p_robot - t) / CM_TO_MM
+
+        Returns (cam_x, cam_y, cam_z) in cm.
+        """
+        p_robot = np.array([robot_x, robot_y, robot_z])
+        p_cam_mm = self._R_cam_to_robot.T @ (p_robot - self._t_cam_to_robot)
+        p_cam_cm = p_cam_mm / CM_TO_MM
+        return (float(p_cam_cm[0]), float(p_cam_cm[1]), float(p_cam_cm[2]))
 
     def check_workspace(self, robot_x, robot_y, robot_z):
         """Check if point is within robot rectangular workspace (from robot.h)."""

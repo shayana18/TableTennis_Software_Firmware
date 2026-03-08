@@ -8,11 +8,11 @@ Change camera parameters HERE and they auto-propagate to every script
 
 import cv2
 import time
-
+     
 # ====================================================================
 #  CAMERA SETTINGS — MAINNNNN
 # ====================================================================
-CAMERA_LEFT_ID  = 1    # USB device index for left camera  (camera0)
+CAMERA_LEFT_ID  = 1      # USB device index for left camera  (camera0)
 CAMERA_RIGHT_ID = 2       # USB device index for right camera (camera1)
 FRAME_WIDTH     = 640    # Horizontal resolution
 FRAME_HEIGHT    = 480  # Vertical resolution
@@ -62,24 +62,11 @@ def configure_camera(cap, width=None, height=None, trigger_mode=None):
         trigger_mode = TRIGGER_MODE
 
     # --- Codec, resolution, framerate ---
-    # Some ArduCam units on Windows/DirectShow need multiple attempts
-    # or a dummy read before they accept MJPG + resolution settings.
     fourcc_mjpg = cv2.VideoWriter_fourcc(*FOURCC)
-
-    for _attempt in range(3):
-        cap.set(cv2.CAP_PROP_FOURCC, fourcc_mjpg)
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-        cap.set(cv2.CAP_PROP_FPS, FPS)
-
-        actual_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        actual_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        if actual_w == width and actual_h == height:
-            break
-
-        # Read a dummy frame to kick the pipeline, then retry
-        cap.read()
-        time.sleep(0.1)
+    cap.set(cv2.CAP_PROP_FOURCC, fourcc_mjpg)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+    cap.set(cv2.CAP_PROP_FPS, FPS)
 
     # --- Exposure control (always manual) ---
     cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)

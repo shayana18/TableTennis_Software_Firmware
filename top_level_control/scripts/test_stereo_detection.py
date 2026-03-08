@@ -71,9 +71,15 @@ class ArducamStereoCapture:
         print(f"\nCameras started: Left=ID{self.cam_left_id}, Right=ID{self.cam_right_id}")
 
     def read(self):
-        """Read frames from both cameras."""
-        ret_left, frame_left = self.cap_left.read()
-        ret_right, frame_right = self.cap_right.read()
+        """Read synchronized frames from both cameras.
+
+        Uses grab()/retrieve() to ensure both frames come from the same
+        trigger pulse (critical for hardware-triggered cameras).
+        """
+        if not self.cap_left.grab() or not self.cap_right.grab():
+            return False, None, False, None
+        ret_left, frame_left = self.cap_left.retrieve()
+        ret_right, frame_right = self.cap_right.retrieve()
         return ret_left, frame_left, ret_right, frame_right
 
     def stop_cameras(self):

@@ -138,7 +138,7 @@ class TrajectoryView3D:
             self._draw_x_plane(img, robot_x_cam, actual)
 
         # Workspace wireframe (robot limits → camera coords)
-        if predictor is not None and predictor._cam_z_center is not None:
+        if predictor is not None and predictor._R_cam_to_robot is not None:
             self._draw_workspace_box(img, predictor)
 
         self._draw_axes(img)
@@ -248,17 +248,6 @@ class TrajectoryView3D:
             cv2.putText(img, f"Robot X={tx:.0f}cm", (lp[0]-30, lp[1]-5),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.3, (80,80,160), 1)
 
-    def _robot_to_cam(self, rx, ry, rz, predictor):
-        """Inverse of cam_to_robot: robot (mm) → camera (cm)."""
-        z_center = predictor._cam_z_center or 0.0
-        y_table = predictor._cam_y_table or 0.0
-        x_end = predictor.robot_x_cam or 0.0
-        z_off = predictor._robot_z_offset
-        cam_z = rx / CM_TO_MM + z_center
-        cam_x = -ry / CM_TO_MM + x_end
-        cam_y = -(rz - z_off) / CM_TO_MM + y_table
-        return (cam_z, cam_x, cam_y)  # note: returns (cam_x, cam_y, cam_z) order below
-
     def _draw_workspace_box(self, img, predictor):
         """Draw robot workspace as wireframe box in camera coords."""
         xlo, xhi = ROBOT_LIMIT_X
@@ -269,10 +258,10 @@ class TrajectoryView3D:
             (xlo, ylo, zlo), (xhi, ylo, zlo), (xhi, yhi, zlo), (xlo, yhi, zlo),
             (xlo, ylo, zhi), (xhi, ylo, zhi), (xhi, yhi, zhi), (xlo, yhi, zhi),
         ]
-        # Convert to camera coords
+        # Convert to camera coords via predictor's inverse transform
         corners_c = []
         for rx, ry, rz in corners_r:
-            cz, cx, cy = self._robot_to_cam(rx, ry, rz, predictor)
+            cx, cy, cz = predictor.robot_to_cam(rx, ry, rz)
             corners_c.append(self.project(cx, cy, cz))
         # Draw 12 edges of the box
         edges = [(0,1),(1,2),(2,3),(3,0),  # bottom
@@ -288,7 +277,7 @@ class TrajectoryView3D:
                         cv2.FONT_HERSHEY_SIMPLEX, 0.28, ws_clr, 1)
 
         # Robot home marker
-        hz, hx, hy = self._robot_to_cam(ROBOT_HOME[0], ROBOT_HOME[1], ROBOT_HOME[2], predictor)
+        hx, hy, hz = predictor.robot_to_cam(ROBOT_HOME[0], ROBOT_HOME[1], ROBOT_HOME[2])
         hp = self.project(hx, hy, hz)
         if self._ok(*hp):
             cv2.drawMarker(img, hp, (0, 200, 200), cv2.MARKER_STAR, 10, 1)

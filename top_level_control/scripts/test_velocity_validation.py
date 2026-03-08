@@ -1,43 +1,44 @@
 """
-Velocity & Prediction Validation Test
-=======================================
-Validates the trajectory pipeline by comparing predicted vs actual ball positions.
+Test Velocity Validation — Post-hoc Analysis of Real-time Velocity Estimates
 
-WORKFLOW (fully automatic):
-    1. Script starts → MOG2 warmup overlay shows progress
-    2. Recording #1 ARMED once warmup completes
-    3. Toss ball → detection auto-starts recording
-    4. Ball lost for 10+ consecutive frames → auto-prints toss summary
-    5. Auto-arms next recording — just toss again
-    6. Press 'a' to see matplotlib plots for last toss
+Records stereo-triangulated throws, then compares the real-time velocity
+estimates (from TrajectoryPredictor's regression) against ground-truth
+curve fits computed post-hoc over ALL collected points.
 
-DETECTION: MOG2 background subtraction (no thresholds, lighting-invariant)
+GROUND TRUTH (physics):
+    X(t) = linear   → slope = true Vx
+    Y(t) = quadratic → Vy0 + gravity  (measured_g should be ~981 cm/s²)
+    Z(t) = linear   → slope = true Vz
 
-LIVE OVERLAY:
-    - Green circle: Actual detected position
-    - Magenta diamond: Where the model PREDICTED the ball would be
-    - White line: Prediction error vector
-    - The closer they are, the better the model
+LAYOUT:
+  ┌──────────────────┬──────────────────┐
+  │  LEFT CAMERA      │  RIGHT CAMERA    │
+  ├──────────────────────────────────────┤
+  │  ANALYSIS CHART  (post-throw only)   │
+  └──────────────────────────────────────┘
 
 CONTROLS:
-    q       - Quit
-    a       - Analyze last recording (show plots)
-    r       - Reset / clear everything
-    b       - Reset background model (re-warmup)
-    n       - Manual re-arm override
-    SPACE   - Manual start/stop override
-
-CAMERA: Arducam OV9782 Global Shutter USB Camera
-        1MP, 100fps @ 1280x800 MJPG
+    q - Quit, r - Reset throw, b - Reset background
+    SPACE - Skip warmup, p - Print all-throws summary
 """
 
 import cv2
 import sys
 import os
 import time
+import math
 import numpy as np
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+from matplotlib.figure import Figure
+from matplotlib.backends.backend_agg import FigureCanvasAgg
+
+script_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(script_dir)
+if parent_dir not in sys.path:
+    sys.path.insert(0, parent_dir)
 
 from tracking.stereo_triangulator import StereoTriangulator
 from trajectory.trajectory_predictor import TrajectoryPredictor
@@ -45,732 +46,1221 @@ from trajectory.physics_model import PhysicsModel
 from config.camera_config import load_camera_settings
 
 
-class VelocityValidator:
-    """Validates velocity estimation and trajectory prediction accuracy."""
+# ================================================================
+# THROW ANALYZER — pure math, no UI
+# ================================================================
 
-    # How many frames ahead to predict for comparison
-    LOOKAHEAD_FRAMES = 5
+class ThrowAnalyzer:
+    """
+    Post-hoc analysis of a recorded throw.
+
+    Given a list of (x, y, z, t) positions, fits physics curves
+    and compares against real-time velocity estimates.
+    """
+
+    GRAVITY_EXPECTED = 981.0  # cm/s²
+
+    def __init__(self, positions, rt_velocity=None, rt_corrected_velocity=None,
+                 predictor_was_ready=False, rt_snap_time=None):
+        """
+        Args:
+            positions: list of (x, y, z, t) tuples
+            rt_velocity: dict from TrajectoryPredictor.get_velocity() at snapshot time
+            rt_corrected_velocity: (vx, vy, vz) from _get_corrected_velocity()
+            predictor_was_ready: whether predictor had reached is_ready()
+            rt_snap_time: relative time of RT snapshot (seconds from throw start)
+        """
+        self.positions = positions
+        self.rt_velocity = rt_velocity
+        self.rt_corrected = rt_corrected_velocity
+        self.predictor_was_ready = predictor_was_ready
+        self.rt_snap_time = rt_snap_time
+
+    def analyze(self):
+        """Run full post-hoc analysis. Returns results dict."""
+        n = len(self.positions)
+        if n < 4:
+            return {'valid': False, 'reason': 'insufficient data', 'n_points': n}
+
+        arr = np.array(self.positions)
+        t = arr[:, 3] - arr[0, 3]  # relative time
+        duration = t[-1]
+
+        if duration < 0.05:
+            return {'valid': False, 'reason': 'throw too short',
+                    'n_points': n, 'duration': duration}
+
+        x, y, z = arr[:, 0], arr[:, 1], arr[:, 2]
+
+        # Bounce segmentation — per-arc analysis
+        arcs, bounce_indices = self._segment_arcs(t, x, y, z)
+        arc_results = [self._analyze_arc(arc) for arc in arcs]
+
+        # Find best arc (highest Y R², longest if tied)
+        best_arc = None
+        if arc_results:
+            best_arc = max(arc_results,
+                           key=lambda a: (a['fit_y']['r_squared'], a['n_points']))
+
+        # Post-hoc curve fits (whole trajectory — kept for backward compat)
+        fit_x = self._fit_linear(t, x)
+        fit_y = self._fit_quadratic(t, y)
+        fit_z = self._fit_linear(t, z)
+
+        # Post-hoc velocities (initial)
+        posthoc_vx = fit_x['slope']
+        posthoc_vy0 = fit_y['b']  # dy/dt at t=0
+        posthoc_vz = fit_z['slope']
+        posthoc_speed = math.sqrt(posthoc_vx**2 + posthoc_vy0**2 + posthoc_vz**2)
+
+        # Gravity measurement
+        measured_g = fit_y['measured_g']
+        g_error_pct = (measured_g - self.GRAVITY_EXPECTED) / self.GRAVITY_EXPECTED * 100
+
+        # Finite-difference velocities
+        fd = self._compute_finite_differences(t, x, y, z)
+
+        # Per-axis fit residuals (RMS)
+        res_x = x - np.polyval(fit_x['coeffs'], t)
+        res_y = y - np.polyval(fit_y['coeffs'], t)
+        res_z = z - np.polyval(fit_z['coeffs'], t)
+        fit_residuals = {
+            'rms_x': float(np.sqrt(np.mean(res_x**2))),
+            'rms_y': float(np.sqrt(np.mean(res_y**2))),
+            'rms_z': float(np.sqrt(np.mean(res_z**2))),
+        }
+
+        # Forward prediction errors (using expected gravity)
+        pred_errors = self._compute_prediction_errors(
+            t, x, y, z, posthoc_vx, posthoc_vy0, posthoc_vz,
+            gravity=self.GRAVITY_EXPECTED)
+
+        # Forward prediction errors (using measured gravity from fit)
+        pred_errors_measured = self._compute_prediction_errors(
+            t, x, y, z, posthoc_vx, posthoc_vy0, posthoc_vz,
+            gravity=abs(measured_g))
+
+        # Real-time vs post-hoc comparison — AT THE SAME TIMESTAMP
+        #
+        # RT velocity is corrected to t_snap (the snapshot time).
+        # Post-hoc Vy changes with time: Vy(t) = Vy0 + measured_g * t
+        # Post-hoc Vx and Vz are constant (linear fits).
+        # We must compare both at t_snap for a fair comparison.
+        rt_comparison = None
+        if self.predictor_was_ready and self.rt_corrected is not None:
+            rt_vx, rt_vy, rt_vz = self.rt_corrected
+            rt_speed = math.sqrt(rt_vx**2 + rt_vy**2 + rt_vz**2)
+
+            t_snap = self.rt_snap_time if self.rt_snap_time is not None else 0.0
+
+            # Post-hoc velocity at snapshot time
+            ph_vx_at_snap = posthoc_vx                              # constant
+            ph_vy_at_snap = posthoc_vy0 + measured_g * t_snap       # Vy0 + g*t
+            ph_vz_at_snap = posthoc_vz                              # constant
+
+            rt_comparison = {
+                'rt_vx': rt_vx, 'rt_vy': rt_vy, 'rt_vz': rt_vz,
+                'rt_speed': rt_speed,
+                'snap_time': t_snap,
+                'ph_vx_at_snap': ph_vx_at_snap,
+                'ph_vy_at_snap': ph_vy_at_snap,
+                'ph_vz_at_snap': ph_vz_at_snap,
+                'err_vx': abs(rt_vx - ph_vx_at_snap),
+                'err_vy': abs(rt_vy - ph_vy_at_snap),
+                'err_vz': abs(rt_vz - ph_vz_at_snap),
+                'pct_vx': self._safe_pct(rt_vx, ph_vx_at_snap),
+                'pct_vy': self._safe_pct(rt_vy, ph_vy_at_snap),
+                'pct_vz': self._safe_pct(rt_vz, ph_vz_at_snap),
+            }
+
+        return {
+            'valid': True,
+            'n_points': n,
+            'duration': duration,
+            'fit_x': fit_x,
+            'fit_y': fit_y,
+            'fit_z': fit_z,
+            'posthoc_vx': posthoc_vx,
+            'posthoc_vy0': posthoc_vy0,
+            'posthoc_vz': posthoc_vz,
+            'posthoc_speed': posthoc_speed,
+            'measured_g': measured_g,
+            'g_error_pct': g_error_pct,
+            'finite_diff': fd,
+            'fit_residuals': fit_residuals,
+            'pred_errors': pred_errors,
+            'pred_errors_measured': pred_errors_measured,
+            'rt_comparison': rt_comparison,
+            't': t,
+            'x': x, 'y': y, 'z': z,
+            'bounce_indices': bounce_indices,
+            'n_bounces': len(bounce_indices),
+            'arc_results': arc_results,
+            'best_arc': best_arc,
+        }
+
+    def _fit_linear(self, t, values):
+        """Fit values = slope*t + intercept. Returns dict with R²."""
+        coeffs = np.polyfit(t, values, 1)
+        slope, intercept = coeffs[0], coeffs[1]
+        fitted = np.polyval(coeffs, t)
+        ss_res = np.sum((values - fitted) ** 2)
+        ss_tot = np.sum((values - np.mean(values)) ** 2)
+        r_squared = 1.0 - ss_res / ss_tot if ss_tot > 1e-12 else 0.0
+        return {'slope': float(slope), 'intercept': float(intercept),
+                'r_squared': float(r_squared), 'coeffs': coeffs}
+
+    def _fit_quadratic(self, t, values):
+        """Fit values = a*t² + b*t + c. measured_g = 2*a (Y down = +g)."""
+        coeffs = np.polyfit(t, values, 2)
+        a, b, c = coeffs[0], coeffs[1], coeffs[2]
+        fitted = np.polyval(coeffs, t)
+        ss_res = np.sum((values - fitted) ** 2)
+        ss_tot = np.sum((values - np.mean(values)) ** 2)
+        r_squared = 1.0 - ss_res / ss_tot if ss_tot > 1e-12 else 0.0
+        measured_g = 2.0 * a  # Y(t) = ½g·t² + Vy0·t + Y0 → a = ½g
+        return {'a': float(a), 'b': float(b), 'c': float(c),
+                'r_squared': float(r_squared), 'measured_g': float(measured_g),
+                'coeffs': coeffs}
+
+    def _compute_finite_differences(self, t, x, y, z):
+        """Central differences for velocity visualization."""
+        n = len(t)
+        if n < 3:
+            return {'t': np.array([]), 'vx': np.array([]),
+                    'vy': np.array([]), 'vz': np.array([])}
+        fd_t = t[1:-1]
+        dt = t[2:] - t[:-2]
+        # Avoid division by zero
+        dt = np.where(dt > 1e-9, dt, 1e-9)
+        fd_vx = (x[2:] - x[:-2]) / dt
+        fd_vy = (y[2:] - y[:-2]) / dt
+        fd_vz = (z[2:] - z[:-2]) / dt
+        return {'t': fd_t, 'vx': fd_vx, 'vy': fd_vy, 'vz': fd_vz}
+
+    def _compute_prediction_errors(self, t, x, y, z, vx0, vy0, vz0,
+                                    gravity=None):
+        """Forward prediction from first point using physics model."""
+        if len(t) < 2:
+            return {'t': np.array([]), 'errors': np.array([]),
+                    'mean': 0.0, 'max': 0.0, 'n_points': 0}
+
+        g = gravity if gravity is not None else self.GRAVITY_EXPECTED
+        model = PhysicsModel(gravity=g, y_down=True,
+                             enable_drag=False)
+        pos0 = (float(x[0]), float(y[0]), float(z[0]))
+        vel0 = (vx0, vy0, vz0)
+
+        errors = []
+        error_t = []
+        for i in range(1, len(t)):
+            dt = float(t[i])
+            pred = model.predict_position(pos0, vel0, dt)
+            err = math.sqrt((x[i] - pred[0])**2 +
+                            (y[i] - pred[1])**2 +
+                            (z[i] - pred[2])**2)
+            errors.append(err)
+            error_t.append(t[i])
+
+        errors = np.array(errors)
+        error_t = np.array(error_t)
+        return {
+            't': error_t, 'errors': errors,
+            'mean': float(np.mean(errors)) if len(errors) > 0 else 0.0,
+            'max': float(np.max(errors)) if len(errors) > 0 else 0.0,
+            'n_points': len(errors),
+        }
+
+    # ================================================================
+    # BOUNCE SEGMENTATION — split trajectory into per-arc segments
+    # ================================================================
+
+    MIN_BOUNCE_FALL = 10.0   # cm, same as real-time detector
+    BOUNCE_RISE_FRAMES = 2
+
+    def _detect_bounces(self, t, y):
+        """
+        Find bounce indices in Y data.
+
+        Returns list of indices where bounces occur.
+        Uses same logic as real-time detector: Y must have fallen
+        MIN_BOUNCE_FALL, then rise for BOUNCE_RISE_FRAMES consecutive frames.
+        """
+        bounces = []
+        y_max_since_start = y[0]  # max Y = lowest point (Y+ = down)
+        y_start = y[0]
+        rising_count = 0
+
+        for i in range(1, len(y)):
+            y_max_since_start = max(y_max_since_start, y[i])
+            dy = y[i] - y[i - 1]
+
+            if dy < 0:  # rising (Y decreasing)
+                rising_count += 1
+            else:
+                rising_count = 0
+
+            fall_amount = y_max_since_start - y_start
+
+            if (fall_amount >= self.MIN_BOUNCE_FALL and
+                    rising_count >= self.BOUNCE_RISE_FRAMES):
+                bounces.append(i - 1)  # bounce point is where reversal started
+                # Reset for next arc
+                y_start = y[i]
+                y_max_since_start = y[i]
+                rising_count = 0
+
+        return bounces
+
+    def _segment_arcs(self, t, x, y, z):
+        """
+        Segment trajectory into arcs between bounces.
+
+        Returns list of dicts with per-arc data arrays and indices.
+        """
+        bounce_indices = self._detect_bounces(t, y)
+
+        # Build arc boundaries: [0, bounce0, bounce1, ..., end]
+        boundaries = [0] + bounce_indices + [len(t)]
+        arcs = []
+        for i in range(len(boundaries) - 1):
+            start = boundaries[i]
+            end = boundaries[i + 1]
+            if end - start < 4:  # need at least 4 points for quadratic fit
+                continue
+            arcs.append({
+                'arc_num': len(arcs),
+                'start_idx': start,
+                'end_idx': end,
+                't': t[start:end] - t[start],  # relative time within arc
+                't_abs': t[start:end],           # absolute time
+                'x': x[start:end],
+                'y': y[start:end],
+                'z': z[start:end],
+                'n_points': end - start,
+                'duration': t[end - 1] - t[start],
+            })
+        return arcs, bounce_indices
+
+    def _analyze_arc(self, arc):
+        """Fit physics curves to a single arc. Returns per-arc results."""
+        t, y = arc['t'], arc['y']
+        fit_y = self._fit_quadratic(t, y)
+        fit_x = self._fit_linear(t, arc['x'])
+        fit_z = self._fit_linear(t, arc['z'])
+
+        measured_g = fit_y['measured_g']
+        g_error_pct = ((measured_g - self.GRAVITY_EXPECTED) /
+                       self.GRAVITY_EXPECTED * 100)
+
+        return {
+            'arc_num': arc['arc_num'],
+            'n_points': arc['n_points'],
+            'duration': arc['duration'],
+            'measured_g': measured_g,
+            'g_error_pct': g_error_pct,
+            'fit_y': fit_y,
+            'fit_x': fit_x,
+            'fit_z': fit_z,
+            'start_idx': arc['start_idx'],
+            'end_idx': arc['end_idx'],
+        }
+
+    @staticmethod
+    def _safe_pct(actual, reference):
+        """Percentage error, avoiding division by near-zero."""
+        if abs(reference) < 5.0:
+            return None  # absolute error only
+        return abs(actual - reference) / abs(reference) * 100.0
+
+
+# ================================================================
+# VELOCITY CHART — matplotlib → BGR numpy array
+# ================================================================
+
+class VelocityChart:
+    """Renders 2x3 analysis chart as a BGR numpy array for OpenCV display."""
+
+    CHART_W = 960
+    CHART_H = 640
+
+    def render(self, analysis, throw_number):
+        """
+        Render analysis results into a BGR numpy array.
+
+        Args:
+            analysis: dict from ThrowAnalyzer.analyze()
+            throw_number: int
+
+        Returns:
+            np.ndarray (H, W, 3) BGR
+        """
+        if not analysis.get('valid'):
+            img = np.full((self.CHART_H, self.CHART_W, 3), 20, dtype=np.uint8)
+            reason = analysis.get('reason', 'unknown')
+            cv2.putText(img, f"Throw #{throw_number}: {reason}",
+                        (30, self.CHART_H // 2),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+            return img
+
+        dpi = 100
+        fig = Figure(figsize=(self.CHART_W / dpi, self.CHART_H / dpi), dpi=dpi)
+        fig.set_facecolor('#141418')
+        canvas = FigureCanvasAgg(fig)
+        axes = fig.subplots(2, 3)
+
+        t = analysis['t']
+        x, y, z = analysis['x'], analysis['y'], analysis['z']
+        fit_x = analysis['fit_x']
+        fit_y = analysis['fit_y']
+        fit_z = analysis['fit_z']
+        fd = analysis['finite_diff']
+        rt = analysis.get('rt_comparison')
+
+        style = {'facecolor': '#141418'}
+        for row in axes:
+            for ax in row:
+                ax.set_facecolor('#1a1a22')
+                ax.tick_params(colors='#888', labelsize=7)
+                ax.spines['bottom'].set_color('#444')
+                ax.spines['top'].set_color('#444')
+                ax.spines['left'].set_color('#444')
+                ax.spines['right'].set_color('#444')
+
+        t_fit = np.linspace(t[0], t[-1], 200)
+
+        # ---- Row 1: Position fits ----
+        self._plot_position(axes[0, 0], t, x, t_fit, fit_x, 'X(t)',
+                            is_quadratic=False)
+        self._plot_position(axes[0, 1], t, y, t_fit, fit_y, 'Y(t)',
+                            is_quadratic=True, analysis=analysis)
+        self._plot_position(axes[0, 2], t, z, t_fit, fit_z, 'Z(t)',
+                            is_quadratic=False)
+
+        # ---- Row 2: Velocity ----
+        rt_snap_t = rt['snap_time'] if rt else None
+        self._plot_velocity(axes[1, 0], fd, 'vx', fit_x['slope'],
+                            rt['rt_vx'] if rt else None, 'Vx(t)',
+                            rt_time=rt_snap_t)
+        self._plot_velocity_y(axes[1, 1], fd, fit_y, analysis, rt)
+        self._plot_velocity(axes[1, 2], fd, 'vz', fit_z['slope'],
+                            rt['rt_vz'] if rt else None, 'Vz(t)',
+                            rt_time=rt_snap_t)
+
+        fig.suptitle(f'Throw #{throw_number}  |  {analysis["n_points"]} pts  |  '
+                     f'{analysis["duration"]*1000:.0f}ms  |  '
+                     f'{analysis["posthoc_speed"]:.0f} cm/s',
+                     color='#ccc', fontsize=10, y=0.98)
+        fig.tight_layout(rect=[0, 0, 1, 0.95])
+
+        canvas.draw()
+        buf = canvas.buffer_rgba()
+        img = np.asarray(buf)
+        # RGBA → BGR
+        img_bgr = cv2.cvtColor(img, cv2.COLOR_RGBA2BGR)
+        plt.close(fig)
+
+        if img_bgr.shape[:2] != (self.CHART_H, self.CHART_W):
+            img_bgr = cv2.resize(img_bgr, (self.CHART_W, self.CHART_H))
+        return img_bgr
+
+    def _plot_position(self, ax, t, vals, t_fit, fit, title,
+                       is_quadratic=False, analysis=None):
+        ax.scatter(t * 1000, vals, c='#33cc55', s=12, alpha=0.8, zorder=3)
+
+        fitted = np.polyval(fit['coeffs'], t_fit)
+        ax.plot(t_fit * 1000, fitted, color='#dda830', linewidth=1.5, zorder=2)
+
+        r2 = fit['r_squared']
+        r2_color = '#33cc55' if r2 > 0.9 else '#ddaa00' if r2 > 0.8 else '#dd3333'
+        label = f"R²={r2:.3f}"
+
+        if is_quadratic and analysis:
+            mg = analysis['measured_g']
+            ge = analysis['g_error_pct']
+            g_color = '#33cc55' if abs(ge) < 5 else '#ddaa00' if abs(ge) < 15 else '#dd3333'
+            label += f"\ng={mg:.0f} ({ge:+.1f}%)"
+            ax.text(0.97, 0.05, label, transform=ax.transAxes,
+                    fontsize=7, color=g_color, ha='right', va='bottom',
+                    family='monospace')
+        else:
+            ax.text(0.97, 0.05, label, transform=ax.transAxes,
+                    fontsize=7, color=r2_color, ha='right', va='bottom',
+                    family='monospace')
+
+        ax.set_title(title, color='#aaa', fontsize=9)
+        ax.set_xlabel('ms', color='#666', fontsize=7)
+        ax.set_ylabel('cm', color='#666', fontsize=7)
+
+    def _plot_velocity(self, ax, fd, axis_key, posthoc_val, rt_val, title,
+                       rt_time=None):
+        if len(fd['t']) > 0:
+            ax.scatter(fd['t'] * 1000, fd[axis_key], c='#5588ee',
+                       s=10, alpha=0.7, zorder=3, label='FD')
+
+        t_range = fd['t']
+        if len(t_range) > 0:
+            ax.axhline(y=posthoc_val, color='#dda830', linestyle='--',
+                       linewidth=1.5, label=f'posthoc={posthoc_val:.1f}')
+        if rt_val is not None and rt_time is not None:
+            ax.scatter([rt_time * 1000], [rt_val], c='#ee4444', s=60,
+                       marker='D', zorder=5, label=f'RT={rt_val:.1f}')
+        elif rt_val is not None:
+            ax.axhline(y=rt_val, color='#ee4444', linestyle=':',
+                       linewidth=1.5, label=f'RT={rt_val:.1f}')
+
+        ax.set_title(title, color='#aaa', fontsize=9)
+        ax.set_xlabel('ms', color='#666', fontsize=7)
+        ax.set_ylabel('cm/s', color='#666', fontsize=7)
+        ax.legend(fontsize=6, loc='best', facecolor='#222', edgecolor='#444',
+                  labelcolor='#ccc')
+
+    def _plot_velocity_y(self, ax, fd, fit_y, analysis, rt):
+        if len(fd['t']) > 0:
+            ax.scatter(fd['t'] * 1000, fd['vy'], c='#5588ee',
+                       s=10, alpha=0.7, zorder=3, label='FD')
+
+        # Expected Vy(t) = Vy0 + g*t (from quadratic fit: Vy0=b, g=2a)
+        t_range = fd['t']
+        if len(t_range) > 0:
+            t_line = np.linspace(t_range[0], t_range[-1], 100)
+            vy_line = fit_y['b'] + fit_y['measured_g'] * t_line
+            ax.plot(t_line * 1000, vy_line, color='#dda830', linewidth=1.5,
+                    label=f'posthoc Vy(t)')
+
+        if rt is not None:
+            rt_vy = rt['rt_vy']
+            t_snap = rt.get('snap_time', 0.0)
+            ax.scatter([t_snap * 1000], [rt_vy], c='#ee4444', s=60,
+                       marker='D', zorder=5, label=f'RT={rt_vy:.1f}')
+
+        mg = analysis['measured_g']
+        ge = analysis['g_error_pct']
+        ax.text(0.97, 0.05, f"g={mg:.0f} ({ge:+.1f}%)",
+                transform=ax.transAxes, fontsize=7,
+                color='#33cc55' if abs(ge) < 5 else '#dd3333',
+                ha='right', va='bottom', family='monospace')
+
+        ax.set_title('Vy(t)', color='#aaa', fontsize=9)
+        ax.set_xlabel('ms', color='#666', fontsize=7)
+        ax.set_ylabel('cm/s', color='#666', fontsize=7)
+        ax.legend(fontsize=6, loc='best', facecolor='#222', edgecolor='#444',
+                  labelcolor='#ccc')
+
+
+# ================================================================
+# VELOCITY VALIDATOR — main loop
+# ================================================================
+
+class VelocityValidator:
+    """
+    Main validator: cameras → stereo tracking → velocity analysis.
+
+    Records throws, captures real-time velocity at frame 6,
+    then runs ThrowAnalyzer post-hoc and displays chart.
+    """
+
+    CAM_W, CAM_H = 480, 300
+    CHART_W, CHART_H = 960, 640
+    SNAP_AFTER = 6          # capture RT velocity at this frame
+    LOST_THRESHOLD = 20     # frames lost before ending throw
 
     def __init__(self):
         self.script_dir = os.path.dirname(os.path.abspath(__file__))
-        self.calibration_dir = os.path.join(
-            self.script_dir, '..', 'camera_calibration', 'camera_parameters')
-        self.thresholds_stereo = os.path.join(
-            self.script_dir, '..', 'config', 'ball_thresholds_stereo.json')
-        self.thresholds_single = os.path.join(
-            self.script_dir, '..', 'config', 'ball_thresholds.json')
+        self.base_dir = os.path.dirname(self.script_dir)
+        self.calib_dir = os.path.join(
+            self.base_dir, 'camera_calibration', 'camera_parameters')
 
-        cam_settings = load_camera_settings()
-        self.frame_width = cam_settings['frame_width']
-        self.frame_height = cam_settings['frame_height']
-        self.cam_left_id = cam_settings['camera0']
-        self.cam_right_id = cam_settings['camera1']
-        self.display_width = 640
+        cam = load_camera_settings()
+        self.fw = cam['frame_width']
+        self.fh = cam['frame_height']
+        self.cam_l = cam['camera0']
+        self.cam_r = cam['camera1']
 
-        self.triangulator = None
-        self.predictor = None
+        self.tri = None
+        self.pred = None
+        self.chart_renderer = VelocityChart()
 
-        # Arm-and-capture state
-        self.recording = False
-        self.armed = True               # Start armed for first recording
-        self.consecutive_losses = 0
-        self.GRACE_FRAMES = 10          # ~100ms at 100fps — tolerates brief flickers
-        self.recording_number = 1
-        self.all_recordings = []        # Past recordings for multi-toss review
+        # Throw state
+        self._throw_active = False
+        self._throw_positions = []
+        self._lost_count = 0
+        self._throw_count = 0
+        self._diag_frame = 0
+        self._throw_t0 = None
 
-        # Recorded data for current recording
-        self.recorded_positions = []   # (x, y, z, t)
-        self.recorded_velocities = []  # (vx, vy, vz, speed, t)
-        self.recorded_predictions = [] # (pred_x, pred_y, pred_z, actual_x, actual_y, actual_z, dt, t)
+        # RT velocity snapshot
+        self._rt_velocity = None
+        self._rt_corrected = None
+        self._rt_snapped = False
+        self._predictor_was_ready = False
+        self._rt_snap_time = None  # relative to throw t0
 
-        # Live prediction for overlay
-        self.live_predicted_pos = None  # Where we predicted the ball would be NOW
-        self.live_prediction_error = None
+        # Display
+        self._chart_img = None
+        self._history = []  # list of analysis dicts
 
-        self.load_config()
+        # FPS
+        self._fps_n = 0
+        self._fps_t = time.perf_counter()
+        self._fps = 0.0
 
-    def load_config(self):
-        pass  # Settings already loaded in __init__ via load_camera_settings()
+        # Velocity convergence tracking (per-throw)
+        self._velocity_snapshots = []
+        self._prev_accept_t = None
 
-    def load_thresholds(self):
-        print("[Detection] Using MOG2 background subtraction (no thresholds needed)")
+    # ================================================================
+    # SETUP
+    # ================================================================
 
     def check_calibration(self):
-        required = ['camera0_intrinsics.dat', 'camera1_intrinsics.dat',
-                     'camera0_rot_trans.dat', 'camera1_rot_trans.dat']
-        missing = [f for f in required
-                   if not os.path.exists(os.path.join(self.calibration_dir, f))]
+        req = ['camera0_intrinsics.dat', 'camera1_intrinsics.dat',
+               'camera0_rot_trans.dat', 'camera1_rot_trans.dat']
+        missing = [f for f in req
+                   if not os.path.exists(os.path.join(self.calib_dir, f))]
         if missing:
-            print("ERROR: Missing calibration files:")
-            for f in missing:
-                print(f"  - {f}")
+            print(f"  Missing calibration files: {missing}")
             return False
         return True
 
-    def start_cameras(self):
-        self.triangulator.start_cameras(self.frame_width, self.frame_height)
+    def warmup(self):
+        print("\n  Remove ball from view. Learning background (SPACE=skip)...")
+        t0, dur = time.time(), 2.0
+        while time.time() - t0 < dur:
+            if not self.tri.cap_left.grab():
+                continue
+            if not self.tri.cap_right.grab():
+                continue
+            _, fl = self.tri.cap_left.retrieve()
+            _, fr = self.tri.cap_right.retrieve()
+            if fl is None or fr is None:
+                continue
+            self.tri.build_background(fl, fr)
 
-    def reset_recording(self):
-        self.recorded_positions = []
-        self.recorded_velocities = []
-        self.recorded_predictions = []
-        self.live_predicted_pos = None
-        self.live_prediction_error = None
-        self.consecutive_losses = 0
-        self.predictor.reset()
-        self.recording = False
-        self.armed = True
-        self.recording_number = 1
-        self.all_recordings = []
-        print(f"\n[RESET] All cleared. Recording #{self.recording_number} armed.")
+            p = min((time.time() - t0) / dur, 1.0)
+            dl = cv2.resize(fl, (self.CAM_W, self.CAM_H))
+            bw = int(p * (self.CAM_W - 40))
+            cv2.rectangle(dl, (20, self.CAM_H - 30),
+                          (20 + bw, self.CAM_H - 15), (0, 255, 255), -1)
+            cv2.putText(dl, f"BG: {p*100:.0f}%", (20, self.CAM_H - 35),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 255), 1)
+            cv2.imshow('Velocity Validation', dl)
+            k = cv2.waitKey(1) & 0xFF
+            if k == ord(' '):
+                break
+            elif k == ord('q'):
+                return False
+        print("  Ready!\n")
+        return True
 
-    def process_frame(self, result):
-        """Process one frame: record data + make predictions."""
-        t_now = time.perf_counter()
+    # ================================================================
+    # THROW MANAGEMENT
+    # ================================================================
 
-        if not result['found_3d']:
-            if self.recording:
-                self.consecutive_losses += 1
-                if self.consecutive_losses >= self.GRACE_FRAMES:
-                    self.recording = False
-                    n = len(self.recorded_positions)
-                    print(f"\n[REC #{self.recording_number} STOPPED] {n} frames captured.")
-                    self._print_toss_summary()
-                    # Archive and auto-arm next
-                    if n > 0:
-                        self.all_recordings.append({
-                            'number': self.recording_number,
-                            'positions': list(self.recorded_positions),
-                            'velocities': list(self.recorded_velocities),
-                            'predictions': list(self.recorded_predictions),
-                        })
-                    self.recording_number += 1
-                    self.recorded_positions = []
-                    self.recorded_velocities = []
-                    self.recorded_predictions = []
-                    self.live_predicted_pos = None
-                    self.live_prediction_error = None
-                    self.predictor.reset()
-                    self.armed = True
-                    print(f"[ARMED #{self.recording_number}] Ready — toss again.\n")
-            self.live_predicted_pos = None
-            self.live_prediction_error = None
+    def _start_throw(self):
+        self._throw_active = True
+        self._throw_positions = []
+        self._lost_count = 0
+        self._throw_count += 1
+        self._diag_frame = 0
+        self._rt_velocity = None
+        self._rt_corrected = None
+        self._rt_snapped = False
+        self._predictor_was_ready = False
+        self._rt_snap_time = None
+        self.pred.reset()
+
+        self._throw_t0 = None  # set on first accepted point
+        self._velocity_snapshots = []
+        self._prev_accept_t = None
+
+        print(f"\n  [THROW #{self._throw_count}]")
+        print(f"  {'Frame':>6}  {'Time(s)':>8}  {'dt_ms':>5}  {'X(cm)':>8}  {'Y(cm)':>8}  "
+              f"{'Z(cm)':>8}  |  {'Disp':>5}  {'Repr':>5}  |  Status")
+        print(f"  {'─'*6}  {'─'*8}  {'─'*5}  {'─'*8}  {'─'*8}  "
+              f"{'─'*8}  |  {'─'*5}  {'─'*5}  |  {'─'*30}")
+
+    def _end_throw(self):
+        self._throw_active = False
+        self._lost_count = 0
+
+        positions = self._throw_positions
+        n = len(positions)
+
+        if n < 4:
+            print(f"\n  [END] insufficient data ({n} points)")
             return
 
-        x, y, z = result['position_3d']
-
-        # Armed and first detection → start recording
-        if self.armed and not self.recording:
-            self.recording = True
-            self.armed = False
-            self.consecutive_losses = 0
-            self.recorded_positions = []
-            self.recorded_velocities = []
-            self.recorded_predictions = []
-            self.predictor.reset()
-            print(f"\n[REC #{self.recording_number} STARTED] Ball detected, recording...")
-
-        if not self.recording:
+        duration = positions[-1][3] - positions[0][3]
+        if duration < 0.05:
+            print(f"\n  [END] throw too short ({duration*1000:.0f}ms)")
             return
 
-        # Ball re-found during grace period — reset loss counter
-        self.consecutive_losses = 0
+        analyzer = ThrowAnalyzer(
+            positions=positions,
+            rt_velocity=self._rt_velocity,
+            rt_corrected_velocity=self._rt_corrected,
+            predictor_was_ready=self._predictor_was_ready,
+            rt_snap_time=self._rt_snap_time)
 
-        # Add position to predictor
-        self.predictor.add_position(x, y, z, t_now)
+        analysis = analyzer.analyze()
+        analysis['throw_number'] = self._throw_count
+        analysis['velocity_snapshots'] = list(self._velocity_snapshots)
+        self._history.append(analysis)
 
-        # Record position
-        self.recorded_positions.append((x, y, z, t_now))
+        self._print_analysis(analysis)
+        self._chart_img = self.chart_renderer.render(analysis, self._throw_count)
 
-        # Record velocity
-        vel = self.predictor.get_velocity()
-        if vel['valid']:
-            self.recorded_velocities.append((vel['vx'], vel['vy'], vel['vz'], vel['speed'], t_now))
+    def _reset_throw(self):
+        self._throw_active = False
+        self._throw_positions = []
+        self._lost_count = 0
+        self._throw_t0 = None
+        self._rt_velocity = None
+        self._rt_corrected = None
+        self._rt_snapped = False
+        self._predictor_was_ready = False
+        self._rt_snap_time = None
+        self._velocity_snapshots = []
+        self._prev_accept_t = None
+        self.pred.reset()
+        print("\n  [RESET]")
 
-        # --- Live prediction comparison ---
-        # Check if a previous prediction matches current time
-        if self.live_predicted_pos is not None:
-            pred = self.live_predicted_pos
-            self.live_prediction_error = np.sqrt(
-                (pred[0] - x)**2 + (pred[1] - y)**2 + (pred[2] - z)**2)
+    # ================================================================
+    # TERMINAL OUTPUT
+    # ================================================================
 
-            # Record for post-analysis
-            self.recorded_predictions.append((
-                pred[0], pred[1], pred[2],  # predicted
-                x, y, z,                     # actual
-                pred[3],                      # prediction horizon (dt)
-                t_now
-            ))
-
-        # Make prediction for NEXT frame (lookahead)
-        if self.predictor.is_ready():
-            # Predict position LOOKAHEAD_FRAMES frames ahead
-            # Estimate dt from buffer
-            avg_dt = self.predictor.position_buffer.get_average_dt()
-            if avg_dt > 0:
-                lookahead_dt = avg_dt * self.LOOKAHEAD_FRAMES
-            else:
-                lookahead_dt = 0.05  # 50ms default
-
-            current_pos = self.predictor.get_current_position()
-            current_vel = self.predictor.get_velocity()
-
-            if current_pos and current_vel['valid']:
-                # Apply the same Vy correction as the main predictor
-                positions_arr, timestamps_arr = self.predictor.position_buffer.get_as_arrays()
-                t_latest = timestamps_arr[-1]
-                t_mean = timestamps_arr.mean()
-                vy_corrected = current_vel['vy'] + (
-                    self.predictor.physics_model.gravity_sign *
-                    self.predictor.physics_model.gravity *
-                    (t_latest - t_mean)
-                )
-                corrected_vel = (current_vel['vx'], vy_corrected, current_vel['vz'])
-
-                pred_pos = self.predictor.physics_model.predict_position(
-                    current_pos, corrected_vel, lookahead_dt)
-                self.live_predicted_pos = (pred_pos[0], pred_pos[1], pred_pos[2], lookahead_dt)
-            else:
-                self.live_predicted_pos = None
-        else:
-            self.live_predicted_pos = None
-
-    def _print_toss_summary(self):
-        """Print a compact summary after each toss ends."""
-        n = len(self.recorded_positions)
-        if n < 2:
-            print("  (Too few frames for summary)")
+    def _print_analysis(self, analysis):
+        if not analysis.get('valid'):
+            reason = analysis.get('reason', 'unknown')
+            print(f"\n  [ANALYSIS] {reason}")
             return
 
-        positions = np.array(self.recorded_positions)
-        t_span = positions[-1, 3] - positions[0, 3]
-        fps = n / t_span if t_span > 0 else 0
+        n = analysis['n_points']
+        dur_ms = analysis['duration'] * 1000
+        spd = analysis['posthoc_speed']
 
-        bar = "\u2500" * 50
-        print(f"\n{bar}")
-        print(f"  TOSS #{self.recording_number} SUMMARY")
-        print(f"{bar}")
-        print(f"  Frames: {n}  |  Duration: {t_span:.3f}s  |  Rate: {fps:.0f} fps")
+        print()
+        print(f"  {'═'*56}")
+        print(f"  THROW #{analysis['throw_number']} ANALYSIS  |  "
+              f"{n} pts  |  {dur_ms:.0f}ms  |  {spd:.0f} cm/s")
+        print(f"  {'═'*56}")
 
-        if self.recorded_velocities:
-            vels = np.array(self.recorded_velocities)
-            avg_vx = np.mean(vels[:, 0])
-            avg_vy = np.mean(vels[:, 1])
-            avg_vz = np.mean(vels[:, 2])
-            avg_spd = np.mean(vels[:, 3])
-            max_spd = np.max(vels[:, 3])
-            print(f"  Avg velocity: Vx={avg_vx:.0f}  Vy={avg_vy:.0f}  Vz={avg_vz:.0f} cm/s")
-            print(f"  Speed: avg={avg_spd:.0f}  max={max_spd:.0f} cm/s")
+        fx = analysis['fit_x']
+        fy = analysis['fit_y']
+        fz = analysis['fit_z']
 
-        if self.recorded_predictions:
-            preds = np.array(self.recorded_predictions)
-            errs = np.sqrt(
-                (preds[:, 0] - preds[:, 3])**2 +
-                (preds[:, 1] - preds[:, 4])**2 +
-                (preds[:, 2] - preds[:, 5])**2
-            )
-            mean_err = np.mean(errs)
-            med_err = np.median(errs)
-            max_err = np.max(errs)
-            print(f"  Prediction error ({self.LOOKAHEAD_FRAMES}-frame lookahead):")
-            print(f"    Mean: {mean_err:.2f} cm  |  Median: {med_err:.2f} cm  |  Max: {max_err:.2f} cm")
+        print(f"  Fits:")
+        r2x_flag = " !" if fx['r_squared'] < 0.8 else ""
+        r2z_flag = " !" if fz['r_squared'] < 0.8 else ""
+        r2y_flag = " !" if fy['r_squared'] < 0.8 else ""
+        print(f"    X(t) = {fx['slope']:+.1f}t + {fx['intercept']:.1f}"
+              f"{'':>20}R²={fx['r_squared']:.3f}{r2x_flag}")
+        print(f"    Y(t) = {fy['a']:.1f}t² {fy['b']:+.1f}t {fy['c']:+.1f}"
+              f"{'':>10}R²={fy['r_squared']:.3f}{r2y_flag}"
+              f"   g={fy['measured_g']:.0f} ({analysis['g_error_pct']:+.1f}%)")
+        print(f"    Z(t) = {fz['slope']:+.1f}t + {fz['intercept']:.1f}"
+              f"{'':>20}R²={fz['r_squared']:.3f}{r2z_flag}")
 
-            if mean_err < 2.0:
-                verdict = "EXCELLENT"
-            elif mean_err < 5.0:
-                verdict = "GOOD"
-            elif mean_err < 10.0:
-                verdict = "FAIR"
+        # Flag anomalous gravity
+        mg = analysis['measured_g']
+        if mg < 700 or mg > 1300:
+            print(f"  ** ANOMALOUS GRAVITY (whole traj): {mg:.0f} cm/s² **")
+
+        # Per-arc bounce analysis
+        n_bounces = analysis.get('n_bounces', 0)
+        arc_results = analysis.get('arc_results', [])
+        best_arc = analysis.get('best_arc')
+        if n_bounces > 0:
+            bounce_idx = analysis.get('bounce_indices', [])
+            t_arr = analysis.get('t', np.array([]))
+            bounce_times = [t_arr[i] * 1000 for i in bounce_idx if i < len(t_arr)]
+            print(f"\n  BOUNCES DETECTED: {n_bounces} at t={bounce_times}")
+            print(f"  Per-arc gravity:")
+            for ar in arc_results:
+                marker = " <<<" if best_arc and ar['arc_num'] == best_arc['arc_num'] else ""
+                g_color = "OK" if abs(ar['g_error_pct']) < 10 else "!"
+                print(f"    Arc {ar['arc_num']}: {ar['n_points']:2d} pts  "
+                      f"{ar['duration']*1000:.0f}ms  "
+                      f"g={ar['measured_g']:.0f} ({ar['g_error_pct']:+.1f}%)  "
+                      f"R²={ar['fit_y']['r_squared']:.3f}  {g_color}{marker}")
+            if best_arc:
+                print(f"  Best arc gravity: {best_arc['measured_g']:.0f} cm/s² "
+                      f"({best_arc['g_error_pct']:+.1f}%)")
+        elif len(arc_results) == 1:
+            print(f"  No bounces (single arc)")
+
+        # Fit residuals
+        fr = analysis.get('fit_residuals')
+        if fr:
+            print(f"  Fit residuals (RMS cm):  "
+                  f"X={fr['rms_x']:.2f}  Y={fr['rms_y']:.2f}  Z={fr['rms_z']:.2f}")
+
+        print()
+        print(f"  Post-hoc (t=0):  Vx={analysis['posthoc_vx']:+.1f}  "
+              f"Vy0={analysis['posthoc_vy0']:+.1f}  "
+              f"Vz={analysis['posthoc_vz']:+.1f}  "
+              f"Spd={spd:.0f} cm/s")
+
+        rt = analysis.get('rt_comparison')
+        if rt:
+            t_snap = rt['snap_time']
+            print(f"  Post-hoc (t={t_snap:.3f}s):  "
+                  f"Vx={rt['ph_vx_at_snap']:+.1f}  "
+                  f"Vy={rt['ph_vy_at_snap']:+.1f}  "
+                  f"Vz={rt['ph_vz_at_snap']:+.1f}")
+            print(f"  Real-time(t={t_snap:.3f}s):  "
+                  f"Vx={rt['rt_vx']:+.1f}  "
+                  f"Vy={rt['rt_vy']:+.1f}  "
+                  f"Vz={rt['rt_vz']:+.1f}  "
+                  f"Spd={rt['rt_speed']:.0f} cm/s")
+
+            parts = []
+            for axis in ['vx', 'vy', 'vz']:
+                err = rt[f'err_{axis}']
+                pct = rt[f'pct_{axis}']
+                label = axis.upper()[0] + axis[1]
+                if pct is not None:
+                    parts.append(f"{label}={err:.1f}({pct:.1f}%)")
+                else:
+                    parts.append(f"{label}={err:.1f}(abs)")
+            print(f"  Error @t={t_snap:.3f}s: {'  '.join(parts)}")
+        else:
+            print(f"  Real-time: (predictor not ready — no comparison)")
+
+        pe = analysis['pred_errors']
+        pe_m = analysis.get('pred_errors_measured')
+        if pe['n_points'] > 0:
+            print(f"  Forward pred (g=981):     mean={pe['mean']:.1f}cm  "
+                  f"max={pe['max']:.1f}cm  ({pe['n_points']} pts)")
+        if pe_m and pe_m['n_points'] > 0:
+            print(f"  Forward pred (g={mg:.0f}):  mean={pe_m['mean']:.1f}cm  "
+                  f"max={pe_m['max']:.1f}cm  ({pe_m['n_points']} pts)")
+
+        # --- Velocity convergence table ---
+        snapshots = analysis.get('velocity_snapshots', [])
+        if snapshots and analysis.get('valid'):
+            ph_vx = analysis['posthoc_vx']
+            ph_vy0 = analysis['posthoc_vy0']
+            ph_vz = analysis['posthoc_vz']
+            m_g = analysis['measured_g']
+
+            print()
+            print(f"  Velocity convergence (RT corrected vs post-hoc):")
+            print(f"  {'#pt':>3}  {'t(s)':>6}  |  "
+                  f"{'Vx_RT':>7}  {'Vy_raw':>7}  {'Vy_corr':>7}  {'Vz_RT':>7}  |  "
+                  f"{'eVx':>5}  {'eVy':>5}  {'eVz':>5}  {'e3D':>5}")
+            print(f"  {'─'*3}  {'─'*6}  |  "
+                  f"{'─'*7}  {'─'*7}  {'─'*7}  {'─'*7}  |  "
+                  f"{'─'*5}  {'─'*5}  {'─'*5}  {'─'*5}")
+
+            for snap in snapshots:
+                t_s = snap['t']
+                # Post-hoc velocity at this time
+                ph_vy_t = ph_vy0 + m_g * t_s
+                evx = abs(snap['vx'] - ph_vx)
+                evy = abs(snap['vy_corr'] - ph_vy_t)
+                evz = abs(snap['vz'] - ph_vz)
+                e3d = math.sqrt(evx**2 + evy**2 + evz**2)
+                print(f"  {snap['n_pts']:3d}  {t_s:6.3f}  |  "
+                      f"{snap['vx']:+7.1f}  {snap['vy_raw']:+7.1f}  "
+                      f"{snap['vy_corr']:+7.1f}  {snap['vz']:+7.1f}  |  "
+                      f"{evx:5.1f}  {evy:5.1f}  {evz:5.1f}  {e3d:5.1f}")
+
+        # --- Raw data dump ---
+        print()
+        print(f"  Raw data (copy-paste for analysis):")
+        print(f"  # t_s, x_cm, y_cm, z_cm")
+        arr = np.array(analysis.get('t', []))
+        x_arr = analysis.get('x', np.array([]))
+        y_arr = analysis.get('y', np.array([]))
+        z_arr = analysis.get('z', np.array([]))
+        for i in range(len(arr)):
+            print(f"  {float(arr[i]):.4f}, {float(x_arr[i]):.2f}, "
+                  f"{float(y_arr[i]):.2f}, {float(z_arr[i]):.2f}")
+
+        print(f"  {'═'*56}")
+
+    def _print_summary(self):
+        valid = [a for a in self._history if a.get('valid')]
+        print(f"\n  {'═'*56}")
+        print(f"  ALL-THROWS SUMMARY  ({len(valid)} valid / {len(self._history)} total)")
+        print(f"  {'═'*56}")
+
+        if not valid:
+            print("  No valid throws recorded.")
+            print(f"  {'═'*56}")
+            return
+
+        for a in valid:
+            tn = a['throw_number']
+            n = a['n_points']
+            dur = a['duration'] * 1000
+            mg = a['measured_g']
+            ge = a['g_error_pct']
+            pe = a['pred_errors']
+            rt = a.get('rt_comparison')
+            nb = a.get('n_bounces', 0)
+            best = a.get('best_arc')
+
+            rt_str = ""
+            if rt:
+                rt_str = (f"  err@t={rt['snap_time']:.2f}s: "
+                          f"Vx={rt['err_vx']:.1f} "
+                          f"Vy={rt['err_vy']:.1f} Vz={rt['err_vz']:.1f}")
             else:
-                verdict = "NEEDS WORK"
-            print(f"  Verdict: {verdict}")
-        else:
-            print("  (No prediction data — need more frames)")
+                rt_str = "  (no RT)"
 
-        print(f"{bar}")
+            pred_str = ""
+            if pe['n_points'] > 0:
+                pred_str = f"  fwd: {pe['mean']:.1f}/{pe['max']:.1f}cm"
 
-    def draw_overlay(self, left_small, right_small, result):
-        """Draw live prediction overlay on frames."""
-        dw = self.display_width
-        dh = int(dw * self.frame_height / self.frame_width)
-        scale_x = dw / self.frame_width
-        scale_y = dh / self.frame_height
+            bounce_str = f"  B={nb}" if nb > 0 else ""
+            best_g_str = ""
+            if best and nb > 0:
+                best_g_str = f"  best_g={best['measured_g']:.0f}"
 
-        # Warmup overlay
-        warmup = self.triangulator.warmup_status()
-        if not warmup['left_ready']:
-            cv2.putText(left_small, f"Warming up... {warmup['left_progress']*100:.0f}%",
-                        (10, dh - 80), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
-        if not warmup['right_ready']:
-            cv2.putText(right_small, f"Warming up... {warmup['right_progress']*100:.0f}%",
-                        (10, dh - 80), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+            print(f"  #{tn:2d}: {n:2d}pts {dur:4.0f}ms  "
+                  f"g={mg:5.0f}({ge:+5.1f}%)"
+                  f"{bounce_str}{best_g_str}{rt_str}{pred_str}")
 
-        # State indicator
-        if self.recording:
-            n = len(self.recorded_positions)
-            cv2.circle(left_small, (dw - 20, 20), 8, (0, 0, 255), -1)
-            cv2.putText(left_small, f"REC #{self.recording_number} [{n}]", (dw - 130, 25),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
-        elif self.armed:
-            cv2.putText(left_small, f"ARMED #{self.recording_number} - toss ball",
-                        (dw - 250, 25),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-        else:
-            cv2.putText(left_small, "Press 'n' for next", (dw - 180, 25),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
+        # Aggregate gravity stats (whole trajectory)
+        g_vals = [a['measured_g'] for a in valid]
+        g_mean = np.mean(g_vals)
+        g_std = np.std(g_vals)
+        print(f"\n  Gravity (whole): mean={g_mean:.0f}  std={g_std:.0f}  "
+              f"expected={ThrowAnalyzer.GRAVITY_EXPECTED:.0f}")
 
-        # Actual detection (green circle)
+        # Aggregate gravity stats (best arc per throw)
+        best_g_vals = [a['best_arc']['measured_g'] for a in valid
+                       if a.get('best_arc')]
+        if best_g_vals:
+            bg_mean = np.mean(best_g_vals)
+            bg_std = np.std(best_g_vals)
+            print(f"  Gravity (best arc): mean={bg_mean:.0f}  std={bg_std:.0f}")
+
+        # Aggregate velocity errors (only throws with RT comparison)
+        rt_errs = [a['rt_comparison'] for a in valid
+                   if a.get('rt_comparison') is not None]
+        if rt_errs:
+            vx_errs = [r['err_vx'] for r in rt_errs]
+            vy_errs = [r['err_vy'] for r in rt_errs]
+            vz_errs = [r['err_vz'] for r in rt_errs]
+            print(f"  Vel err: Vx={np.mean(vx_errs):.1f}  "
+                  f"Vy={np.mean(vy_errs):.1f}  "
+                  f"Vz={np.mean(vz_errs):.1f} cm/s  ({len(rt_errs)} throws)")
+
+        # Aggregate forward prediction
+        pred_means = [a['pred_errors']['mean'] for a in valid
+                      if a['pred_errors']['n_points'] > 0]
+        if pred_means:
+            print(f"  Fwd pred: mean={np.mean(pred_means):.1f}cm  "
+                  f"worst={np.max(pred_means):.1f}cm")
+
+        print(f"  {'═'*56}")
+
+    # ================================================================
+    # DISPLAY
+    # ================================================================
+
+    def _build_display(self, result):
+        lv, rv = self.tri.draw_results(result)
+
+        # FPS counter
+        self._fps_n += 1
+        if self._fps_n % 30 == 0:
+            now = time.perf_counter()
+            self._fps = 30.0 / (now - self._fps_t)
+            self._fps_t = now
+
+        # Camera overlays
         if result['found_3d']:
-            for det, img in [(result['left_detection'], left_small),
-                             (result['right_detection'], right_small)]:
-                if det and det['found']:
-                    cx = int(det['center'][0] * scale_x)
-                    cy = int(det['center'][1] * scale_y)
-                    r = int(det['radius'] * scale_x)
-                    cv2.circle(img, (cx, cy), r, (0, 255, 0), 2)
-                    cv2.circle(img, (cx, cy), 3, (0, 255, 0), -1)
+            x, y, z = result['position_3d']
+            cv2.putText(lv, f"X:{x:.1f} Y:{y:.1f} Z:{z:.1f}",
+                        (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 0), 1)
 
-        # Predicted position (magenta diamond) on left frame
-        # Project 3D predicted position back to left camera pixel coords
-        if self.live_predicted_pos is not None and self.triangulator.P0 is not None:
-            px, py, pz, dt = self.live_predicted_pos
-            # Project 3D → 2D using left camera projection matrix
-            pt_3d = np.array([px, py, pz, 1.0])
-            pt_2d = self.triangulator.P0 @ pt_3d
-            if abs(pt_2d[2]) > 1e-6:
-                px_img = int((pt_2d[0] / pt_2d[2]) * scale_x)
-                py_img = int((pt_2d[1] / pt_2d[2]) * scale_y)
+        wu = self.tri.warmup_status()
+        if not wu['ready']:
+            cv2.putText(lv, f"Warmup {wu['progress']*100:.0f}%",
+                        (10, lv.shape[0] - 50),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
 
-                if 0 <= px_img < dw and 0 <= py_img < dh:
-                    # Diamond marker
-                    pts = np.array([
-                        [px_img, py_img - 10],
-                        [px_img + 10, py_img],
-                        [px_img, py_img + 10],
-                        [px_img - 10, py_img]
-                    ], np.int32)
-                    cv2.polylines(left_small, [pts], True, (255, 0, 255), 2)
+        ps = self.pred.get_stats()
+        cv2.putText(lv, f"FPS:{self._fps:.0f} Buf:{ps['buffer_size']} "
+                    f"Rej:{ps['rejected']}",
+                    (10, lv.shape[0] - 12),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.33, (180, 180, 180), 1)
 
-                    # Draw error line from predicted to actual
-                    if result['left_detection'] and result['left_detection']['found']:
-                        act_cx = int(result['left_detection']['center'][0] * scale_x)
-                        act_cy = int(result['left_detection']['center'][1] * scale_y)
-                        cv2.line(left_small, (px_img, py_img), (act_cx, act_cy),
-                                 (255, 255, 255), 1)
+        vel = self.pred.get_velocity()
+        if vel['valid'] and self._throw_active:
+            cv2.putText(lv, f"Spd:{vel['speed']:.0f}cm/s",
+                        (10, lv.shape[0] - 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.38, (255, 255, 0), 1)
 
-        # Prediction error display
-        if self.live_prediction_error is not None:
-            err = self.live_prediction_error
-            color = (0, 255, 0) if err < 2.0 else (0, 255, 255) if err < 5.0 else (0, 0, 255)
-            cv2.putText(left_small, f"Pred err: {err:.1f}cm", (10, dh - 60),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+        # Status info on right panel
+        self._draw_status(rv, result)
+        cv2.putText(rv, "q r b SPACE p",
+                    (10, self.CAM_H - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.3, (120, 120, 120), 1)
 
-        # Velocity display
-        vel = self.predictor.get_velocity()
+        lv = cv2.resize(lv, (self.CAM_W, self.CAM_H))
+        rv = cv2.resize(rv, (self.CAM_W, self.CAM_H))
+        cam_row = np.hstack([lv, rv])
+
+        # Chart panel (or placeholder)
+        if self._chart_img is not None:
+            chart = self._chart_img
+        else:
+            chart = np.full((self.CHART_H, self.CHART_W, 3), 20, dtype=np.uint8)
+            cv2.putText(chart, "Toss ball — analysis chart appears after throw",
+                        (30, self.CHART_H // 2),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (100, 100, 100), 1)
+
+        if cam_row.shape[1] != chart.shape[1]:
+            chart = cv2.resize(chart, (cam_row.shape[1], chart.shape[0]))
+
+        return np.vstack([cam_row, chart])
+
+    def _draw_status(self, frame, result):
+        y = 20
+        ps = self.pred.get_stats()
+        vel = self.pred.get_velocity()
+
+        if result['found_3d']:
+            x3, y3, z3 = result['position_3d']
+            cv2.putText(frame, "Ball (cm):", (10, y),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1)
+            y += 18
+            cv2.putText(frame, f" X:{x3:7.1f}  Y:{y3:7.1f}  Z:{z3:7.1f}",
+                        (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.38,
+                        (255, 255, 255), 1)
+        else:
+            cv2.putText(frame, "No 3D detection", (10, y),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (100, 100, 100), 1)
+
+        y += 22
         if vel['valid']:
-            cv2.putText(left_small,
-                        f"V: ({vel['vx']:.0f}, {vel['vy']:.0f}, {vel['vz']:.0f}) cm/s",
-                        (10, dh - 40), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 0), 1)
-            cv2.putText(left_small, f"Speed: {vel['speed']:.0f} cm/s",
-                        (10, dh - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 0), 1)
-
-        # Controls hint
-        cv2.putText(right_small, "a:analyze r:reset b:bg-reset q:quit",
-                     (10, dh - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (200, 200, 200), 1)
-
-    def _get_analysis_data(self):
-        """Get positions/velocities/predictions — current recording or last archived."""
-        if len(self.recorded_positions) >= 10:
-            return (self.recorded_positions, self.recorded_velocities,
-                    self.recorded_predictions)
-        if self.all_recordings:
-            last = self.all_recordings[-1]
-            return last['positions'], last['velocities'], last['predictions']
-        return None, None, None
-
-    def analyze(self):
-        """Post-recording analysis with plots."""
-        positions_list, velocities_list, predictions_list = self._get_analysis_data()
-        if positions_list is None or len(positions_list) < 10:
-            n = len(positions_list) if positions_list else 0
-            print(f"\nNot enough data ({n} frames). Need at least 10.")
-            return
-
-        try:
-            import matplotlib
-            matplotlib.use('TkAgg')
-            import matplotlib.pyplot as plt
-        except ImportError:
-            print("\nmatplotlib not available. Install: pip install matplotlib")
-            self._print_text_analysis()
-            return
-
-        positions = np.array(positions_list)  # (N, 4): x, y, z, t
-        pos_xyz = positions[:, :3]
-        pos_t = positions[:, 3] - positions[0, 3]  # Normalize to start at 0
-
-        # --- Compute actual velocity (finite differences) ---
-        actual_vx, actual_vy, actual_vz = [], [], []
-        actual_t = []
-        for i in range(1, len(positions)):
-            dt = positions[i, 3] - positions[i - 1, 3]
-            if dt > 0:
-                actual_vx.append((positions[i, 0] - positions[i - 1, 0]) / dt)
-                actual_vy.append((positions[i, 1] - positions[i - 1, 1]) / dt)
-                actual_vz.append((positions[i, 2] - positions[i - 1, 2]) / dt)
-                actual_t.append(pos_t[i])
-        actual_vx = np.array(actual_vx)
-        actual_vy = np.array(actual_vy)
-        actual_vz = np.array(actual_vz)
-        actual_t = np.array(actual_t)
-
-        # Estimated velocities
-        if velocities_list:
-            est_vel = np.array(velocities_list)  # vx, vy, vz, speed, t
-            est_t = est_vel[:, 4] - positions[0, 3]
+            cv2.putText(frame,
+                        f"Vel: vx={vel['vx']:+.0f} vy={vel['vy']:+.0f} "
+                        f"vz={vel['vz']:+.0f}",
+                        (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.35,
+                        (255, 255, 0), 1)
+            y += 16
+            cv2.putText(frame, f"Speed: {vel['speed']:.0f} cm/s",
+                        (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.35,
+                        (255, 255, 0), 1)
         else:
-            est_vel = None
+            cv2.putText(frame, "Vel: --", (10, y),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.35, (100, 100, 100), 1)
 
-        # Prediction errors
-        if predictions_list:
-            preds = np.array(predictions_list)
-            pred_err = np.sqrt(
-                (preds[:, 0] - preds[:, 3])**2 +
-                (preds[:, 1] - preds[:, 4])**2 +
-                (preds[:, 2] - preds[:, 5])**2
-            )
-            pred_t = preds[:, 7] - positions[0, 3]
+        y += 22
+        total = ps['accepted'] + ps['rejected']
+        rej_pct = ps['rejected'] / max(total, 1) * 100
+        clr = ((0, 200, 0) if rej_pct < 30 else
+               (0, 200, 255) if rej_pct < 60 else (0, 0, 255))
+        cv2.putText(frame,
+                    f"Buf:{ps['buffer_size']}/{self.pred.buffer_size} "
+                    f"Acc:{ps['accepted']} Rej:{ps['rejected']}({rej_pct:.0f}%)",
+                    (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.32, clr, 1)
+
+        y += 18
+        if ps['is_ready']:
+            cv2.putText(frame, "PREDICTION READY", (10, y),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1)
         else:
-            preds = None
+            cv2.putText(frame, "NOT READY", (10, y),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 100, 255), 1)
 
-        # --- Create plots ---
-        fig, axes = plt.subplots(3, 2, figsize=(14, 10))
-        fig.suptitle('Velocity & Prediction Validation', fontsize=14, fontweight='bold')
+        y += 22
+        cv2.putText(frame,
+                    f"Throw #{self._throw_count}  "
+                    f"Pts: {len(self._throw_positions)}",
+                    (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.35,
+                    (200, 200, 255), 1)
 
-        # 1. Position trajectories (X, Y, Z over time)
-        ax = axes[0, 0]
-        ax.plot(pos_t, pos_xyz[:, 0], 'r-', label='X', linewidth=1.5)
-        ax.plot(pos_t, pos_xyz[:, 1], 'g-', label='Y', linewidth=1.5)
-        ax.plot(pos_t, pos_xyz[:, 2], 'b-', label='Z', linewidth=1.5)
-        ax.set_xlabel('Time (s)')
-        ax.set_ylabel('Position (cm)')
-        ax.set_title('3D Position Over Time')
-        ax.legend()
-        ax.grid(True, alpha=0.3)
-
-        # 2. Velocity: Estimated vs Actual
-        ax = axes[0, 1]
-        if len(actual_t) > 3:
-            # Smooth actual velocity with rolling average for readability
-            window = min(5, len(actual_vx) // 2)
-            if window >= 2:
-                kernel = np.ones(window) / window
-                smooth_vx = np.convolve(actual_vx, kernel, mode='valid')
-                smooth_vy = np.convolve(actual_vy, kernel, mode='valid')
-                smooth_vz = np.convolve(actual_vz, kernel, mode='valid')
-                smooth_t = actual_t[window - 1:]
-            else:
-                smooth_vx, smooth_vy, smooth_vz = actual_vx, actual_vy, actual_vz
-                smooth_t = actual_t
-
-            ax.plot(smooth_t, smooth_vx, 'r-', alpha=0.5, linewidth=1, label='Actual Vx')
-            ax.plot(smooth_t, smooth_vy, 'g-', alpha=0.5, linewidth=1, label='Actual Vy')
-            ax.plot(smooth_t, smooth_vz, 'b-', alpha=0.5, linewidth=1, label='Actual Vz')
-
-        if est_vel is not None and len(est_vel) > 0:
-            ax.plot(est_t, est_vel[:, 0], 'r--', linewidth=2, label='Est Vx')
-            ax.plot(est_t, est_vel[:, 1], 'g--', linewidth=2, label='Est Vy')
-            ax.plot(est_t, est_vel[:, 2], 'b--', linewidth=2, label='Est Vz')
-
-        ax.set_xlabel('Time (s)')
-        ax.set_ylabel('Velocity (cm/s)')
-        ax.set_title('Velocity: Estimated (dashed) vs Actual (solid)')
-        ax.legend(fontsize=8, ncol=2)
-        ax.grid(True, alpha=0.3)
-
-        # 3. Speed over time
-        ax = axes[1, 0]
-        if len(actual_t) > 0:
-            actual_speed = np.sqrt(actual_vx**2 + actual_vy**2 + actual_vz**2)
-            ax.plot(actual_t, actual_speed, 'k-', alpha=0.4, linewidth=1, label='Actual speed')
-        if est_vel is not None and len(est_vel) > 0:
-            ax.plot(est_t, est_vel[:, 3], 'b-', linewidth=2, label='Estimated speed')
-        ax.set_xlabel('Time (s)')
-        ax.set_ylabel('Speed (cm/s)')
-        ax.set_title('Speed Over Time')
-        ax.legend()
-        ax.grid(True, alpha=0.3)
-
-        # 4. Prediction error over time
-        ax = axes[1, 1]
-        if preds is not None and len(preds) > 0:
-            ax.plot(pred_t, pred_err, 'r-', linewidth=1.5)
-            ax.axhline(y=np.mean(pred_err), color='blue', linestyle='--',
-                        label=f'Mean: {np.mean(pred_err):.2f} cm')
-            ax.fill_between(pred_t, 0, pred_err, alpha=0.2, color='red')
-            ax.set_ylabel('3D Error (cm)')
-            ax.legend()
-        else:
-            ax.text(0.5, 0.5, 'No prediction data', transform=ax.transAxes,
-                    ha='center', fontsize=12)
-        ax.set_xlabel('Time (s)')
-        ax.set_title(f'Prediction Error ({self.LOOKAHEAD_FRAMES}-frame lookahead)')
-        ax.grid(True, alpha=0.3)
-
-        # 5. Predicted vs Actual scatter (per-axis)
-        ax = axes[2, 0]
-        if preds is not None and len(preds) > 0:
-            ax.scatter(preds[:, 3], preds[:, 0], c='red', s=10, alpha=0.6, label='X')
-            ax.scatter(preds[:, 4], preds[:, 1], c='green', s=10, alpha=0.6, label='Y')
-            ax.scatter(preds[:, 5], preds[:, 2], c='blue', s=10, alpha=0.6, label='Z')
-            # Perfect prediction line
-            all_vals = np.concatenate([preds[:, 3:6].ravel(), preds[:, 0:3].ravel()])
-            lims = [np.min(all_vals), np.max(all_vals)]
-            ax.plot(lims, lims, 'k--', linewidth=1, alpha=0.5, label='Perfect')
-            ax.legend(fontsize=8)
-        ax.set_xlabel('Actual (cm)')
-        ax.set_ylabel('Predicted (cm)')
-        ax.set_title('Predicted vs Actual Position')
-        ax.set_aspect('equal')
-        ax.grid(True, alpha=0.3)
-
-        # 6. Summary stats
-        ax = axes[2, 1]
-        ax.axis('off')
-
-        n_frames = len(positions_list)
-        summary_lines = [
-            f"Frames recorded: {n_frames}",
-            f"Duration: {pos_t[-1]:.2f} s",
-            f"Avg sample rate: {n_frames / pos_t[-1]:.1f} fps" if pos_t[-1] > 0 else "",
-            "",
-        ]
-
-        if est_vel is not None and len(est_vel) > 0:
-            summary_lines += [
-                f"Avg estimated speed: {np.mean(est_vel[:, 3]):.1f} cm/s",
-                f"Max estimated speed: {np.max(est_vel[:, 3]):.1f} cm/s",
-                "",
-            ]
-
-        if preds is not None and len(preds) > 0:
-            summary_lines += [
-                f"Prediction error ({self.LOOKAHEAD_FRAMES}-frame):",
-                f"  Mean:   {np.mean(pred_err):.2f} cm",
-                f"  Median: {np.median(pred_err):.2f} cm",
-                f"  Max:    {np.max(pred_err):.2f} cm",
-                f"  Std:    {np.std(pred_err):.2f} cm",
-                "",
-            ]
-
-            # Per-axis errors
-            err_x = np.abs(preds[:, 0] - preds[:, 3])
-            err_y = np.abs(preds[:, 1] - preds[:, 4])
-            err_z = np.abs(preds[:, 2] - preds[:, 5])
-            summary_lines += [
-                f"Per-axis mean error:",
-                f"  X: {np.mean(err_x):.2f} cm",
-                f"  Y: {np.mean(err_y):.2f} cm",
-                f"  Z: {np.mean(err_z):.2f} cm",
-            ]
-
-        summary = "\n".join(summary_lines)
-        ax.text(0.05, 0.95, summary, transform=ax.transAxes,
-                fontsize=10, verticalalignment='top', fontfamily='monospace',
-                bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.8))
-
-        # Verdict
-        if preds is not None and len(preds) > 0:
-            mean_err = np.mean(pred_err)
-            if mean_err < 2.0:
-                verdict = "EXCELLENT"
-                vcolor = '#4CAF50'
-            elif mean_err < 5.0:
-                verdict = "GOOD"
-                vcolor = '#8BC34A'
-            elif mean_err < 10.0:
-                verdict = "FAIR"
-                vcolor = '#FF9800'
-            else:
-                verdict = "NEEDS WORK"
-                vcolor = '#F44336'
-
-            ax.text(0.5, 0.02, verdict, transform=ax.transAxes,
-                    fontsize=20, fontweight='bold', color=vcolor, ha='center')
-
-        plt.tight_layout()
-        plt.show()
-
-    def _print_text_analysis(self):
-        """Fallback text-only analysis."""
-        positions_list, velocities_list, predictions_list = self._get_analysis_data()
-        if not positions_list:
-            print("\nNo data to analyze.")
-            return
-
-        positions = np.array(positions_list)
-        t_span = positions[-1, 3] - positions[0, 3]
-
-        print(f"\n{'=' * 60}")
-        print("VALIDATION RESULTS (text mode)")
-        print(f"{'=' * 60}")
-        print(f"Frames: {len(positions_list)}")
-        print(f"Duration: {t_span:.2f}s")
-
-        if velocities_list:
-            vels = np.array(velocities_list)
-            print(f"\nEstimated speed: avg={np.mean(vels[:, 3]):.1f}, max={np.max(vels[:, 3]):.1f} cm/s")
-
-        if predictions_list:
-            preds = np.array(predictions_list)
-            errs = np.sqrt(
-                (preds[:, 0] - preds[:, 3])**2 +
-                (preds[:, 1] - preds[:, 4])**2 +
-                (preds[:, 2] - preds[:, 5])**2
-            )
-            print(f"\nPrediction error ({self.LOOKAHEAD_FRAMES}-frame):")
-            print(f"  Mean:   {np.mean(errs):.2f} cm")
-            print(f"  Median: {np.median(errs):.2f} cm")
-            print(f"  Max:    {np.max(errs):.2f} cm")
-
-        print(f"{'=' * 60}")
+    # ================================================================
+    # MAIN LOOP
+    # ================================================================
 
     def run(self):
         print("\n" + "=" * 60)
-        print("VELOCITY & PREDICTION VALIDATION")
+        print("  VELOCITY ESTIMATION VALIDATION")
+        print("=" * 60)
+        print(f"  Cams: L={self.cam_l} R={self.cam_r}")
+        print(f"  Toss ball after warmup — velocity analysis after each throw")
+        print(f"  q=quit  r=reset  b=bg_reset  SPACE=skip_warmup  p=summary")
         print("=" * 60)
 
         if not self.check_calibration():
             return
 
         try:
-            self.triangulator = StereoTriangulator(
-                calibration_dir=self.calibration_dir,
-                cam_left_id=self.cam_left_id,
-                cam_right_id=self.cam_right_id)
+            self.tri = StereoTriangulator(
+                calibration_dir=self.calib_dir,
+                cam_left_id=self.cam_l, cam_right_id=self.cam_r)
         except Exception as e:
-            print(f"ERROR: {e}")
+            print(f"ERROR loading calibration: {e}")
             return
 
-        self.load_thresholds()
-
-        self.predictor = TrajectoryPredictor(
-            buffer_size=10,
-            min_points=3,
-            velocity_method='regression',
-            gravity=981.0,
-            y_down=True,
-            enable_drag=True
-        )
-
-        print(f"\nBaseline: {self.triangulator.get_baseline():.2f} cm")
-        print(f"\nCONTROLS:")
-        print(f"  a     - Analyze last recording (plots)")
-        print(f"  r     - Reset everything")
-        print(f"  b     - Reset background model (re-warmup)")
-        print(f"  n     - Manual re-arm override")
-        print(f"  SPACE - Manual start/stop override")
-        print(f"  q     - Quit")
-        print(f"\nMOG2 warming up... Recording auto-arms when ready.")
-        print("=" * 60)
+        # Print calibration details for debug log
+        print(f"\n  Calibration:")
+        print(f"    cam0: fx={self.tri.cmtx0[0,0]:.1f}  fy={self.tri.cmtx0[1,1]:.1f}  "
+              f"cx={self.tri.cmtx0[0,2]:.1f}  cy={self.tri.cmtx0[1,2]:.1f}")
+        print(f"    cam1: fx={self.tri.cmtx1[0,0]:.1f}  fy={self.tri.cmtx1[1,1]:.1f}  "
+              f"cx={self.tri.cmtx1[0,2]:.1f}  cy={self.tri.cmtx1[1,2]:.1f}")
+        print(f"    cam0 dist: {self.tri.dist0.flatten()}")
+        print(f"    cam1 dist: {self.tri.dist1.flatten()}")
+        baseline = self.tri.get_baseline()
+        rect_f = self.tri.P_rect0[0, 0]
+        rect_b = abs(self.tri.P_rect1[0, 3]) / rect_f
+        print(f"    baseline={baseline:.2f}cm  rect_f={rect_f:.1f}px  rect_b={rect_b:.2f}cm")
+        print(f"    reproj_thresh={self.tri.MAX_REPROJ_ERR}px  "
+              f"epipolar_thresh={self.tri.MAX_EPIPOLAR_ERR}px")
 
         try:
-            self.start_cameras()
+            self.tri.start_cameras(self.fw, self.fh)
         except RuntimeError as e:
-            print(f"ERROR: {e}")
+            print(f"ERROR opening cameras: {e}")
             return
 
-        # FPS tracking
-        fps_timestamps = []
-        fps_display = 0.0
+        if not self.warmup():
+            self.tri.stop_cameras()
+            cv2.destroyAllWindows()
+            return
+
+        self.pred = TrajectoryPredictor(
+            buffer_size=15, min_points=4, velocity_method='regression',
+            gravity=981.0, y_down=True, enable_drag=False)
+
+        print("--- Ready! Toss ball to begin tracking ---\n")
 
         try:
             while True:
-                t_now = time.perf_counter()
-                fps_timestamps.append(t_now)
-                if len(fps_timestamps) > 30:
-                    fps_timestamps.pop(0)
-                if len(fps_timestamps) >= 2:
-                    elapsed = fps_timestamps[-1] - fps_timestamps[0]
-                    if elapsed > 0:
-                        fps_display = (len(fps_timestamps) - 1) / elapsed
-
-                result = self.triangulator.update()
+                result = self.tri.update()
                 if result['left_frame'] is None:
                     continue
 
-                # Process frame
-                self.process_frame(result)
+                has_det = (result['left_detection'] is not None or
+                           result['right_detection'] is not None)
 
-                # Display
-                dw = self.display_width
-                dh = int(dw * self.frame_height / self.frame_width)
-
-                left_small = cv2.resize(result['left_frame'], (dw, dh))
-                right_small = cv2.resize(result['right_frame'], (dw, dh))
-
-                self.draw_overlay(left_small, right_small, result)
-
-                # FPS overlay
-                cv2.putText(left_small, f"{fps_display:.1f} fps", (10, 20),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
-
-                combined = cv2.hconcat([left_small, right_small])
-                cv2.imshow('Velocity Validation', combined)
-
-                # Console
-                if result['found_3d'] and self.predictor.get_velocity()['valid']:
+                # --- Ball found in 3D ---
+                if result['found_3d']:
                     x, y, z = result['position_3d']
-                    v = self.predictor.get_velocity()
-                    err_str = f"err={self.live_prediction_error:.1f}cm" if self.live_prediction_error else "---"
-                    print(f"\rPos:({x:5.0f},{y:5.0f},{z:5.0f}) "
-                          f"V:({v['vx']:5.0f},{v['vy']:5.0f},{v['vz']:5.0f}) "
-                          f"Spd:{v['speed']:4.0f} {err_str}   ", end='')
 
+                    if not self._throw_active:
+                        self._start_throw()
+
+                    self._diag_frame += 1
+                    disp = result.get('disparity') or 0
+                    reproj = result.get('reproj_err') or 0
+
+                    accepted = self.pred.add_position(x, y, z)
+
+                    if accepted:
+                        t_now = self.pred.position_buffer.get_latest()['t']
+                        self._throw_positions.append(
+                            (float(x), float(y), float(z), float(t_now)))
+                        self._lost_count = 0
+
+                        # Track t0 for relative time display
+                        if self._throw_t0 is None:
+                            self._throw_t0 = t_now
+                        t_rel = t_now - self._throw_t0
+
+                        # Inter-frame dt
+                        dt_ms = ((t_now - self._prev_accept_t) * 1000
+                                 if self._prev_accept_t else 0.0)
+                        self._prev_accept_t = t_now
+
+                        # Snapshot RT velocity at frame SNAP_AFTER
+                        n_pts = len(self._throw_positions)
+                        if (not self._rt_snapped and
+                                n_pts >= self.SNAP_AFTER and
+                                self.pred.is_ready()):
+                            self._rt_velocity = self.pred.get_velocity()
+                            self._rt_corrected = self.pred._get_corrected_velocity()
+                            self._rt_snap_time = t_rel
+                            self._predictor_was_ready = True
+                            self._rt_snapped = True
+
+                        vel = self.pred.get_velocity()
+                        status = "OK"
+                        if vel['valid']:
+                            corrected = self.pred._get_corrected_velocity()
+                            status += (f" vel=({vel['vx']:+.0f},"
+                                       f"{corrected[1]:+.0f},{vel['vz']:+.0f})")
+                            # Store velocity snapshot for convergence analysis
+                            self._velocity_snapshots.append({
+                                't': t_rel,
+                                'n_pts': n_pts,
+                                'vx': vel['vx'],
+                                'vy_raw': vel['vy'],
+                                'vy_corr': corrected[1],
+                                'vz': vel['vz'],
+                            })
+                        bounces = self.pred._bounce_count
+                        status += f" [buf={len(self.pred.position_buffer)}"
+                        if bounces > 0:
+                            status += f" B={bounces}"
+                        status += "]"
+
+                        print(f"  {self._diag_frame:6d}  {t_rel:8.4f}  {dt_ms:5.1f}  "
+                              f"{x:8.1f}  {y:8.1f}  {z:8.1f}  |  "
+                              f"{disp:5.1f}  {reproj:5.1f}  |  {status}")
+                    else:
+                        status = f"REJ: {self.pred._last_reject_reason}"
+                        print(f"  {self._diag_frame:6d}  {'---':>8}  {'---':>5}  "
+                              f"{x:8.1f}  {y:8.1f}  {z:8.1f}  |  "
+                              f"{disp:5.1f}  {reproj:5.1f}  |  {status}")
+
+                elif has_det and self._throw_active:
+                    reason = result.get('reject_reason', 'no_match')
+                    self._diag_frame += 1
+                    print(f"  {self._diag_frame:6d}  {'---':>8}  {'---':>5}  "
+                          f"{'---':>8}  {'---':>8}  {'---':>8}  |  "
+                          f"{'---':>5}  {'---':>5}  |  STEREO FAIL: {reason}")
+
+                # --- Ball lost ---
+                if not result['found_3d']:
+                    if self._throw_active:
+                        self._lost_count += 1
+                        if (self._lost_count >= self.LOST_THRESHOLD and
+                                len(self._throw_positions) > 0):
+                            self._end_throw()
+
+                # --- Display ---
+                display = self._build_display(result)
+                cv2.imshow('Velocity Validation', display)
+
+                # --- Keys ---
                 key = cv2.waitKey(1) & 0xFF
-
                 if key == ord('q'):
                     break
-                elif key == ord('n'):
-                    # Manual re-arm override
-                    if not self.armed:
-                        self.recording = False
-                        self.consecutive_losses = 0
-                        self.armed = True
-                        print(f"\n[ARMED] Recording #{self.recording_number} armed. Toss the ball.")
-                elif key == ord(' '):
-                    # Manual override
-                    if self.recording:
-                        self.recording = False
-                        self.armed = False
-                        self.consecutive_losses = 0
-                        print(f"\n[STOPPED] {len(self.recorded_positions)} frames. Press 'n' to re-arm, 'a' to analyze.")
-                    else:
-                        self.armed = True
-                        print(f"\n[ARMED] Recording #{self.recording_number} armed.")
-                elif key == ord('a'):
-                    self.analyze()
                 elif key == ord('r'):
-                    self.reset_recording()
+                    self._reset_throw()
                 elif key == ord('b'):
-                    self.triangulator.reset_background()
-                    self.predictor.reset()
-                    print("\n[BG RESET] Background model reset, warming up...")
+                    self.tri.reset_background()
+                    self._reset_throw()
+                    self._chart_img = None
+                    print("\n  [BG RESET]")
+                    self.warmup()
+                elif key == ord('p'):
+                    self._print_summary()
 
         except KeyboardInterrupt:
             pass
         finally:
-            self.triangulator.stop_cameras()
+            self.tri.stop_cameras()
             cv2.destroyAllWindows()
 
-        # Auto-analyze on exit if we have data
-        positions_list, _, _ = self._get_analysis_data()
-        if positions_list and len(positions_list) > 10:
-            print("\n\nFinal analysis:")
-            self.analyze()
-
+        if self._history:
+            self._print_summary()
         print("\nDone!")
 
 
-if __name__ == '__main__':
+def main():
     VelocityValidator().run()
+
+
+if __name__ == '__main__':
+    main()
