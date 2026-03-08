@@ -115,10 +115,10 @@ CM_TO_MM = 10.0
 # │  predictor.set_camera_pose(x, y, z, yaw, pitch, roll).        │
 # └─────────────────────────────────────────────────────────────────┘
 #
-CAM_POSE_X_MM   = 0.0      # PLACEHOLDER — measure lateral offset from robot center
-CAM_POSE_Y_MM   = 0.0      # PLACEHOLDER — measure along-table offset from robot center
-CAM_POSE_Z_MM   = 0.0      # PLACEHOLDER — measure vertical offset from robot base plate
-CAM_POSE_YAW    = 0.0      # degrees — PLACEHOLDER (0° if camera looks along robot +X)
+CAM_POSE_X_MM   = 1840.85      # PLACEHOLDER — measure lateral offset from robot center
+CAM_POSE_Y_MM   = 1330      # PLACEHOLDER — measure along-table offset from robot center
+CAM_POSE_Z_MM   = -440.074      # PLACEHOLDER — measure vertical offset from robot base plate
+CAM_POSE_YAW    = 5      # degrees — PLACEHOLDER (0° if camera looks along robot +X)
 CAM_POSE_PITCH  = 20.0     # degrees — camera tilted 20° downward (known from fixed stand)
 CAM_POSE_ROLL   = 0.0      # degrees — PLACEHOLDER (0° if camera is level)
 

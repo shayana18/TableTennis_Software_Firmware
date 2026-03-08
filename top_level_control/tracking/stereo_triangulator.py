@@ -31,6 +31,7 @@ CRITICAL: Uses grab()/retrieve() pattern for synchronized stereo capture.
 """
 
 import cv2
+import sys
 import numpy as np
 from pathlib import Path
 from .ball_detector import BallDetector
@@ -237,8 +238,8 @@ class StereoTriangulator:
         if height is None:
             height = FRAME_HEIGHT
 
-        self.cap_left = cv2.VideoCapture(self.cam_left_id, cv2.CAP_DSHOW)
-        self.cap_right = cv2.VideoCapture(self.cam_right_id, cv2.CAP_DSHOW)
+        self.cap_left, left_backend = self._open_camera(self.cam_left_id)
+        self.cap_right, right_backend = self._open_camera(self.cam_right_id)
 
         if not self.cap_left.isOpened():
             raise RuntimeError(f"Failed to open left camera (ID: {self.cam_left_id})")
@@ -254,10 +255,60 @@ class StereoTriangulator:
         print(f"[StereoTriangulator] Cameras started:")
         print(f"  LEFT:  {settings_left['width']}x{settings_left['height']} "
               f"@ {settings_left['fps']:.0f}fps"
-              f" trigger={'OK' if settings_left.get('trigger_ok') else 'OFF'}")
+              f" trigger={'OK' if settings_left.get('trigger_ok') else 'OFF'}"
+              f" backend={left_backend}")
         print(f"  RIGHT: {settings_right['width']}x{settings_right['height']} "
               f"@ {settings_right['fps']:.0f}fps"
-              f" trigger={'OK' if settings_right.get('trigger_ok') else 'OFF'}")
+              f" trigger={'OK' if settings_right.get('trigger_ok') else 'OFF'}"
+              f" backend={right_backend}")
+
+    def _open_camera(self, cam_id):
+        """
+        Open a camera with platform-appropriate backend fallbacks.
+
+        Returns:
+            (cv2.VideoCapture, backend_name_str)
+        """
+        if sys.platform.startswith("win"):
+            # Windows: DirectShow is preferred for Arducam; keep generic fallback.
+            backends = [
+                ("CAP_DSHOW", cv2.CAP_DSHOW),
+                ("CAP_MSMF", cv2.CAP_MSMF),
+                ("DEFAULT", None),
+            ]
+        elif sys.platform == "darwin":
+            # macOS: AVFoundation is the native backend.
+            backends = [
+                ("CAP_AVFOUNDATION", cv2.CAP_AVFOUNDATION),
+                ("DEFAULT", None),
+            ]
+        else:
+            # Linux and others.
+            backends = [
+                ("CAP_V4L2", getattr(cv2, "CAP_V4L2", None)),
+                ("DEFAULT", None),
+            ]
+
+        last_cap = None
+        last_name = "DEFAULT"
+        for name, backend in backends:
+            if backend is None:
+                cap = cv2.VideoCapture(cam_id)
+            else:
+                cap = cv2.VideoCapture(cam_id, backend)
+
+            if cap.isOpened():
+                return cap, name
+
+            last_cap = cap
+            last_name = name
+            cap.release()
+
+        # Return the last attempted capture object (closed) for consistent error path.
+        if last_cap is None:
+            last_cap = cv2.VideoCapture(cam_id)
+            last_name = "DEFAULT"
+        return last_cap, last_name
 
     def stop_cameras(self):
         """Release camera streams."""

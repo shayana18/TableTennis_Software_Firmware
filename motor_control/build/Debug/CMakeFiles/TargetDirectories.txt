@@ -1,0 +1,17 @@
+/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/build/Debug/CMakeFiles/motor_control.dir
+/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/build/Debug/CMakeFiles/edit_cache.dir
+/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/build/Debug/CMakeFiles/rebuild_cache.dir
+/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/build/Debug/cubemx/cmake/stm32cubemx/CMakeFiles/edit_cache.dir
+/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/build/Debug/cubemx/cmake/stm32cubemx/CMakeFiles/rebuild_cache.dir
+/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/build/Debug/hw/CMakeFiles/hw_lib.dir
+/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/build/Debug/hw/CMakeFiles/edit_cache.dir
+/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/build/Debug/hw/CMakeFiles/rebuild_cache.dir
+/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/build/Debug/io/CMakeFiles/io_lib.dir
+/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/build/Debug/io/CMakeFiles/edit_cache.dir
+/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/build/Debug/io/CMakeFiles/rebuild_cache.dir
+/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/build/Debug/app/CMakeFiles/app_lib.dir
+/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/build/Debug/app/CMakeFiles/edit_cache.dir
+/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/build/Debug/app/CMakeFiles/rebuild_cache.dir
+/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/build/Debug/datatypes/CMakeFiles/datatypes_lib.dir
+/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/build/Debug/datatypes/CMakeFiles/edit_cache.dir
+/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/build/Debug/datatypes/CMakeFiles/rebuild_cache.dir

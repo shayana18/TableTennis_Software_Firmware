@@ -1,0 +1,17 @@
+/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/build/MinSizeRel/CMakeFiles/motor_control.dir
+/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/build/MinSizeRel/CMakeFiles/edit_cache.dir
+/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/build/MinSizeRel/CMakeFiles/rebuild_cache.dir
+/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/build/MinSizeRel/cubemx/cmake/stm32cubemx/CMakeFiles/edit_cache.dir
+/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/build/MinSizeRel/cubemx/cmake/stm32cubemx/CMakeFiles/rebuild_cache.dir
+/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/build/MinSizeRel/hw/CMakeFiles/hw_lib.dir
+/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/build/MinSizeRel/hw/CMakeFiles/edit_cache.dir
+/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/build/MinSizeRel/hw/CMakeFiles/rebuild_cache.dir
+/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/build/MinSizeRel/io/CMakeFiles/io_lib.dir
+/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/build/MinSizeRel/io/CMakeFiles/edit_cache.dir
+/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/build/MinSizeRel/io/CMakeFiles/rebuild_cache.dir
+/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/build/MinSizeRel/app/CMakeFiles/app_lib.dir
+/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/build/MinSizeRel/app/CMakeFiles/edit_cache.dir
+/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/build/MinSizeRel/app/CMakeFiles/rebuild_cache.dir
+/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/build/MinSizeRel/datatypes/CMakeFiles/datatypes_lib.dir
+/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/build/MinSizeRel/datatypes/CMakeFiles/edit_cache.dir
+/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/build/MinSizeRel/datatypes/CMakeFiles/rebuild_cache.dir
