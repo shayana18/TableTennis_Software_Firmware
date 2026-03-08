@@ -46,19 +46,16 @@
 #define PADDLE_OFFSET_X 206.0f // mm
 #define PADDLE_OFFSET_Z -50.0f   // mm
 
-// Workspace bounds (mm) - Elliptic Cylinder
-#define ELLIPSE_RADIUS_X 600.0f
-#define ELLIPSE_RADIUS_Y 550.0f
-#define LIMIT_POS_Z -650.0f
+// Workspace bounds (mm) - (Paddle)  Elliptic Cylinder
+#define ELLIPSE_RADIUS_X 790.0f
+#define ELLIPSE_RADIUS_Y 540.0f
+#define LIMIT_POS_Z -721.0f
 #define LIMIT_NEG_Z -1050.0f
+#define NET_Z_TOP -1000.0f
 
 // Paddle Workspace Bounds (mm)
 #define ELLIPSE_RADIUS_X_PADDLE 820.0f
 #define ELLIPSE_RADIUS_Y_PADDLE 550.0f
-
-// Workspace Parameters
-#define NET_Z -1000.0f
-#define NET_CLEARANCE 200.0f
 
 // Motion execution configuration
 #define MOTION_EXECUTE_PERIOD_MS 10U

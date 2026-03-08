@@ -167,22 +167,18 @@ void motion_execute_prepare_strike(robot_t *robot)
 }
 
 void motion_execute_plan_strike(robot_t *robot) {
-  // Return the target offset we want to move to and the 4th axis yaw angle
+  // Return the target offset we want to move to and the 4th axis yaw_norm angle
   vec3 new_interception_target;
   vec3 interception_target = robot->current_target.pos;
   vec3 ball_vel = robot->current_target.vel; 
   vec3 strike_finish_target;
   move_plan *strike_plan = &robot->strike_move_plan;
 
-  // 
-  float det = sqrt((ball_vel.z * ball_vel.z) + (2.0f * GRAVITY * (interception_target.z - STRIKE_TARGET_Z)));
+  const float disc = (ball_vel.z * ball_vel.z) + (2.0f * GRAVITY * (interception_target.z - STRIKE_TARGET_Z));
+  const float det = sqrtf(disc);
+  const float ball_return_travel_time = (-ball_vel.z - det) / (-GRAVITY);  // later root
 
-  float t1 = (-ball_vel.z + det) / (-GRAVITY);
-  float t2 = (-ball_vel.z - det) / (-GRAVITY);
-
-  float ball_return_travel_time = fmaxf(t1, t2);
-
-  if (ball_return_travel_time <= 0.0f || isnan(ball_return_travel_time)) {
+  if (!(ball_return_travel_time > 0.0f)) {
     motion_abort(robot, "BALL RETURN TIME NEGATIVE or NaN\r\n");
     robot->state = STATE_IDLE;
     set_idle(robot);
@@ -196,21 +192,16 @@ void motion_execute_plan_strike(robot_t *robot) {
   float dvx = vout_x - ball_vel.x;
   float dvy = vout_y - ball_vel.y;
 
-  float yaw = atan2f(dvy, dvx);
+  float yaw_norm = atan2f(dvy, dvx);
 
-  float nx = cosf(yaw);
-  float ny = sinf(yaw);
+  float nx = cosf(yaw_norm);
+  float ny = sinf(yaw_norm);
 
   float vin_n  = ball_vel.x * nx + ball_vel.y * ny;
   float vout_n = vout_x* nx + vout_y* ny;
   float vp_n   = (vout_n + RESTITUTION * vin_n) / (1.0f + RESTITUTION);
 
-  float paddle_x_vel = vp_n * nx;
-  float paddle_y_vel = vp_n * ny;
-  float paddle_z_vel = 0.0f;
-
-
-  float paddle_speed = sqrtf((paddle_x_vel * paddle_x_vel) + (paddle_y_vel * paddle_y_vel) + (paddle_z_vel * paddle_z_vel));
+  float paddle_speed = fabsf(vp_n);
   
   if (paddle_speed < 1.0f) {
 
@@ -235,38 +226,33 @@ void motion_execute_plan_strike(robot_t *robot) {
 
 
   if (paddle_speed > MAX_CART_VEL) {
-    paddle_x_vel = paddle_x_vel / paddle_speed * MAX_CART_VEL;
-    paddle_y_vel = paddle_y_vel / paddle_speed * MAX_CART_VEL;
-    paddle_z_vel = paddle_z_vel / paddle_speed * MAX_CART_VEL;
     paddle_speed = MAX_CART_VEL;
   }
 
-  float dir_x = paddle_x_vel / paddle_speed;
-  float dir_y = paddle_y_vel / paddle_speed;
-  float dir_z = paddle_z_vel / paddle_speed;
+  float dir_sign = (vp_n >= 0.0f) ? 1.0f : -1.0f;
+  float dir_x = dir_sign * nx;
+  float dir_y = dir_sign * ny;
 
   float interception_target_offset = paddle_speed * paddle_speed / (2.0f * MAX_CART_ACC) + STRIKE_BUFFER_DIST;
 
-  float paddle_yaw = yaw;
-  // keep in [-PI, PI]
-  if (yaw <  PI_F/2.0f && yaw > -PI_F/2.0f) {
-    paddle_yaw += PI_F/2.0f;
-  } else if (yaw >  PI_F/2.0f) {
-    paddle_yaw -= PI_F/2.0f;
-  } else {
-    paddle_yaw += 3*PI_F/2.0f;
+  float paddle_yaw = yaw_norm + PI_F / 2.0f;  // map to [0, PI]
+  if (paddle_yaw < 0.0f) {
+    paddle_yaw += PI_F;
+  }
+  if (paddle_yaw > PI_F) {
+    paddle_yaw -= PI_F;
   }
 
-  float x_offset = PADDLE_OFFSET_X * cosf(yaw);
-  float y_offset = PADDLE_OFFSET_X * sinf(yaw);
+  float x_offset = PADDLE_OFFSET_X * nx;
+  float y_offset = PADDLE_OFFSET_X * ny;
 
   new_interception_target.x = (interception_target.x - x_offset) - (dir_x * interception_target_offset);
   new_interception_target.y = (interception_target.y - y_offset) - (dir_y * interception_target_offset); 
-  new_interception_target.z = (interception_target.z - PADDLE_OFFSET_Z) - (dir_z * interception_target_offset);
+  new_interception_target.z = interception_target.z - PADDLE_OFFSET_Z;
 
   strike_finish_target.x = interception_target.x - x_offset + (dir_x * interception_target_offset);
   strike_finish_target.y = interception_target.y - y_offset + (dir_y * interception_target_offset); 
-  strike_finish_target.z = interception_target.z - PADDLE_OFFSET_Z + (dir_z * interception_target_offset);
+  strike_finish_target.z = interception_target.z - PADDLE_OFFSET_Z;
 
   float dx, dy, dz;
   const float D = robot_calc_dist(new_interception_target, strike_finish_target, &dx, &dy, &dz);
@@ -284,12 +270,12 @@ void motion_execute_plan_strike(robot_t *robot) {
 
   strike_plan->dir.x = dir_x;
   strike_plan->dir.y = dir_y;
-  strike_plan->dir.z = dir_z;
+  strike_plan->dir.z = 0.0f;
 
   // Strike Planning
   float t_acc = strike_plan->max_cart_vel / MAX_CART_ACC;
-  float s_ramp_dist = 0.5f * MAX_CART_ACC * (t_acc * t_acc);
-  float t_cruise = (strike_plan->D - 2.0f * s_ramp_dist) / strike_plan->max_cart_vel;
+  float ramp_dist = 0.5f * MAX_CART_ACC * (t_acc * t_acc);
+  float t_cruise = (strike_plan->D - 2.0f * ramp_dist) / strike_plan->max_cart_vel;
 
   strike_plan->t1 = 0.0f;
   strike_plan->t2 = strike_plan->t1 + t_acc;
@@ -419,7 +405,7 @@ void motion_execute_start(robot_t *robot)
     robot_runtime_send_status("PLAN_ABORT: PLANNING FAILED\r\n");
     return;
   }
-  
+
   if (robot->current_target.type == TARGET_INTERCEPT) {
     robot_runtime_set_paddle_abs_deg(plan->yaw_angle_deg);
   }
