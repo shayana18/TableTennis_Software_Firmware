@@ -63,13 +63,13 @@ void robot_runtime_set_joint_speed(long cmd1, long cmd2, long cmd3)
   const long motor_cmd3 = (long)lroundf((float)cmd3 * ROBOT_JOINT_SIGN);
 
   if (!s_speed_cmd_valid || motor_cmd1 != s_speed_cmd_last_1) {
-    Turn_const_speed(s_motor_com, ROBOT_MOTOR_1_ID, motor_cmd1);
+    Turn_const_speed(s_motor_com, ROBOT_MOTOR_2_ID, motor_cmd1);
   }
   if (!s_speed_cmd_valid || motor_cmd2 != s_speed_cmd_last_2) {
-    Turn_const_speed(s_motor_com, ROBOT_MOTOR_2_ID, motor_cmd2);
+    Turn_const_speed(s_motor_com, ROBOT_MOTOR_3_ID, motor_cmd2);
   }
   if (!s_speed_cmd_valid || motor_cmd3 != s_speed_cmd_last_3) {
-    Turn_const_speed(s_motor_com, ROBOT_MOTOR_3_ID, motor_cmd3);
+    Turn_const_speed(s_motor_com, ROBOT_MOTOR_4_ID, motor_cmd3);
   }
 
   s_speed_cmd_last_1 = motor_cmd1;
@@ -96,9 +96,9 @@ void robot_runtime_set_joint_position_abs_ticks(long q1_tick, long q2_tick, long
     return;
   }
 
-  move_abs32(s_motor_com, ROBOT_MOTOR_1_ID, q1_tick);
-  move_abs32(s_motor_com, ROBOT_MOTOR_2_ID, q2_tick);
-  move_abs32(s_motor_com, ROBOT_MOTOR_3_ID, q3_tick);
+  move_abs32(s_motor_com, ROBOT_MOTOR_2_ID, q1_tick);
+  move_abs32(s_motor_com, ROBOT_MOTOR_3_ID, q2_tick);
+  move_abs32(s_motor_com, ROBOT_MOTOR_4_ID, q3_tick);
 }
 
 void robot_runtime_set_joint_position_abs_deg(float q1_deg, float q2_deg, float q3_deg)
@@ -110,6 +110,16 @@ void robot_runtime_set_joint_position_abs_deg(float q1_deg, float q2_deg, float 
   robot_runtime_set_joint_position_abs_ticks(q1_tick, q2_tick, q3_tick);
 }
 
+void robot_runtime_set_paddle_abs_deg(float paddle_yaw_deg) {
+
+  if (s_motor_com == NULL) {
+    return;
+  }
+  const float motor_tick = paddle_yaw_deg * ((float)PULSES_PER_REV) / 360.0f;
+  long paddle_tick = (long)lroundf(motor_tick);
+
+  move_abs32(s_motor_com, ROBOT_MOTOR_1_ID, paddle_tick);
+}
 
 
 bool robot_runtime_get_joint_ticks(long *q1_tick, long *q2_tick, long *q3_tick)
@@ -120,19 +130,19 @@ bool robot_runtime_get_joint_ticks(long *q1_tick, long *q2_tick, long *q3_tick)
 
 
   // Request and read encoder positions from each motor driver
-  if (!ReadMotorPosition32(s_motor_com, ROBOT_MOTOR_1_ID)) {
+  if (!ReadMotorPosition32(s_motor_com, ROBOT_MOTOR_2_ID)) {
     robot_runtime_send_status("ERR: m1 pos timeout\r\n");
     return false;
   }
   long p1 = io_motor_com_get_motor_pos(s_motor_com);
 
-  if (!ReadMotorPosition32(s_motor_com, ROBOT_MOTOR_2_ID)) {
+  if (!ReadMotorPosition32(s_motor_com, ROBOT_MOTOR_3_ID)) {
     robot_runtime_send_status("ERR: m2 pos timeout\r\n");
     return false;
   }
   long p2 = io_motor_com_get_motor_pos(s_motor_com);
 
-  if (!ReadMotorPosition32(s_motor_com, ROBOT_MOTOR_3_ID)) {
+  if (!ReadMotorPosition32(s_motor_com, ROBOT_MOTOR_4_ID)) {
     robot_runtime_send_status("ERR: m3 pos timeout\r\n");
     return false;
   }

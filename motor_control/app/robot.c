@@ -4,14 +4,6 @@
 #include <math.h>
 #include <stdio.h>
 
-#define PI_F 3.14159265358979323846f
-#define DTR (PI_F / 180.0f)
-#define SQRT3 1.7320508075688772f
-#define TAN30 (1.0f / SQRT3)
-#define SIN30 0.5f
-#define TAN60 SQRT3
-#define SIN120 0.8660254037844386f
-#define COS120 -0.5f
 
 const vec3 home = {HOME_X, HOME_Y, HOME_Z};
 
@@ -55,6 +47,7 @@ void robot_set_target_from_mail(robot_target_t *dst, const target_t *src)
   dst->type = src->type;
   dst->target_ID = 0.0f;
   dst->pos = src->intercept_pos;
+  dst->vel = src->intercept_vel;
   dst->t_arrival_s = src->intercept_time;
   dst->timestamp = src->timestamp;
 }
@@ -72,6 +65,10 @@ float robot_calc_dist(vec3 current, vec3 target, float *out_dx, float *out_dy, f
 
 bool robot_target_in_workspace(vec3 pos)
 {
+
+  if (isnan(pos.x) || isnan(pos.y) || isnan(pos.z)) {
+    return false;
+  }
   // Ellipse Formula
   float value = (pos.x * pos.x) / (ELLIPSE_RADIUS_X * ELLIPSE_RADIUS_X) + (pos.y * pos.y) / (ELLIPSE_RADIUS_Y * ELLIPSE_RADIUS_Y);
 

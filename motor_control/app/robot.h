@@ -2,12 +2,22 @@
 
 #include <stdbool.h>
 #include <stdint.h>
-
 #include "shared_types.h"
+
+// Constants
+#define GRAVITY 9810.0f // mm/s^2
+#define PI_F 3.14159265358979323846f
+#define DTR (PI_F / 180.0f)
+#define SQRT3 1.7320508075688772f
+#define TAN30 (1.0f / SQRT3)
+#define SIN30 0.5f
+#define TAN60 SQRT3
+#define SIN120 0.8660254037844386f
+#define COS120 -0.5f
 
 // Robot motion limits
 #define MAX_JOINT_ANGLE_LIMIT ENCODER_ZERO_TO_IK_OFFSET // degrees
-#define MIN_JOINT_ANGLE_LIMIT -75.0f  // Low stop limit is 80 deg
+#define MIN_JOINT_ANGLE_LIMIT -78.0f  // Low stop limit is 80 deg
 #define MAX_JOINT_VEL 3000.0L      // RPM, Conservative values
 #define MAX_JOINT_ACC 1000.0L     // RPM/s, Conservative Values
 
@@ -20,11 +30,21 @@
 #define HOME_Z -900.0f
 #define HOME_TIME 2.0f
 
+// Striking Parameters
+#define STRIKE_TARGET_X 0.0f
+#define STRIKE_TARGET_Y 2055.0f
+#define STRIKE_TARGET_Z -1150.0f
+#define STRIKE_BUFFER_DIST 10.0f //mm Additional distance to account for strike execution delay and ball contact
+#define STRIKE_Z_APEX_CLEARANCE 100.0f 
+#define RESTITUTION 1.0f
+
 // Delta geometry (mm)
 #define BASE_RADIUS 165.0f
 #define EE_RADIUS 50.0f
 #define UPPER_ARM_LENGTH 350.0f
 #define LOWER_ARM_LENGTH 1000.0f
+#define PADDLE_OFFSET_X 206.0f // mm
+#define PADDLE_OFFSET_Z -50.0f   // mm
 
 // Workspace bounds (mm) - Elliptic Cylinder
 #define ELLIPSE_RADIUS_X 600.0f
@@ -35,6 +55,10 @@
 // Paddle Workspace Bounds (mm)
 #define ELLIPSE_RADIUS_X_PADDLE 820.0f
 #define ELLIPSE_RADIUS_Y_PADDLE 550.0f
+
+// Workspace Parameters
+#define NET_Z -1000.0f
+#define NET_CLEARANCE 200.0f
 
 // Motion execution configuration
 #define MOTION_EXECUTE_PERIOD_MS 10U
@@ -57,9 +81,10 @@
 
 
 // Motor IDs on the daisy-chain
-#define ROBOT_MOTOR_1_ID 2
-#define ROBOT_MOTOR_2_ID 3
-#define ROBOT_MOTOR_3_ID 4
+#define ROBOT_MOTOR_1_ID 1 // PADDLE AXIS!
+#define ROBOT_MOTOR_2_ID 2
+#define ROBOT_MOTOR_3_ID 3
+#define ROBOT_MOTOR_4_ID 4
 
 extern const vec3 home;
 
@@ -67,9 +92,11 @@ typedef struct {
   target_type type;
   float target_ID;
   vec3 pos;
+  vec3 vel;
   float t_arrival_s;
   float timestamp;
 } robot_target_t;
+
 
 typedef enum {
   STATE_OFF = 0,
@@ -86,6 +113,8 @@ typedef struct {
   vec3 start_pos;
   vec3 target_pos;
   vec3 dir;
+  float max_cart_vel;
+  float yaw_angle_deg;
 
   float D;
   float t1;
@@ -97,18 +126,15 @@ typedef struct {
   uint32_t prev_tick_ms;
   float prev_joint_deg[3];
   bool prev_joint_valid;
-  float last_feedback_deg[3];
-  bool feedback_valid;
-  uint8_t feedback_miss_ticks;
   bool active;
 } move_plan;
 
 typedef struct {
   robot_state state;
   vec3 current_pos;
-
   robot_target_t current_target;
   move_plan current_move_plan;
+  move_plan strike_move_plan;
 
   volatile bool flag_new_target;
   volatile bool flag_ready_to_move;

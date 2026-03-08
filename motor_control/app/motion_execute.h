@@ -12,7 +12,7 @@ bool motion_execute_consume_tick_due(void);
 bool motion_execute_safety_check_joint_limits(float q1_deg, float q2_deg, float q3_deg);
 
 void motion_execute_make_home_target(robot_t *robot);
-void motion_execute_plan_strike(robot_t *robot);
+void motion_execute_prepare_strike(robot_t *robot);
 
 void motion_execute_plan(robot_t *robot);
 void motion_execute_start(robot_t *robot);

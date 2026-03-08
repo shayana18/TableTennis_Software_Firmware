@@ -8,54 +8,6 @@
 static volatile uint8_t s_motion_tick_pending = 0U;
 static uint32_t s_tick_ms_accum = 0U;
 
-#if 0
-// Legacy velocity-control configuration and helpers (disabled).
-// Re-enable by moving this block out of #if 0 and switching tick path below.
-#define MOTION_DEBUG_QDOT 0
-#define MOTION_JOINT_CORRECTION_KP 1.35f
-#define MOTION_MAX_FB_MISS_TICKS 3U
-
-static bool speed_cmd_exceeds_limit(float cmd)
-{
-  return (fabsf(cmd) > (float)MAX_MOTOR_SPEED_CMD);
-}
-
-static float joint_deg_s_to_speed_cmd(float joint_deg_per_s)
-{
-  // deg/s -> RPM = deg/s / 6.0, then scale for driver command units.
-  const float rpm = (joint_deg_per_s / 6.0f);
-  return rpm * JOINT_GEAR_RATIO;
-}
-
-static float motion_profile_speed(const move_plan *plan, float t_s)
-{
-  const float t_acc = plan->t2 - plan->t1;
-  const float a = MAX_CART_ACC;
-
-  if (t_s <= plan->t1) {
-    return 0.0f;
-  }
-
-  if (t_s < plan->t2) {
-    return a * (t_s - plan->t1);
-  }
-
-  const float v_peak = a * t_acc;
-  if (t_s < plan->t3) {
-    return v_peak;
-  }
-
-  if (t_s < plan->T) {
-    return v_peak - a * (t_s - plan->t3);
-  }
-
-  if (t_s >= plan->T) {
-    return 0.0f;
-  }
-
-  return 0.0f;
-}
-#endif
 
 // Pre-computed motion profile constants (independent of targets)
 static const float s_ramp_time = MAX_CART_VEL / MAX_CART_ACC;
@@ -112,9 +64,9 @@ static float motion_profile_distance(const move_plan *plan, float t_s)
 
 static void motion_abort(robot_t *robot, const char *reason)
 {
-  move_plan *plan = &robot->current_move_plan;
 
-  plan->active = false;
+  robot->strike_move_plan.active = false;
+  robot->current_move_plan.active = false;
   robot->flag_ready_to_move = false;
   robot->flag_path_abort = true;
 
@@ -125,12 +77,10 @@ static void motion_abort(robot_t *robot, const char *reason)
   }
 }
 
-static void motion_finish(robot_t *robot)
+static void motion_finish(robot_t *robot, move_plan *plan)
 {
   // Legacy velocity-mode stop behavior:
   // robot_runtime_stop_joint_speed();
-
-  move_plan *plan = &robot->current_move_plan;
 
   plan->active = false;
   robot->flag_ready_to_move = false;
@@ -196,27 +146,192 @@ void motion_execute_make_home_target(robot_t *robot)
   robot->current_target.t_arrival_s = HOME_TIME;
 }
 
-void motion_execute_plan_strike(robot_t *robot)
+void motion_execute_prepare_strike(robot_t *robot)
 {
-  // Temporary strike motion
+
+  move_plan *plan = &robot->strike_move_plan;
+
+  const uint32_t now_ms = HAL_GetTick();
+  plan->t_start_ms = now_ms;
+  plan->prev_joint_deg[0] = robot->current_move_plan.prev_joint_deg[0];
+  plan->prev_joint_deg[1] = robot->current_move_plan.prev_joint_deg[1];
+  plan->prev_joint_deg[2] = robot->current_move_plan.prev_joint_deg[2];
+  plan->prev_joint_valid = robot->current_move_plan.prev_joint_valid;
+
+  robot->current_target.pos = plan->target_pos;
   robot->current_target.type = TARGET_STRIKE;
-  robot->current_target.pos.x += 50.0f;  // mm
-  robot->current_target.t_arrival_s = 1.0f;
-  robot->current_target.timestamp = HAL_GetTick() * 0.001f;
+
+  robot->flag_path_done = false;
+  robot->flag_path_abort = false;
+
+}
+
+void motion_execute_plan_strike(robot_t *robot) {
+  // Return the target offset we want to move to and the 4th axis yaw angle
+  vec3 new_interception_target;
+  vec3 interception_target = robot->current_target.pos;
+  vec3 ball_vel = robot->current_target.vel; 
+  vec3 strike_finish_target;
+  move_plan *strike_plan = &robot->strike_move_plan;
+
+  // 
+  float det = sqrt((ball_vel.z * ball_vel.z) + (2.0f * GRAVITY * (interception_target.z - STRIKE_TARGET_Z)));
+
+  float t1 = (-ball_vel.z + det) / (-GRAVITY);
+  float t2 = (-ball_vel.z - det) / (-GRAVITY);
+
+  float ball_return_travel_time = fmaxf(t1, t2);
+
+  if (ball_return_travel_time <= 0.0f || isnan(ball_return_travel_time)) {
+    motion_abort(robot, "BALL RETURN TIME NEGATIVE or NaN\r\n");
+    robot->state = STATE_IDLE;
+    set_idle(robot);
+    robot_runtime_send_status("STATE: IDLE\r\n");
+    return;
+  }
+
+  float vout_x = ((STRIKE_TARGET_X - interception_target.x) / ball_return_travel_time);
+  float vout_y = ((STRIKE_TARGET_Y - interception_target.y) / ball_return_travel_time);
+
+  float dvx = vout_x - ball_vel.x;
+  float dvy = vout_y - ball_vel.y;
+
+  float yaw = atan2f(dvy, dvx);
+
+  float nx = cosf(yaw);
+  float ny = sinf(yaw);
+
+  float vin_n  = ball_vel.x * nx + ball_vel.y * ny;
+  float vout_n = vout_x* nx + vout_y* ny;
+  float vp_n   = (vout_n + RESTITUTION * vin_n) / (1.0f + RESTITUTION);
+
+  float paddle_x_vel = vp_n * nx;
+  float paddle_y_vel = vp_n * ny;
+  float paddle_z_vel = 0.0f;
+
+
+  float paddle_speed = sqrtf((paddle_x_vel * paddle_x_vel) + (paddle_y_vel * paddle_y_vel) + (paddle_z_vel * paddle_z_vel));
+  
+  if (paddle_speed < 1.0f) {
+
+    // Update the strike target
+    strike_plan->start_pos = interception_target;
+    strike_plan->target_pos = interception_target;
+    strike_plan->D = 0.0f;
+
+    strike_plan->dir.x = 0.0;
+    strike_plan->dir.y = 0.0;
+    strike_plan->dir.z = 0.0;
+
+    strike_plan->t1 = 0.0f;
+    strike_plan->t2 = 0.0f;
+    strike_plan->t3 = 0.0f;
+    strike_plan->T = 0.0f;
+    strike_plan->active = true;
+    robot->current_move_plan.yaw_angle_deg = 0.0;
+
+    return;
+  }
+
+
+  if (paddle_speed > MAX_CART_VEL) {
+    paddle_x_vel = paddle_x_vel / paddle_speed * MAX_CART_VEL;
+    paddle_y_vel = paddle_y_vel / paddle_speed * MAX_CART_VEL;
+    paddle_z_vel = paddle_z_vel / paddle_speed * MAX_CART_VEL;
+    paddle_speed = MAX_CART_VEL;
+  }
+
+  float dir_x = paddle_x_vel / paddle_speed;
+  float dir_y = paddle_y_vel / paddle_speed;
+  float dir_z = paddle_z_vel / paddle_speed;
+
+  float interception_target_offset = paddle_speed * paddle_speed / (2.0f * MAX_CART_ACC) + STRIKE_BUFFER_DIST;
+
+  float paddle_yaw = yaw;
+  // keep in [-PI, PI]
+  if (yaw <  PI_F/2.0f && yaw > -PI_F/2.0f) {
+    paddle_yaw += PI_F/2.0f;
+  } else if (yaw >  PI_F/2.0f) {
+    paddle_yaw -= PI_F/2.0f;
+  } else {
+    paddle_yaw += 3*PI_F/2.0f;
+  }
+
+  float x_offset = PADDLE_OFFSET_X * cosf(yaw);
+  float y_offset = PADDLE_OFFSET_X * sinf(yaw);
+
+  new_interception_target.x = (interception_target.x - x_offset) - (dir_x * interception_target_offset);
+  new_interception_target.y = (interception_target.y - y_offset) - (dir_y * interception_target_offset); 
+  new_interception_target.z = (interception_target.z - PADDLE_OFFSET_Z) - (dir_z * interception_target_offset);
+
+  strike_finish_target.x = interception_target.x - x_offset + (dir_x * interception_target_offset);
+  strike_finish_target.y = interception_target.y - y_offset + (dir_y * interception_target_offset); 
+  strike_finish_target.z = interception_target.z - PADDLE_OFFSET_Z + (dir_z * interception_target_offset);
+
+  float dx, dy, dz;
+  const float D = robot_calc_dist(new_interception_target, strike_finish_target, &dx, &dy, &dz);
+
+  // Update the interception target
+  robot->current_target.pos = new_interception_target;
+  robot->current_move_plan.yaw_angle_deg = paddle_yaw * (180.0f / PI_F);
+
+  // Update the strike target
+  strike_plan->start_pos = new_interception_target;
+  strike_plan->target_pos = strike_finish_target;
+  strike_plan->D = D;
+
+  strike_plan->max_cart_vel = paddle_speed;
+
+  strike_plan->dir.x = dir_x;
+  strike_plan->dir.y = dir_y;
+  strike_plan->dir.z = dir_z;
+
+  // Strike Planning
+  float t_acc = strike_plan->max_cart_vel / MAX_CART_ACC;
+  float s_ramp_dist = 0.5f * MAX_CART_ACC * (t_acc * t_acc);
+  float t_cruise = (strike_plan->D - 2.0f * s_ramp_dist) / strike_plan->max_cart_vel;
+
+  strike_plan->t1 = 0.0f;
+  strike_plan->t2 = strike_plan->t1 + t_acc;
+  strike_plan->t3 = strike_plan->t2 + t_cruise;
+  strike_plan->T = strike_plan->t3 + t_acc;
+
+  strike_plan->active = true;
+  
+
 }
 
 void motion_execute_plan(robot_t *robot)
 {
   move_plan *plan = &robot->current_move_plan;
   const uint32_t now_ms = HAL_GetTick();
+  float strike_time_buffer = 0.0f;
+
+  // Do not plan offset if target is Home or test
+  if (robot->current_target.type == TARGET_INTERCEPT) {
+    motion_execute_plan_strike(robot);
+    strike_time_buffer = robot->strike_move_plan.T / 2.0f;
+
+    if (!robot->strike_move_plan.active) {
+      robot_runtime_send_status("STRIKE PLAN FAILED\r\n");
+      return;
+    }
+  }
+
   const vec3 target = robot->current_target.pos;
+
+  if (!robot_target_in_workspace(target)) {
+    motion_abort(robot, "PATH_ABORT: TARGET OUT OF WORKSPACE\r\n");
+    robot->state = STATE_IDLE;
+    set_idle(robot);
+    robot_runtime_send_status("STATE: IDLE\r\n");
+    return;
+  } 
 
   // Use a single joint sample to seed both start pose and unwrap reference.
   float q1_now, q2_now, q3_now;
   if (!robot_get_joint_angles(&q1_now, &q2_now, &q3_now)) {
     plan->prev_joint_valid = false;
-    plan->feedback_valid = false;
-    plan->feedback_miss_ticks = 0U;
     robot_runtime_send_status("ERR: prev q unset\r\n");
     return;
   }
@@ -253,11 +368,6 @@ void motion_execute_plan(robot_t *robot)
   plan->prev_joint_deg[1] = q2_now;
   plan->prev_joint_deg[2] = q3_now;
   plan->prev_joint_valid = true;
-  plan->last_feedback_deg[0] = q1_now;
-  plan->last_feedback_deg[1] = q2_now;
-  plan->last_feedback_deg[2] = q3_now;
-  plan->feedback_valid = true;
-  plan->feedback_miss_ticks = 0U;
 
   // Planning
 
@@ -276,20 +386,9 @@ void motion_execute_plan(robot_t *robot)
   }
 
   const float t_move = (2.0f * t_acc) + t_cruise; // Total move time
-  float delay = robot->current_target.timestamp - (now_ms * 0.001f);
 
-  delay = 0;  // For now, ignore timestamp since no realtime target updates
 
-  // char msg[100];
-  // long delay_ms = (long)lroundf(delay * 1000.0f);
-  // snprintf(msg, sizeof(msg), "Delay: %ld ms\r\n", delay_ms);
-  // robot_runtime_send_status(msg);
-
-  float t_extra = robot->current_target.t_arrival_s - t_move + delay - BUFFER_TIME;
-
-  // long t_extra_ms = (long)lroundf(t_extra * 1000.0f);
-  // snprintf(msg, sizeof(msg), "Extra Time: %ld ms\r\n", t_extra_ms);
-  // robot_runtime_send_status(msg);
+  float t_extra = robot->current_target.t_arrival_s - t_move - strike_time_buffer - BUFFER_TIME;
 
   if (t_extra < 0.0f) {
     t_extra = 0.0f;
@@ -306,17 +405,36 @@ void motion_execute_plan(robot_t *robot)
 
 void motion_execute_start(robot_t *robot)
 {
-  if (!robot->current_move_plan.prev_joint_valid) {
+  move_plan *plan;
+
+  if (robot->current_target.type == TARGET_STRIKE) {
+    plan = &robot->strike_move_plan;
+
+  }else {
+    plan = &robot->current_move_plan;
+  }
+
+  if (!plan->active || !plan->prev_joint_valid) {
     robot->flag_ready_to_move = false;
-    robot_runtime_send_status("PLAN_ABORT: NO_FeedBack\r\n");
+    robot_runtime_send_status("PLAN_ABORT: PLANNING FAILED\r\n");
     return;
+  }
+  
+  if (robot->current_target.type == TARGET_INTERCEPT) {
+    robot_runtime_set_paddle_abs_deg(plan->yaw_angle_deg);
   }
   robot->flag_ready_to_move = true;
 }
 
 void motion_execute_tick(robot_t *robot)
 {
-  move_plan *plan = &robot->current_move_plan;
+  move_plan *plan;
+  if (robot->current_target.type == TARGET_STRIKE) {
+    plan = &robot->strike_move_plan;
+
+  }else {
+    plan = &robot->current_move_plan;
+  }
 
   if (!plan->active || !robot->flag_ready_to_move) {
     return;
@@ -361,92 +479,6 @@ void motion_execute_tick(robot_t *robot)
     return;
   }
 
-  // velocity-control stuff (commented out)
-/*
-  float q_diff_1, q_diff_2, q_diff_3;
-  if (plan->prev_joint_valid) {
-    float q1_prev, q2_prev, q3_prev;
-    if (robot_get_joint_angles(&q1_prev, &q2_prev, &q3_prev)) {
-      plan->last_feedback_deg[0] = q1_prev;
-      plan->last_feedback_deg[1] = q2_prev;
-      plan->last_feedback_deg[2] = q3_prev;
-      plan->feedback_valid = true;
-      plan->feedback_miss_ticks = 0U;
-    } else if (plan->feedback_valid &&
-               (plan->feedback_miss_ticks < MOTION_MAX_FB_MISS_TICKS)) {
-      plan->feedback_miss_ticks++;
-      q1_prev = plan->prev_joint_deg[0];
-      q2_prev = plan->prev_joint_deg[1];
-      q3_prev = plan->prev_joint_deg[2];
-    } else {
-      robot_runtime_send_status("ERR: q read failed\r\n");
-      motion_abort(robot, "PATH_ABORT: ENCODER_READ_FAIL\r\n");
-      return;
-    }
-
-    if (!motion_execute_safety_check_joint_limits(q1_prev, q2_prev, q3_prev) &&
-        !(robot->current_target.type == TARGET_HOME)) {
-      motion_abort(robot, "PATH_ABORT: ROBOT JOINT LIMITS EXCEEDED\r\n");
-      return;
-    }
-
-    const float v_cart = motion_profile_speed(plan, t_s);
-    const vec3 c_dot = {
-        plan->dir.x * v_cart,
-        plan->dir.y * v_cart,
-        plan->dir.z * v_cart,
-    };
-
-    const float theta_deg[3] = {q1_prev, q2_prev, q3_prev};
-    float Jinv[3][3];
-    if (robot_delta_inv_jacobian(theta_deg, setpoint, Jinv) != 0) {
-      motion_abort(robot, "PATH_ABORT: JAC_SINGULAR\r\n");
-      return;
-    }
-
-    float qdot1 = Jinv[0][0] * c_dot.x + Jinv[0][1] * c_dot.y + Jinv[0][2] * c_dot.z;
-    float qdot2 = Jinv[1][0] * c_dot.x + Jinv[1][1] * c_dot.y + Jinv[1][2] * c_dot.z;
-    float qdot3 = Jinv[2][0] * c_dot.x + Jinv[2][1] * c_dot.y + Jinv[2][2] * c_dot.z;
-
-    q1_ik = unwrap_deg_near(q1_ik, q1_prev);
-    q2_ik = unwrap_deg_near(q2_ik, q2_prev);
-    q3_ik = unwrap_deg_near(q3_ik, q3_prev);
-
-    q_diff_1 = q1_ik - q1_prev;
-    q_diff_2 = q2_ik - q2_prev;
-    q_diff_3 = q3_ik - q3_prev;
-
-    qdot1 += MOTION_JOINT_CORRECTION_KP * q_diff_1;
-    qdot2 += MOTION_JOINT_CORRECTION_KP * q_diff_2;
-    qdot3 += MOTION_JOINT_CORRECTION_KP * q_diff_3;
-
-    const float q1_cmd = joint_deg_s_to_speed_cmd(qdot1);
-    const float q2_cmd = joint_deg_s_to_speed_cmd(qdot2);
-    const float q3_cmd = joint_deg_s_to_speed_cmd(qdot3);
-
-    const bool exceeded1 = speed_cmd_exceeds_limit(q1_cmd);
-    const bool exceeded2 = speed_cmd_exceeds_limit(q2_cmd);
-    const bool exceeded3 = speed_cmd_exceeds_limit(q3_cmd);
-
-    if (exceeded1 || exceeded2 || exceeded3) {
-      if (exceeded1) {
-        robot_runtime_send_status("CMD1 EXCEEDED\r\n");
-      } else if (exceeded2) {
-        robot_runtime_send_status("CMD2 EXCEEDED\r\n");
-      } else if (exceeded3) {
-        robot_runtime_send_status("CMD3 EXCEEDED\r\n");
-      }
-      motion_abort(robot, "PATH_ABORT: MOTOR_SPEED_EXCEEDED\r\n");
-      return;
-    }
-
-    const long cmd1 = (long)lroundf(q1_cmd);
-    const long cmd2 = (long)lroundf(q2_cmd);
-    const long cmd3 = (long)lroundf(q3_cmd);
-    robot_runtime_set_joint_speed(cmd1, cmd2, cmd3);
-  }
-*/
-
   robot_runtime_set_joint_position_abs_deg(q1_ik, q2_ik, q3_ik);
 
   plan->prev_joint_deg[0] = q1_ik;
@@ -457,7 +489,7 @@ void motion_execute_tick(robot_t *robot)
   robot->current_pos = setpoint;
 
   if (t_s >= plan->T) {
-    motion_finish(robot);
+    motion_finish(robot, plan);
     return;
   }
 }

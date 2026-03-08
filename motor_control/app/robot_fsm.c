@@ -61,7 +61,7 @@ void delta_fsm(robot_t *robot)
     case STATE_IDLE:
       if (!robot_runtime_pop_target(&robot->current_target)) {
         break;
-      } else if(robot->current_target.type == TARGET_INTERCEPT)
+      } else if(robot->current_target.type == TARGET_INTERCEPT || robot->current_target.type == TARGET_TEST)
       {
         robot->state = STATE_PLAN;
         robot_runtime_send_status("STATE: PLAN\r\n");
@@ -77,24 +77,19 @@ void delta_fsm(robot_t *robot)
 
 
     case STATE_PLAN:
-      if (!robot_target_in_workspace(robot->current_target.pos)) {
-        robot_runtime_send_status("TARGET OUT OF WORKSPACE\r\n");
+
+      motion_execute_plan(robot);
+      motion_execute_start(robot);
+      if (!robot->flag_ready_to_move) {
+        robot_runtime_send_status("Planning Failed\r\n");
         robot->state = STATE_IDLE;
         set_idle(robot);
         robot_runtime_send_status("STATE: IDLE\r\n");
-      } else {
-        motion_execute_plan(robot);
-        motion_execute_start(robot);
-        if (!robot->flag_ready_to_move) {
-          robot_runtime_send_status("Planning Failed\r\n");
-          robot->state = STATE_IDLE;
-          set_idle(robot);
-          robot_runtime_send_status("STATE: IDLE\r\n");
-          break;
-        }
-        robot->state = STATE_MOVE;
-        robot_runtime_send_status("STATE: MOVE\r\n");
+        break;
       }
+      robot->state = STATE_MOVE;
+      robot_runtime_send_status("STATE: MOVE\r\n");
+      
       break;
 
     case STATE_MOVE:
@@ -114,14 +109,6 @@ void delta_fsm(robot_t *robot)
 
       if (robot->flag_path_done) {
 
-        // Simple logic chain: Just set robot state to IDLE
-        robot->state = STATE_IDLE;
-        set_idle(robot);
-        robot_runtime_send_status("STATE: IDLE\r\n");
-        print_joint_angles();
-        
-        // True logic chain
-        /*
         if (robot->current_target.type == TARGET_INTERCEPT) {
           robot->state = STATE_STRIKE;
           robot_runtime_send_status("STATE: STRIKE\r\n");
@@ -134,24 +121,23 @@ void delta_fsm(robot_t *robot)
           set_idle(robot);
           robot_runtime_send_status("REACHED HOME\r\n");
           robot_runtime_send_status("STATE: IDLE\r\n");
-        } else {
+        } else { // Test target type
         robot->state = STATE_IDLE;
         set_idle(robot);
         robot_runtime_send_status("STATE: IDLE\r\n");
+        print_joint_angles();
         }
-        */
 
       }
       break;
 
     case STATE_STRIKE:
-      motion_execute_plan_strike(robot);
+      motion_execute_prepare_strike(robot);
       if (!robot_target_in_workspace(robot->current_target.pos)) {
-        robot_runtime_send_status("PATH_INVALID, SENDING HOME\r\n");
-        motion_execute_make_home_target(robot);
-        robot->state = STATE_PLAN;
+        robot->state = STATE_IDLE;
+        set_idle(robot);
+        robot_runtime_send_status("STATE: IDLE\r\n");
       } else {
-        motion_execute_plan(robot);
         motion_execute_start(robot);
         if (!robot->flag_ready_to_move) {
           robot->state = STATE_IDLE;
