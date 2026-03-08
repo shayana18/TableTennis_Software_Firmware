@@ -19,10 +19,29 @@ W_NO_HISTORY  = 0.15   # Score when no previous position exists
 # === Setup ===
 cap = cv2.VideoCapture(CAM_ID, cv2.CAP_DSHOW)
 cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('M','J','P','G'))
-cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 800)
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 cap.set(cv2.CAP_PROP_FPS, 100)
 cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
+# --- Print actual camera info ---
+ret, test_frame = cap.read()
+if ret:
+    actual_h, actual_w = test_frame.shape[:2]
+else:
+    actual_w, actual_h = -1, -1
+rb_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+rb_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+rb_fps = cap.get(cv2.CAP_PROP_FPS)
+fourcc_int = int(cap.get(cv2.CAP_PROP_FOURCC))
+fourcc_str = "".join([chr((fourcc_int >> 8 * i) & 0xFF) for i in range(4)])
+print(f"\n{'='*50}")
+print(f"  Camera {CAM_ID}")
+print(f"{'='*50}")
+print(f"  Requested:    640x480 MJPG @ 100fps")
+print(f"  Readback:     {rb_w}x{rb_h} {fourcc_str} @ {rb_fps:.0f}fps")
+print(f"  Actual frame: {actual_w}x{actual_h}")
+print(f"{'='*50}\n")
 
 bg_sub = cv2.createBackgroundSubtractorMOG2(history=300, varThreshold=40, detectShadows=False)
 kernel_open  = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
@@ -56,12 +75,6 @@ last_pos = None
 fps_counter = 0
 fps_timer   = time.perf_counter()
 actual_fps  = 0
-
-# # TEMP: Stats collection for tuning
-# _ac_areas = []
-# _ac_circs = []
-# _ac_scores = []
-# _was_detected = False
 
 while True:
     ret, frame = cap.read()
@@ -155,27 +168,6 @@ while True:
     detected = best_candidate is not None
     if detected:
         last_pos = best_candidate['center']
-        # a = best_candidate['area']
-        # c = best_candidate['circularity']
-        # s = best_candidate['score']
-        # orange_tag = " [ORANGE]" if best_candidate['is_orange'] else ""
-        # print(f"  A: {a:7.1f}   C: {c:.3f}   S: {s:.2f}{orange_tag}")
-        # _ac_areas.append(a)
-        # _ac_circs.append(c)
-        # _ac_scores.append(s)
-        # _was_detected = True
-    # elif _was_detected:
-        # avg_a = np.mean(_ac_areas)
-        # avg_c = np.mean(_ac_circs)
-        # avg_s = np.mean(_ac_scores)
-        # print(f"\n--- LOST BALL ({len(_ac_areas)} frames) ---")
-        # print(f"  Area  =>  avg: {avg_a:.0f}   min: {np.min(_ac_areas):.0f}   max: {np.max(_ac_areas):.0f}")
-        # print(f"  Circ  =>  avg: {avg_c:.3f}   min: {np.min(_ac_circs):.3f}   max: {np.max(_ac_circs):.3f}")
-        # print(f"  Score =>  avg: {avg_s:.2f}   min: {np.min(_ac_scores):.2f}   max: {np.max(_ac_scores):.2f}\n")
-        # _ac_areas.clear()
-        # _ac_circs.clear()
-        # _ac_scores.clear()
-        # _was_detected = False
 
     # --- Visualization ---
     vis = roi_frame.copy()

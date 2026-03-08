@@ -33,7 +33,7 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from tracking.stereo_triangulator import StereoTriangulator
-from config.camera_config import load_camera_settings, configure_camera
+from config.camera_config import load_camera_settings
 
 
 class StereoMeasureTool:
@@ -107,20 +107,8 @@ class StereoMeasureTool:
         return True
 
     def start_cameras(self):
-        """Open and configure cameras."""
-        self.triangulator.cap_left = cv2.VideoCapture(self.cam_left_id)
-        self.triangulator.cap_right = cv2.VideoCapture(self.cam_right_id)
-
-        if not self.triangulator.cap_left.isOpened():
-            raise RuntimeError(f"Failed to open left camera (ID: {self.cam_left_id})")
-        if not self.triangulator.cap_right.isOpened():
-            raise RuntimeError(f"Failed to open right camera (ID: {self.cam_right_id})")
-
-        s_left = configure_camera(self.triangulator.cap_left, self.frame_width, self.frame_height)
-        s_right = configure_camera(self.triangulator.cap_right, self.frame_width, self.frame_height)
-
-        print(f"  LEFT:  {s_left['width']}x{s_left['height']} @ {s_left['fps']:.0f}fps")
-        print(f"  RIGHT: {s_right['width']}x{s_right['height']} @ {s_right['fps']:.0f}fps")
+        """Open and configure cameras via StereoTriangulator (CAP_DSHOW + buffer)."""
+        self.triangulator.start_cameras(self.frame_width, self.frame_height)
 
     def pixel_to_original(self, x_display, y_display, is_right=False):
         """Convert display coordinates back to original image coordinates."""

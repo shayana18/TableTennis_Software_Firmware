@@ -38,12 +38,15 @@ def main():
     print(f"  Target: {CAMERA_WIDTH}x{CAMERA_HEIGHT} @ 100fps MJPG")
     print(f"\nOpening cameras...")
 
-    cap_left = cv2.VideoCapture(cam_left_id)
-    cap_right = cv2.VideoCapture(cam_right_id)
+    cap_left = cv2.VideoCapture(cam_left_id, cv2.CAP_DSHOW)
+    cap_right = cv2.VideoCapture(cam_right_id, cv2.CAP_DSHOW)
 
     if not cap_left.isOpened() or not cap_right.isOpened():
         print("ERROR: Failed to open one or both cameras")
         return
+
+    cap_left.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+    cap_right.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
     s_left = configure_camera(cap_left, CAMERA_WIDTH, CAMERA_HEIGHT)
     s_right = configure_camera(cap_right, CAMERA_WIDTH, CAMERA_HEIGHT)

@@ -28,8 +28,8 @@ USAGE:
             x, y, z = result['position_3d']
             predictor.add_position(x, y, z)
         
-        # Predict where ball will be at Z = robot_reach
-        prediction = predictor.predict(target_z=50)
+        # Predict where ball will be at X = robot_endline
+        prediction = predictor.predict(target_x=50)
         
         if prediction['valid']:
             robot_x = prediction['intercept_x']

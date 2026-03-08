@@ -47,13 +47,16 @@ class ArducamStereoCapture:
             width = FRAME_WIDTH
         if height is None:
             height = FRAME_HEIGHT
-        self.cap_left = cv2.VideoCapture(self.cam_left_id)
-        self.cap_right = cv2.VideoCapture(self.cam_right_id)
+        self.cap_left = cv2.VideoCapture(self.cam_left_id, cv2.CAP_DSHOW)
+        self.cap_right = cv2.VideoCapture(self.cam_right_id, cv2.CAP_DSHOW)
 
         if not self.cap_left.isOpened():
             raise RuntimeError(f"Failed to open left camera (ID: {self.cam_left_id})")
         if not self.cap_right.isOpened():
             raise RuntimeError(f"Failed to open right camera (ID: {self.cam_right_id})")
+
+        self.cap_left.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        self.cap_right.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
         print("\nConfiguring cameras (Arducam OV9782 MJPG mode):")
         s_left = configure_camera(self.cap_left, width, height)

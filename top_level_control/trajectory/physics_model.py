@@ -2,9 +2,17 @@
 Physics Model - Ball Trajectory Physics
 
 Implements physics equations for table tennis ball trajectory:
-  - Gravity (primary effect)
-  - Air drag (optional, minor effect for short distances)
-  - Bounce detection (optional)
+  - Gravity (primary effect on Y axis)
+  - Air drag (optional, decelerates all axes)
+  - Axis-plane interception (stop when ball reaches target X, Y, or Z)
+  - Apex detection (highest point of arc)
+
+Coordinate system (camera frame, cameras on SIDE of table looking ACROSS width):
+    X: Along table LENGTH (ball travels player-to-player on this axis, 274 cm)
+    Y: Vertical (positive = down in camera coords)
+    Z: Depth from camera = across table WIDTH (152.5 cm + ~110 cm offset)
+
+    Gravity acts on Y only (no X/Z acceleration without drag).
 
 Part of trajectory prediction pipeline:
   position_buffer.py  →  velocity_estimator.py  →  trajectory_predictor.py
@@ -16,73 +24,68 @@ import math
 import numpy as np
 
 
+# ================================================================
 # Physical constants
-GRAVITY_CM_S2 = 981.0      # Gravity in cm/s² (9.81 m/s² = 981 cm/s²)
-GRAVITY_M_S2 = 9.81        # Gravity in m/s²
+# ================================================================
 
-# Table tennis ball physical constants (CGS units for cm/s system)
-BALL_MASS_G = 2.7              # grams
-BALL_RADIUS_CM = 2.0           # cm
-AIR_DENSITY_G_CM3 = 0.001225   # g/cm³ (= 1.225 kg/m³)
-DEFAULT_DRAG_CD = 0.45         # drag coefficient at playing speeds
+GRAVITY_CM_S2 = 981.0       # cm/s²  (9.81 m/s²)
+GRAVITY_MM_S2 = 9810.0      # mm/s²
+
+# Table tennis ball (CGS for cm/s system)
+BALL_MASS_G = 2.7
+BALL_RADIUS_CM = 2.0
+AIR_DENSITY_G_CM3 = 0.001225
+DEFAULT_DRAG_CD = 0.45
 
 
 class PhysicsModel:
     """
     Physics model for ball trajectory prediction.
-    
-    Coordinate system (matches stereo calibration):
-        X: Horizontal (left/right)
-        Y: Vertical (positive = down in image, but we treat as up physically)
-        Z: Depth (toward ball, positive = further from camera)
-    
-    IMPORTANT: In camera coordinates, +Y is typically DOWN.
-               Gravity acts in +Y direction (pulls ball down = increasing Y)
-               Adjust gravity_sign based on your coordinate system.
-    
+
+    IMPORTANT — Coordinate convention:
+        Camera Y is typically DOWN (positive = downward).
+        Gravity acts in +Y direction (pulls ball down = increasing Y).
+        Set y_down=True for standard camera coordinates.
+
     Usage:
         model = PhysicsModel(gravity=981, y_down=True)
-        future_pos = model.predict_position(pos, vel, dt=0.1)
-    """
-    
-    def __init__(self, gravity=981.0, y_down=True, enable_drag=False, drag_coefficient=DEFAULT_DRAG_CD):
-        """
-        Initialize physics model.
 
-        Args:
-            gravity: Gravitational acceleration (cm/s² if using cm)
-            y_down: True if +Y is downward (typical camera coords)
-            enable_drag: Include air resistance
-            drag_coefficient: Air drag coefficient Cd (default 0.45)
-        """
+        # Predict where ball will be at camera X = 120 cm:
+        result = model.position_at_x(pos, vel, target_x=120)
+
+        # Predict apex (highest point):
+        result = model.position_at_apex(pos, vel)
+    """
+
+    def __init__(self, gravity=GRAVITY_CM_S2, y_down=True,
+                 enable_drag=False, drag_coefficient=DEFAULT_DRAG_CD):
         self.gravity = gravity
         self.y_down = y_down
         self.enable_drag = enable_drag
         self.drag_coefficient = drag_coefficient
 
-        # Gravity direction: +1 if Y increases downward, -1 if Y increases upward
+        # +1 if Y increases downward (camera), -1 if Y increases upward
         self.gravity_sign = 1.0 if y_down else -1.0
 
-        # Precompute drag constant: k = (rho * Cd * A) / (2 * m)
+        # Precompute drag constant: k = (ρ · Cd · A) / (2 · m)
         cross_section = math.pi * BALL_RADIUS_CM ** 2
         self.drag_k = (AIR_DENSITY_G_CM3 * drag_coefficient * cross_section) / (2.0 * BALL_MASS_G)
-    
+
+    # ================================================================
+    # NUMERICAL SIMULATION (with drag)
+    # ================================================================
+
     def _simulate(self, position, velocity, max_time=2.0,
-                  stop_at_z=None, stop_at_apex=False,
+                  stop_at_x=None, stop_at_z=None, stop_at_apex=False,
                   record_trajectory=False, record_dt=0.01,
                   sim_dt=0.001):
         """
-        Numerical integration engine with air drag (semi-implicit Euler).
+        Numerical integration with air drag (semi-implicit Euler).
 
-        Args:
-            position: (X, Y, Z) starting position
-            velocity: (Vx, Vy, Vz) starting velocity
-            max_time: Safety time limit (seconds)
-            stop_at_z: Stop when Z crosses this value (None = disabled)
+        Stop conditions (first one triggered wins):
+            stop_at_x: Stop when X crosses this value
+            stop_at_z: Stop when Z crosses this value
             stop_at_apex: Stop when Vy changes sign (rising → falling)
-            record_trajectory: If True, record waypoints every record_dt
-            record_dt: Spacing between recorded trajectory points (seconds)
-            sim_dt: Internal simulation timestep (seconds)
 
         Returns:
             dict with 'position', 'time', 'velocity', 'valid',
@@ -95,97 +98,90 @@ class PhysicsModel:
 
         trajectory = [] if record_trajectory else None
         next_record_t = 0.0
-
         t = 0.0
-        prev_vy = vy
+
         prev_x, prev_y, prev_z = x, y, z
-        prev_vx, prev_vy_store, prev_vz = vx, vy, vz
+        prev_vx, prev_vy, prev_vz = vx, vy, vz
 
         steps = int(max_time / sim_dt)
 
         for _ in range(steps):
-            # Record trajectory waypoint
             if record_trajectory and t >= next_record_t:
                 trajectory.append((x, y, z, t))
                 next_record_t += record_dt
 
-            # Save previous state for interpolation
+            # Save previous state
             prev_x, prev_y, prev_z = x, y, z
-            prev_vx, prev_vy_store, prev_vz = vx, vy, vz
-            prev_vy = vy
+            prev_vx, prev_vy, prev_vz = vx, vy, vz
+            prev_vy_sign = vy
             prev_t = t
 
-            # Compute drag deceleration
-            speed = math.sqrt(vx * vx + vy * vy + vz * vz)
-            drag_factor = -k * speed
+            # Drag deceleration
+            if self.enable_drag:
+                speed = math.sqrt(vx*vx + vy*vy + vz*vz)
+                drag = -k * speed
+                ax = drag * vx
+                ay = drag * vy + g_acc
+                az = drag * vz
+            else:
+                ax = 0.0
+                ay = g_acc
+                az = 0.0
 
-            ax = drag_factor * vx
-            ay = drag_factor * vy + g_acc
-            az = drag_factor * vz
-
-            # Semi-implicit Euler: update velocity first, then position
+            # Semi-implicit Euler
             vx += ax * sim_dt
             vy += ay * sim_dt
             vz += az * sim_dt
-
             x += vx * sim_dt
             y += vy * sim_dt
             z += vz * sim_dt
-
             t += sim_dt
 
-            # Check Z-crossing stop condition
+            # --- Stop condition: X-plane crossing ---
+            if stop_at_x is not None:
+                d_prev = prev_x - stop_at_x
+                d_curr = x - stop_at_x
+                if d_prev * d_curr <= 0 and abs(d_prev - d_curr) > 1e-12:
+                    frac = abs(d_prev) / abs(d_prev - d_curr)
+                    result = self._interpolate_stop(
+                        prev_x, prev_y, prev_z, prev_vx, prev_vy, prev_vz,
+                        x, y, z, vx, vy, vz, prev_t, sim_dt, frac, trajectory)
+                    result['position'] = (stop_at_x,
+                                          result['position'][1],
+                                          result['position'][2])
+                    return result
+
+            # --- Stop condition: Z-plane crossing ---
             if stop_at_z is not None:
-                # Detect crossing: (prev_z - target) and (z - target) have opposite signs
                 d_prev = prev_z - stop_at_z
                 d_curr = z - stop_at_z
                 if d_prev * d_curr <= 0 and abs(d_prev - d_curr) > 1e-12:
-                    # Linear interpolation for sub-step accuracy
                     frac = abs(d_prev) / abs(d_prev - d_curr)
-                    ix = prev_x + frac * (x - prev_x)
-                    iy = prev_y + frac * (y - prev_y)
-                    iz = stop_at_z
-                    ivx = prev_vx + frac * (vx - prev_vx)
-                    ivy = prev_vy_store + frac * (vy - prev_vy_store)
-                    ivz = prev_vz + frac * (vz - prev_vz)
-                    it = prev_t + frac * sim_dt
-                    if record_trajectory:
-                        trajectory.append((ix, iy, iz, it))
-                    return {
-                        'position': (ix, iy, iz),
-                        'time': it,
-                        'velocity': (ivx, ivy, ivz),
-                        'valid': True,
-                        'trajectory': trajectory
-                    }
+                    result = self._interpolate_stop(
+                        prev_x, prev_y, prev_z, prev_vx, prev_vy, prev_vz,
+                        x, y, z, vx, vy, vz, prev_t, sim_dt, frac, trajectory)
+                    result['position'] = (result['position'][0],
+                                          result['position'][1],
+                                          stop_at_z)
+                    return result
 
-            # Check apex stop condition (Vy sign change: rising → falling)
-            if stop_at_apex and prev_vy * vy <= 0 and abs(prev_vy) > 1e-9:
-                # Linear interpolation
-                frac = abs(prev_vy) / (abs(prev_vy) + abs(vy)) if abs(prev_vy) + abs(vy) > 1e-12 else 0.5
-                ix = prev_x + frac * (x - prev_x)
-                iy = prev_y + frac * (y - prev_y)
-                iz = prev_z + frac * (z - prev_z)
-                it = prev_t + frac * sim_dt
-                # Velocity at apex: Vy ≈ 0 by definition
-                ivx = prev_vx + frac * (vx - prev_vx)
-                ivz = prev_vz + frac * (vz - prev_vz)
-                if record_trajectory:
-                    trajectory.append((ix, iy, iz, it))
-                return {
-                    'position': (ix, iy, iz),
-                    'time': it,
-                    'velocity': (ivx, 0.0, ivz),
-                    'valid': True,
-                    'trajectory': trajectory
-                }
+            # --- Stop condition: Apex (Vy sign change) ---
+            if stop_at_apex and prev_vy_sign * vy <= 0 and abs(prev_vy_sign) > 1e-9:
+                denom = abs(prev_vy_sign) + abs(vy)
+                frac = abs(prev_vy_sign) / denom if denom > 1e-12 else 0.5
+                result = self._interpolate_stop(
+                    prev_x, prev_y, prev_z, prev_vx, prev_vy, prev_vz,
+                    x, y, z, vx, vy, vz, prev_t, sim_dt, frac, trajectory)
+                result['velocity'] = (result['velocity'][0],
+                                      0.0,
+                                      result['velocity'][2])
+                return result
 
-        # Ran out of time without hitting stop condition
+        # Ran out of time
         if record_trajectory:
             trajectory.append((x, y, z, t))
 
-        # For duration-based runs (no stop condition), return final state as valid
-        valid = (stop_at_z is None and not stop_at_apex)
+        valid = (stop_at_x is None and stop_at_z is None and not stop_at_apex)
         return {
             'position': (x, y, z),
             'time': t,
@@ -194,22 +190,40 @@ class PhysicsModel:
             'trajectory': trajectory
         }
 
+    def _interpolate_stop(self, px, py, pz, pvx, pvy, pvz,
+                          cx, cy, cz, cvx, cvy, cvz,
+                          prev_t, sim_dt, frac, trajectory):
+        """Linear interpolation at a stop-condition crossing."""
+        ix = px + frac * (cx - px)
+        iy = py + frac * (cy - py)
+        iz = pz + frac * (cz - pz)
+        ivx = pvx + frac * (cvx - pvx)
+        ivy = pvy + frac * (cvy - pvy)
+        ivz = pvz + frac * (cvz - pvz)
+        it = prev_t + frac * sim_dt
+
+        if trajectory is not None:
+            trajectory.append((ix, iy, iz, it))
+
+        return {
+            'position': (ix, iy, iz),
+            'time': it,
+            'velocity': (ivx, ivy, ivz),
+            'valid': True,
+            'trajectory': trajectory
+        }
+
+    # ================================================================
+    # CLOSED-FORM KINEMATICS (no drag)
+    # ================================================================
+
     def predict_position(self, position, velocity, dt):
         """
-        Predict position after time dt using kinematic equations.
-        
-        Equations:
-            X(t) = X₀ + Vx × t
-            Y(t) = Y₀ + Vy × t + ½ × g × t²
-            Z(t) = Z₀ + Vz × t
-        
-        Args:
-            position: (X, Y, Z) current position
-            velocity: (Vx, Vy, Vz) current velocity
-            dt: Time step in seconds
-        
-        Returns:
-            (X_new, Y_new, Z_new) predicted position
+        Predict position after time dt.
+
+        X(t) = X₀ + Vx·t           (no X acceleration)
+        Y(t) = Y₀ + Vy·t + ½g·t²  (gravity on Y)
+        Z(t) = Z₀ + Vz·t           (no Z acceleration)
         """
         if self.enable_drag:
             result = self._simulate(position, velocity, max_time=dt)
@@ -217,54 +231,29 @@ class PhysicsModel:
 
         x0, y0, z0 = position
         vx, vy, vz = velocity
+        g = self.gravity_sign * self.gravity
 
-        x_new = x0 + vx * dt
-        y_new = y0 + vy * dt + 0.5 * self.gravity_sign * self.gravity * dt * dt
-        z_new = z0 + vz * dt
+        return (x0 + vx * dt,
+                y0 + vy * dt + 0.5 * g * dt * dt,
+                z0 + vz * dt)
 
-        return (x_new, y_new, z_new)
-    
     def predict_velocity(self, velocity, dt):
         """
         Predict velocity after time dt.
-        
-        Equations:
-            Vx(t) = Vx₀           (no horizontal deceleration)
-            Vy(t) = Vy₀ + g × t   (gravity accelerates downward)
-            Vz(t) = Vz₀           (no depth deceleration)
-        
-        Args:
-            velocity: (Vx, Vy, Vz) current velocity
-            dt: Time step in seconds
-        
-        Returns:
-            (Vx_new, Vy_new, Vz_new) predicted velocity
+
+        Vx unchanged, Vy += g·t, Vz unchanged.
         """
         if self.enable_drag:
             result = self._simulate((0, 0, 0), velocity, max_time=dt)
             return result['velocity']
 
         vx, vy, vz = velocity
+        return (vx,
+                vy + self.gravity_sign * self.gravity * dt,
+                vz)
 
-        vx_new = vx
-        vy_new = vy + self.gravity_sign * self.gravity * dt
-        vz_new = vz
-
-        return (vx_new, vy_new, vz_new)
-    
     def predict_trajectory(self, position, velocity, duration, dt=0.001):
-        """
-        Predict full trajectory over duration using exact kinematics.
-
-        Args:
-            position: (X, Y, Z) starting position
-            velocity: (Vx, Vy, Vz) starting velocity
-            duration: Total prediction time in seconds
-            dt: Time step between sample points
-
-        Returns:
-            List of (X, Y, Z, t) tuples representing trajectory
-        """
+        """Predict full trajectory as list of (X, Y, Z, t)."""
         if self.enable_drag:
             result = self._simulate(position, velocity, max_time=duration,
                                     record_trajectory=True, record_dt=dt)
@@ -272,151 +261,114 @@ class PhysicsModel:
 
         trajectory = []
         t = 0.0
-
         while t <= duration:
-            pred_pos = self.predict_position(position, velocity, t)
-            trajectory.append((pred_pos[0], pred_pos[1], pred_pos[2], t))
+            pos = self.predict_position(position, velocity, t)
+            trajectory.append((pos[0], pos[1], pos[2], t))
             t += dt
-
         return trajectory
-    
+
+    # ================================================================
+    # AXIS-PLANE INTERCEPTION
+    # ================================================================
+
+    def time_to_x(self, position, velocity, target_x):
+        """Time for ball to reach target X. Returns None if unreachable."""
+        vx = velocity[0]
+        if abs(vx) < 1e-6:
+            return None
+        t = (target_x - position[0]) / vx
+        return t if t > 0 else None
+
     def time_to_z(self, position, velocity, target_z):
-        """
-        Calculate time for ball to reach a specific Z distance.
-        
-        Assumes constant Vz (no Z-axis acceleration).
-        
-        Args:
-            position: (X, Y, Z) current position
-            velocity: (Vx, Vy, Vz) current velocity
-            target_z: Target Z value (e.g., robot's reach plane)
-        
-        Returns:
-            Time in seconds, or None if ball won't reach target_z
-        """
-        z0 = position[2]
+        """Time for ball to reach target Z. Returns None if unreachable."""
         vz = velocity[2]
-        
-        # Z(t) = Z₀ + Vz × t = target_z
-        # t = (target_z - Z₀) / Vz
-        
         if abs(vz) < 1e-6:
-            # Ball not moving in Z
             return None
-        
-        t = (target_z - z0) / vz
-        
-        if t < 0:
-            # Target is behind current position
-            return None
-        
-        return t
-    
+        t = (target_z - position[2]) / vz
+        return t if t > 0 else None
+
+    def position_at_x(self, position, velocity, target_x):
+        """
+        Predict ball state when it reaches target_x (along table length).
+
+        This is the PRIMARY interception method for table tennis —
+        the ball travels along X between players.
+
+        Returns:
+            dict with 'position', 'time', 'velocity', 'valid'
+        """
+        if self.enable_drag:
+            return self._simulate(position, velocity, stop_at_x=target_x)
+
+        fail = {'position': None, 'time': None, 'velocity': None, 'valid': False}
+        t = self.time_to_x(position, velocity, target_x)
+        if t is None:
+            return fail
+
+        return {
+            'position': self.predict_position(position, velocity, t),
+            'time': t,
+            'velocity': self.predict_velocity(velocity, t),
+            'valid': True
+        }
+
     def position_at_z(self, position, velocity, target_z):
         """
-        Calculate ball position when it reaches target_z.
-
-        Args:
-            position: (X, Y, Z) current position
-            velocity: (Vx, Vy, Vz) current velocity
-            target_z: Target Z value
+        Predict ball state when it reaches target_z (across table width / depth).
 
         Returns:
-            dict with:
-                'position': (X, Y, Z) at target_z
-                'time': Time to reach target_z
-                'velocity': (Vx, Vy, Vz) at that time
-                'valid': True if ball will reach target_z
+            dict with 'position', 'time', 'velocity', 'valid'
         """
         if self.enable_drag:
             return self._simulate(position, velocity, stop_at_z=target_z)
 
-        result = {
-            'position': None,
-            'time': None,
-            'velocity': None,
-            'valid': False
-        }
-
+        fail = {'position': None, 'time': None, 'velocity': None, 'valid': False}
         t = self.time_to_z(position, velocity, target_z)
-
         if t is None:
-            return result
+            return fail
 
-        pred_pos = self.predict_position(position, velocity, t)
-        pred_vel = self.predict_velocity(velocity, t)
-
-        result['position'] = pred_pos
-        result['time'] = t
-        result['velocity'] = pred_vel
-        result['valid'] = True
-
-        return result
+        return {
+            'position': self.predict_position(position, velocity, t),
+            'time': t,
+            'velocity': self.predict_velocity(velocity, t),
+            'valid': True
+        }
 
     def position_at_apex(self, position, velocity):
         """
-        Calculate ball position at trajectory apex (where Vy = 0).
+        Predict ball state at trajectory apex (where Vy = 0).
 
-        The apex occurs when Vy changes sign from rising to falling.
-        Without drag: t_apex = -Vy / (gravity_sign * gravity).
-        With drag: found numerically via _simulate().
-
-        Args:
-            position: (X, Y, Z) current position
-            velocity: (Vx, Vy, Vz) current velocity
+        Apex exists only when ball is rising (Vy opposes gravity direction).
+        Without drag: t_apex = -Vy / (g_sign * g)
 
         Returns:
-            dict with:
-                'position': (X, Y, Z) at apex
-                'time': Time to reach apex
-                'velocity': (Vx, Vy, Vz) at apex (Vy ≈ 0)
-                'valid': True if ball is rising and apex exists
+            dict with 'position', 'time', 'velocity', 'valid'
         """
+        fail = {'position': None, 'time': None, 'velocity': None, 'valid': False}
+        vy = velocity[1]
+
         if self.enable_drag:
-            vy = velocity[1]
-            # Ball must be rising (Vy opposes gravity) for apex to exist
             if vy * self.gravity_sign >= 0:
-                return {'position': None, 'time': None, 'velocity': None, 'valid': False}
+                return fail
             return self._simulate(position, velocity, stop_at_apex=True)
 
-        result = {
-            'position': None,
-            'time': None,
-            'velocity': None,
-            'valid': False
+        t_apex = -vy / (self.gravity_sign * self.gravity)
+        if t_apex <= 0:
+            return fail
+
+        return {
+            'position': self.predict_position(position, velocity, t_apex),
+            'time': t_apex,
+            'velocity': self.predict_velocity(velocity, t_apex),
+            'valid': True
         }
 
-        vy = velocity[1]
-        t_apex = -vy / (self.gravity_sign * self.gravity)
 
-        if t_apex <= 0:
-            return result
+# ================================================================
+# Convenience function
+# ================================================================
 
-        pred_pos = self.predict_position(position, velocity, t_apex)
-        pred_vel = self.predict_velocity(velocity, t_apex)
-
-        result['position'] = pred_pos
-        result['time'] = t_apex
-        result['velocity'] = pred_vel
-        result['valid'] = True
-
-        return result
-
-
-def predict_ball_position(position, velocity, dt, gravity=981.0, y_down=True, enable_drag=False):
-    """
-    Convenience function for single position prediction.
-
-    Args:
-        position: (X, Y, Z) current position
-        velocity: (Vx, Vy, Vz) current velocity
-        dt: Time step in seconds
-        gravity: Gravitational acceleration (cm/s²)
-        y_down: True if +Y is downward
-        enable_drag: Include air resistance
-
-    Returns:
-        (X_new, Y_new, Z_new) predicted position
-    """
+def predict_ball_position(position, velocity, dt,
+                          gravity=GRAVITY_CM_S2, y_down=True, enable_drag=False):
     model = PhysicsModel(gravity=gravity, y_down=y_down, enable_drag=enable_drag)
     return model.predict_position(position, velocity, dt)

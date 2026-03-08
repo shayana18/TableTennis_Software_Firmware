@@ -1,9 +1,11 @@
-# Camera IDs, resolution, trigger mode are in config/camera_config.py ; set it there not here
-
+camera0: 1
+camera1: 2
+frame_width: 640
+frame_height: 480
 mono_calibration_frames: 15
 stereo_calibration_frames: 15
 view_resize: 2
-checkerboard_box_size_scale : 3.17
+checkerboard_box_size_scale: 3.17
 checkerboard_rows: 4
 checkerboard_columns: 7
-cooldown: 100
+cooldown: 150

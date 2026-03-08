@@ -3,13 +3,15 @@ Velocity & Prediction Validation Test
 =======================================
 Validates the trajectory pipeline by comparing predicted vs actual ball positions.
 
-WORKFLOW (arm-and-capture):
-    1. Script starts → Recording #1 ARMED (green overlay)
-    2. Toss ball → detection auto-starts recording
-    3. Ball lost for 10+ consecutive frames → recording stops
-    4. Press 'n' → arm next recording (#2, #3, ...)
-    5. Press 'a' → analyze last recording (show plots)
-    6. Press 'q' → quit
+WORKFLOW (fully automatic):
+    1. Script starts → MOG2 warmup overlay shows progress
+    2. Recording #1 ARMED once warmup completes
+    3. Toss ball → detection auto-starts recording
+    4. Ball lost for 10+ consecutive frames → auto-prints toss summary
+    5. Auto-arms next recording — just toss again
+    6. Press 'a' to see matplotlib plots for last toss
+
+DETECTION: MOG2 background subtraction (no thresholds, lighting-invariant)
 
 LIVE OVERLAY:
     - Green circle: Actual detected position
@@ -19,11 +21,11 @@ LIVE OVERLAY:
 
 CONTROLS:
     q       - Quit
-    n       - Arm next recording
-    SPACE   - Manual start/stop override
     a       - Analyze last recording (show plots)
     r       - Reset / clear everything
-    p       - Print current velocity stats
+    b       - Reset background model (re-warmup)
+    n       - Manual re-arm override
+    SPACE   - Manual start/stop override
 
 CAMERA: Arducam OV9782 Global Shutter USB Camera
         1MP, 100fps @ 1280x800 MJPG
@@ -34,14 +36,13 @@ import sys
 import os
 import time
 import numpy as np
-import json
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from tracking.stereo_triangulator import StereoTriangulator
 from trajectory.trajectory_predictor import TrajectoryPredictor
 from trajectory.physics_model import PhysicsModel
-from config.camera_config import load_camera_settings, configure_camera
+from config.camera_config import load_camera_settings
 
 
 class VelocityValidator:
@@ -77,12 +78,6 @@ class VelocityValidator:
         self.recording_number = 1
         self.all_recordings = []        # Past recordings for multi-toss review
 
-        # Motion gate — skip detection when nothing is moving (saves CPU + prevents false triggers)
-        self._prev_gray = None
-        self._motion_detected = False
-        self.MOTION_THRESH = 25         # Pixel intensity change to count as motion
-        self.MOTION_MIN_FRAC = 0.003    # 0.3% of pixels must move
-
         # Recorded data for current recording
         self.recorded_positions = []   # (x, y, z, t)
         self.recorded_velocities = []  # (vx, vy, vz, speed, t)
@@ -98,10 +93,7 @@ class VelocityValidator:
         pass  # Settings already loaded in __init__ via load_camera_settings()
 
     def load_thresholds(self):
-        if os.path.exists(self.thresholds_stereo):
-            self.triangulator.load_thresholds(self.thresholds_stereo)
-        elif os.path.exists(self.thresholds_single):
-            self.triangulator.load_thresholds(self.thresholds_single)
+        print("[Detection] Using MOG2 background subtraction (no thresholds needed)")
 
     def check_calibration(self):
         required = ['camera0_intrinsics.dat', 'camera1_intrinsics.dat',
@@ -116,75 +108,7 @@ class VelocityValidator:
         return True
 
     def start_cameras(self):
-        self.triangulator.cap_left = cv2.VideoCapture(self.cam_left_id)
-        self.triangulator.cap_right = cv2.VideoCapture(self.cam_right_id)
-
-        if not self.triangulator.cap_left.isOpened():
-            raise RuntimeError(f"Failed to open left camera (ID: {self.cam_left_id})")
-        if not self.triangulator.cap_right.isOpened():
-            raise RuntimeError(f"Failed to open right camera (ID: {self.cam_right_id})")
-
-        s_l = configure_camera(self.triangulator.cap_left, self.frame_width, self.frame_height)
-        s_r = configure_camera(self.triangulator.cap_right, self.frame_width, self.frame_height)
-        print(f"  LEFT:  {s_l['width']}x{s_l['height']} @ {s_l['fps']:.0f}fps")
-        print(f"  RIGHT: {s_r['width']}x{s_r['height']} @ {s_r['fps']:.0f}fps")
-
-    def has_motion(self, frame):
-        """Lightweight motion check — compare current frame to previous."""
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        small = cv2.resize(gray, (320, 200))
-
-        if self._prev_gray is None:
-            self._prev_gray = small
-            return False
-
-        diff = cv2.absdiff(self._prev_gray, small)
-        self._prev_gray = small
-
-        motion_pixels = np.count_nonzero(diff > self.MOTION_THRESH)
-        total_pixels = small.shape[0] * small.shape[1]
-        self._motion_detected = motion_pixels > (total_pixels * self.MOTION_MIN_FRAC)
-        return self._motion_detected
-
-    def capture_and_detect(self):
-        """Read frames, apply motion gate, detect only when needed."""
-        ret_l, frame_l = self.triangulator.cap_left.read()
-        ret_r, frame_r = self.triangulator.cap_right.read()
-
-        if not ret_l or not ret_r:
-            return {'left_frame': None, 'right_frame': None,
-                    'left_detection': {'found': False},
-                    'right_detection': {'found': False},
-                    'found_3d': False, 'position_3d': None, 'disparity': None}
-
-        result = {
-            'left_frame': frame_l, 'right_frame': frame_r,
-            'left_detection': {'found': False},
-            'right_detection': {'found': False},
-            'found_3d': False, 'position_3d': None, 'disparity': None
-        }
-
-        # Motion gate: skip expensive detection when nothing is moving
-        run_detection = self.recording or self.has_motion(frame_l)
-        if not run_detection:
-            return result
-
-        # Full detection
-        det_l = self.triangulator.tracker_left.detect(frame_l)
-        det_r = self.triangulator.tracker_right.detect(frame_r)
-        result['left_detection'] = det_l
-        result['right_detection'] = det_r
-
-        if det_l['found'] and det_r['found']:
-            disparity = det_l['center'][0] - det_r['center'][0]
-            result['disparity'] = disparity
-            if disparity > 0:
-                pos = self.triangulator.triangulate(det_l['center'], det_r['center'])
-                if pos[2] > 0:
-                    result['found_3d'] = True
-                    result['position_3d'] = tuple(pos)
-
-        return result
+        self.triangulator.start_cameras(self.frame_width, self.frame_height)
 
     def reset_recording(self):
         self.recorded_positions = []
@@ -193,7 +117,6 @@ class VelocityValidator:
         self.live_predicted_pos = None
         self.live_prediction_error = None
         self.consecutive_losses = 0
-        self._prev_gray = None
         self.predictor.reset()
         self.recording = False
         self.armed = True
@@ -212,7 +135,24 @@ class VelocityValidator:
                     self.recording = False
                     n = len(self.recorded_positions)
                     print(f"\n[REC #{self.recording_number} STOPPED] {n} frames captured.")
-                    print("  Press 'n' for next recording, 'a' to analyze.")
+                    self._print_toss_summary()
+                    # Archive and auto-arm next
+                    if n > 0:
+                        self.all_recordings.append({
+                            'number': self.recording_number,
+                            'positions': list(self.recorded_positions),
+                            'velocities': list(self.recorded_velocities),
+                            'predictions': list(self.recorded_predictions),
+                        })
+                    self.recording_number += 1
+                    self.recorded_positions = []
+                    self.recorded_velocities = []
+                    self.recorded_predictions = []
+                    self.live_predicted_pos = None
+                    self.live_prediction_error = None
+                    self.predictor.reset()
+                    self.armed = True
+                    print(f"[ARMED #{self.recording_number}] Ready — toss again.\n")
             self.live_predicted_pos = None
             self.live_prediction_error = None
             return
@@ -295,12 +235,75 @@ class VelocityValidator:
         else:
             self.live_predicted_pos = None
 
+    def _print_toss_summary(self):
+        """Print a compact summary after each toss ends."""
+        n = len(self.recorded_positions)
+        if n < 2:
+            print("  (Too few frames for summary)")
+            return
+
+        positions = np.array(self.recorded_positions)
+        t_span = positions[-1, 3] - positions[0, 3]
+        fps = n / t_span if t_span > 0 else 0
+
+        bar = "\u2500" * 50
+        print(f"\n{bar}")
+        print(f"  TOSS #{self.recording_number} SUMMARY")
+        print(f"{bar}")
+        print(f"  Frames: {n}  |  Duration: {t_span:.3f}s  |  Rate: {fps:.0f} fps")
+
+        if self.recorded_velocities:
+            vels = np.array(self.recorded_velocities)
+            avg_vx = np.mean(vels[:, 0])
+            avg_vy = np.mean(vels[:, 1])
+            avg_vz = np.mean(vels[:, 2])
+            avg_spd = np.mean(vels[:, 3])
+            max_spd = np.max(vels[:, 3])
+            print(f"  Avg velocity: Vx={avg_vx:.0f}  Vy={avg_vy:.0f}  Vz={avg_vz:.0f} cm/s")
+            print(f"  Speed: avg={avg_spd:.0f}  max={max_spd:.0f} cm/s")
+
+        if self.recorded_predictions:
+            preds = np.array(self.recorded_predictions)
+            errs = np.sqrt(
+                (preds[:, 0] - preds[:, 3])**2 +
+                (preds[:, 1] - preds[:, 4])**2 +
+                (preds[:, 2] - preds[:, 5])**2
+            )
+            mean_err = np.mean(errs)
+            med_err = np.median(errs)
+            max_err = np.max(errs)
+            print(f"  Prediction error ({self.LOOKAHEAD_FRAMES}-frame lookahead):")
+            print(f"    Mean: {mean_err:.2f} cm  |  Median: {med_err:.2f} cm  |  Max: {max_err:.2f} cm")
+
+            if mean_err < 2.0:
+                verdict = "EXCELLENT"
+            elif mean_err < 5.0:
+                verdict = "GOOD"
+            elif mean_err < 10.0:
+                verdict = "FAIR"
+            else:
+                verdict = "NEEDS WORK"
+            print(f"  Verdict: {verdict}")
+        else:
+            print("  (No prediction data — need more frames)")
+
+        print(f"{bar}")
+
     def draw_overlay(self, left_small, right_small, result):
         """Draw live prediction overlay on frames."""
         dw = self.display_width
         dh = int(dw * self.frame_height / self.frame_width)
         scale_x = dw / self.frame_width
         scale_y = dh / self.frame_height
+
+        # Warmup overlay
+        warmup = self.triangulator.warmup_status()
+        if not warmup['left_ready']:
+            cv2.putText(left_small, f"Warming up... {warmup['left_progress']*100:.0f}%",
+                        (10, dh - 80), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+        if not warmup['right_ready']:
+            cv2.putText(right_small, f"Warming up... {warmup['right_progress']*100:.0f}%",
+                        (10, dh - 80), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
 
         # State indicator
         if self.recording:
@@ -371,18 +374,26 @@ class VelocityValidator:
             cv2.putText(left_small, f"Speed: {vel['speed']:.0f} cm/s",
                         (10, dh - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 0), 1)
 
-        # Motion indicator (small dot — green = motion, gray = idle)
-        motion_color = (0, 255, 0) if self._motion_detected else (100, 100, 100)
-        cv2.circle(left_small, (15, 40), 5, motion_color, -1)
-
         # Controls hint
-        cv2.putText(right_small, "n:next a:analyze r:reset q:quit",
+        cv2.putText(right_small, "a:analyze r:reset b:bg-reset q:quit",
                      (10, dh - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (200, 200, 200), 1)
+
+    def _get_analysis_data(self):
+        """Get positions/velocities/predictions — current recording or last archived."""
+        if len(self.recorded_positions) >= 10:
+            return (self.recorded_positions, self.recorded_velocities,
+                    self.recorded_predictions)
+        if self.all_recordings:
+            last = self.all_recordings[-1]
+            return last['positions'], last['velocities'], last['predictions']
+        return None, None, None
 
     def analyze(self):
         """Post-recording analysis with plots."""
-        if len(self.recorded_positions) < 10:
-            print(f"\nNot enough data ({len(self.recorded_positions)} frames). Need at least 10.")
+        positions_list, velocities_list, predictions_list = self._get_analysis_data()
+        if positions_list is None or len(positions_list) < 10:
+            n = len(positions_list) if positions_list else 0
+            print(f"\nNot enough data ({n} frames). Need at least 10.")
             return
 
         try:
@@ -394,7 +405,7 @@ class VelocityValidator:
             self._print_text_analysis()
             return
 
-        positions = np.array(self.recorded_positions)  # (N, 4): x, y, z, t
+        positions = np.array(positions_list)  # (N, 4): x, y, z, t
         pos_xyz = positions[:, :3]
         pos_t = positions[:, 3] - positions[0, 3]  # Normalize to start at 0
 
@@ -414,15 +425,15 @@ class VelocityValidator:
         actual_t = np.array(actual_t)
 
         # Estimated velocities
-        if self.recorded_velocities:
-            est_vel = np.array(self.recorded_velocities)  # vx, vy, vz, speed, t
+        if velocities_list:
+            est_vel = np.array(velocities_list)  # vx, vy, vz, speed, t
             est_t = est_vel[:, 4] - positions[0, 3]
         else:
             est_vel = None
 
         # Prediction errors
-        if self.recorded_predictions:
-            preds = np.array(self.recorded_predictions)
+        if predictions_list:
+            preds = np.array(predictions_list)
             pred_err = np.sqrt(
                 (preds[:, 0] - preds[:, 3])**2 +
                 (preds[:, 1] - preds[:, 4])**2 +
@@ -527,10 +538,11 @@ class VelocityValidator:
         ax = axes[2, 1]
         ax.axis('off')
 
+        n_frames = len(positions_list)
         summary_lines = [
-            f"Frames recorded: {len(self.recorded_positions)}",
+            f"Frames recorded: {n_frames}",
             f"Duration: {pos_t[-1]:.2f} s",
-            f"Avg sample rate: {len(self.recorded_positions) / pos_t[-1]:.1f} fps" if pos_t[-1] > 0 else "",
+            f"Avg sample rate: {n_frames / pos_t[-1]:.1f} fps" if pos_t[-1] > 0 else "",
             "",
         ]
 
@@ -591,21 +603,26 @@ class VelocityValidator:
 
     def _print_text_analysis(self):
         """Fallback text-only analysis."""
-        positions = np.array(self.recorded_positions)
+        positions_list, velocities_list, predictions_list = self._get_analysis_data()
+        if not positions_list:
+            print("\nNo data to analyze.")
+            return
+
+        positions = np.array(positions_list)
         t_span = positions[-1, 3] - positions[0, 3]
 
         print(f"\n{'=' * 60}")
         print("VALIDATION RESULTS (text mode)")
         print(f"{'=' * 60}")
-        print(f"Frames: {len(self.recorded_positions)}")
+        print(f"Frames: {len(positions_list)}")
         print(f"Duration: {t_span:.2f}s")
 
-        if self.recorded_velocities:
-            vels = np.array(self.recorded_velocities)
+        if velocities_list:
+            vels = np.array(velocities_list)
             print(f"\nEstimated speed: avg={np.mean(vels[:, 3]):.1f}, max={np.max(vels[:, 3]):.1f} cm/s")
 
-        if self.recorded_predictions:
-            preds = np.array(self.recorded_predictions)
+        if predictions_list:
+            preds = np.array(predictions_list)
             errs = np.sqrt(
                 (preds[:, 0] - preds[:, 3])**2 +
                 (preds[:, 1] - preds[:, 4])**2 +
@@ -648,12 +665,13 @@ class VelocityValidator:
 
         print(f"\nBaseline: {self.triangulator.get_baseline():.2f} cm")
         print(f"\nCONTROLS:")
-        print(f"  n     - Arm next recording")
         print(f"  a     - Analyze last recording (plots)")
         print(f"  r     - Reset everything")
+        print(f"  b     - Reset background model (re-warmup)")
+        print(f"  n     - Manual re-arm override")
         print(f"  SPACE - Manual start/stop override")
         print(f"  q     - Quit")
-        print(f"\nRecording #{self.recording_number} armed. Toss the ball to start capturing.")
+        print(f"\nMOG2 warming up... Recording auto-arms when ready.")
         print("=" * 60)
 
         try:
@@ -677,7 +695,7 @@ class VelocityValidator:
                     if elapsed > 0:
                         fps_display = (len(fps_timestamps) - 1) / elapsed
 
-                result = self.capture_and_detect()
+                result = self.triangulator.update()
                 if result['left_frame'] is None:
                     continue
 
@@ -714,32 +732,19 @@ class VelocityValidator:
                 if key == ord('q'):
                     break
                 elif key == ord('n'):
-                    # Save current recording (if any) and arm next
-                    if len(self.recorded_positions) > 0:
-                        self.all_recordings.append({
-                            'number': self.recording_number,
-                            'positions': list(self.recorded_positions),
-                            'velocities': list(self.recorded_velocities),
-                            'predictions': list(self.recorded_predictions),
-                        })
-                    self.recording = False
-                    self.consecutive_losses = 0
-                    self.recording_number += 1
-                    self.recorded_positions = []
-                    self.recorded_velocities = []
-                    self.recorded_predictions = []
-                    self.live_predicted_pos = None
-                    self.live_prediction_error = None
-                    self.predictor.reset()
-                    self.armed = True
-                    print(f"\n[ARMED] Recording #{self.recording_number} armed. Toss the ball.")
+                    # Manual re-arm override
+                    if not self.armed:
+                        self.recording = False
+                        self.consecutive_losses = 0
+                        self.armed = True
+                        print(f"\n[ARMED] Recording #{self.recording_number} armed. Toss the ball.")
                 elif key == ord(' '):
                     # Manual override
                     if self.recording:
                         self.recording = False
                         self.armed = False
                         self.consecutive_losses = 0
-                        print(f"\n[STOPPED] {len(self.recorded_positions)} frames. Press 'n' for next, 'a' to analyze.")
+                        print(f"\n[STOPPED] {len(self.recorded_positions)} frames. Press 'n' to re-arm, 'a' to analyze.")
                     else:
                         self.armed = True
                         print(f"\n[ARMED] Recording #{self.recording_number} armed.")
@@ -747,13 +752,10 @@ class VelocityValidator:
                     self.analyze()
                 elif key == ord('r'):
                     self.reset_recording()
-                elif key == ord('p'):
-                    vel = self.predictor.get_velocity()
-                    stats = self.predictor.get_stats()
-                    print(f"\n[STATS] {stats}")
-                    if vel['valid']:
-                        print(f"  Velocity: ({vel['vx']:.1f}, {vel['vy']:.1f}, {vel['vz']:.1f}) cm/s")
-                        print(f"  Speed: {vel['speed']:.1f} cm/s")
+                elif key == ord('b'):
+                    self.triangulator.reset_background()
+                    self.predictor.reset()
+                    print("\n[BG RESET] Background model reset, warming up...")
 
         except KeyboardInterrupt:
             pass
@@ -762,7 +764,8 @@ class VelocityValidator:
             cv2.destroyAllWindows()
 
         # Auto-analyze on exit if we have data
-        if len(self.recorded_positions) > 10:
+        positions_list, _, _ = self._get_analysis_data()
+        if positions_list and len(positions_list) > 10:
             print("\n\nFinal analysis:")
             self.analyze()
 

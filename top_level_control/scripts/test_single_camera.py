@@ -44,12 +44,13 @@ class SingleCameraTester:
         if self.cap:
             self.cap.release()
 
-        self.cap = cv2.VideoCapture(self.camera_id)
+        self.cap = cv2.VideoCapture(self.camera_id, cv2.CAP_DSHOW)
 
         if not self.cap.isOpened():
             print(f"Failed to open camera {self.camera_id}")
             return False
 
+        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         settings = configure_camera(self.cap, self.frame_width, self.frame_height)
 
         print(f"\nCamera {self.camera_id} opened:")
