@@ -1,5 +1,58 @@
 # Stereo Pipeline — Change Log & Debug Report
 
+## Session: 2026-03-08 (Velocity Estimation Debugging)
+
+### Key Finding: Test Metrics Were Comparing Against Wrong Reference
+
+The velocity validation test fitted a SINGLE polynomial across the ENTIRE trajectory, but
+throws have 80-290ms stereo dead zones where the ball crosses between cameras. The ball
+often bounces invisibly during these gaps. A single polynomial across gaps + bounces gives
+nonsensical gravity (241, -10, -10, 415, 251 cm/s²) and meaningless "velocity error" metrics.
+
+**Per-arc gravity** (splitting at gaps AND bounces) is actually reasonable: 878-1034 cm/s².
+The real-time **Vx estimates are already excellent** (1-8% within-arc error).
+
+### Changes Made
+
+**1. trajectory_predictor.py — Z-axis median filter (kept)**
+- 3-point running median on Z before buffering — kills ±3cm stereo depth spikes
+- Cleared on gap reset, bounce, and full reset
+- Re-seeded with last 2 points' Z on bounce
+
+**2. trajectory_predictor.py — Increased min data for first velocity (kept)**
+- `MIN_TIME_SPAN`: 0.035 → 0.08s
+- `min_points`: 4 → 6
+
+**3. trajectory_predictor.py — Bounce Vx/Vz preservation (REMOVED)**
+- Initial plan: preserve pre-bounce Vx/Vz across bounces, blend after 10 points
+- Result: HARMFUL. Pre-bounce arcs often had only 5-6 points (unreliable estimates).
+  Throw 5 showed 60 cm/s Vx discontinuity and 125 cm/s Vz discontinuity at blend threshold.
+- Reverted completely.
+
+**4. test_velocity_validation.py — Per-arc analysis overhaul**
+- Arc segmentation now splits on BOTH bounces AND time gaps (>60ms)
+- Convergence table compares RT velocity against per-arc fit (not whole-trajectory)
+- Forward prediction computed per-arc (stays within each arc)
+- Summary uses per-arc metrics throughout
+- Fixed `min_points=4` override → `min_points=6` to match predictor default
+
+**5. test_velocity_validation.py — min_points bug fix**
+- Test script hardcoded `min_points=4`, overriding the predictor's default of 6
+- All previous test runs had velocity firing at buf=4-5 despite the code change
+
+### Test Results (pre-fix analysis, 5 throws)
+- Per-arc gravity: 878-1034 cm/s² (within 5-10% of 981)
+- Stereo baseline: 23.2cm (was 42.77cm) — depth precision degraded ~2x
+- New calibration: cam0 fx=531, cam1 fx=535, baseline=23.2cm, rotation=10.5°
+- Forward prediction errors inflated by cross-arc prediction (predicting across invisible bounces)
+
+### Next Steps
+- Re-run test with fixed analysis — expect much lower reported errors
+- Consider increasing stereo baseline for better depth precision
+- Per-arc gravity ~900 cm/s² (-8%) suggests mild calibration scale issue
+
+---
+
 ## Session: 2026-03-07 (Calibration Verification & Debugging)
 
 ### Status: ALL TESTS COMPLETE. ~3% lateral scale error identified. Ready to fix or proceed.
@@ -389,7 +442,117 @@ Since ball travels along X (not Z), this should be `position_at_x()`. Not fixed 
 
 ---
 
-## Next Steps (updated 2026-03-07)
+## Session: 2026-03-08 (Camera-to-Robot Transform & End-to-End Pipeline)
+
+### Status: Transform pipeline implemented. Verification script ready. Unit audit complete.
+
+---
+
+### Change #10: Rotation-Based Camera-to-Robot Transform
+
+**File:** `trajectory/trajectory_predictor.py`
+
+**What:** Replaced simple axis-swap `cam_to_robot()` with a proper rotation matrix transform that accounts for the camera's 20° pitch.
+
+**Why:** Simple axis swap (cam_z→robot_x, cam_x→robot_y, cam_y→robot_z) ignores the 20° camera pitch. At typical depths (150cm), the pitch mixes Y and Z by ~34cm (sin(20°)×100cm), causing ~100mm cross-talk error in robot coords.
+
+**Implementation:**
+- `_build_transform(pos_mm, yaw, pitch, roll)` — builds R = R_euler(ZYX) @ R_optical
+- `R_optical` converts OpenCV camera axes to standard frame: cam_z→+X, cam_x→+Y, cam_y→-Z
+- `R_euler` applies yaw/pitch/roll in robot base frame
+- `cam_to_robot(cx, cy, cz)`: `p_robot = R @ (p_cam * 10) + t` (cm→mm)
+- `robot_to_cam(rx, ry, rz)`: `p_cam = R^T @ (p_robot - t) / 10` (mm→cm)
+- `set_camera_pose(x, y, z, yaw, pitch, roll)` — update at runtime without restart
+
+**Camera pose constants (lines 60-123):**
+- Extensive measurement guide in comments (what to measure, reference frames, sign conventions)
+- Current values: pos=(1848.5, 1330, 440.074)mm, yaw=5°, pitch=20°, roll=0°
+
+---
+
+### Change #11: Workspace Constants from robot.h
+
+**File:** `trajectory/trajectory_predictor.py`
+
+**What:** Set workspace to rectangular bounds from robot.h:
+```
+ROBOT_LIMIT_X = (-500, 500)    mm  — across table width
+ROBOT_LIMIT_Y = (-350, 350)    mm  — along table length
+ROBOT_LIMIT_Z = (-1100, -700)  mm  — vertical (down = more negative)
+ROBOT_HOME    = (0, 0, -900)   mm
+MAX_CART_VEL  = 4000 mm/s
+MAX_CART_ACC  = 20000 mm/s²
+```
+
+**Also added:** `check_reachable(rx, ry, rz, time_available)` — trapezoidal velocity profile estimate for whether robot can reach position in time.
+
+---
+
+### Change #12: Robot Coord Display in test_trajectory_prediction.py
+
+**File:** `trajectory/test_trajectory_prediction.py`
+
+**What:**
+- Terminal output: added RobX/RobY/RobZ/WS columns per frame
+- Status panel: shows robot target XYZ (mm), IN WORKSPACE / OUT OF RANGE, time to intercept, strategy
+- 3D view: rectangular workspace wireframe + HOME marker (via `robot_to_cam()` inverse)
+- Post-throw summary: robot intercept coords, workspace status
+- `get_robot_command()` integration in main loop
+
+---
+
+### Change #13: Robot Transform Verification Script
+
+**File:** `scripts/test_robot_transform_verify.py` — **NEW**
+
+**What:** Click-to-verify camera→robot coordinate transform. Same triangulation flow as `test_triangulation_verify.py` Mode 1 (DISTANCE), but outputs robot coords (mm) instead of raw camera coords.
+
+**Flow:**
+1. SPACE to freeze frame
+2. Click point on LEFT image, then SAME point on RIGHT image
+3. Triangulates 3D position in camera coords (cm)
+4. Transforms to robot coords (mm) via rotation matrix
+5. Displays both coordinate sets + workspace status
+6. Compare robot XYZ against tape-measure ground truth
+
+**Features:**
+- `u` key: reload CAM_POSE_* constants via `importlib.reload()` — tune transform without restarting
+- Re-transforms all existing measurements on reload
+- `p` key: print summary table of all measurements
+- Trigger sync verification at startup
+
+**Verification workflow:** Place object at known position relative to robot base. Measure with tape. Click in script. Compare. If off, adjust CAM_POSE_* values and press 'u' to reload. Iterate.
+
+---
+
+### Change #14: Fixed Docstring Workspace Values
+
+**File:** `scripts/test_robot_transform_verify.py` (lines 28-30)
+
+**What:** Docstring referenced stale elliptic workspace values (±790mm, ±540mm, -721 to -1000mm). Updated to match actual rectangular constants (±500mm, ±350mm, -700 to -1100mm).
+
+---
+
+### Unit Audit: Triangulation → Transform Pipeline
+
+**Verified the full unit chain is consistent:**
+
+| Stage | Input | Output | Units |
+|-------|-------|--------|-------|
+| Calibration | `checkerboard_box_size_scale = 3.18` | — | cm |
+| `triangulate()` | rectified pixel pairs | `(X, Y, Z)` | cm (calibration units) |
+| `detect_and_triangulate()` | stereo frames | `position_3d` tuple | cm |
+| `cam_to_robot()` | `(cx, cy, cz)` cm | `(rx, ry, rz)` mm | cm→mm (×10 internally) |
+| `robot_to_cam()` | `(rx, ry, rz)` mm | `(cx, cy, cz)` cm | mm→cm (÷10 internally) |
+| `check_workspace()` | `(rx, ry, rz)` mm | bool | mm |
+| `add_position()` | `(x, y, z)` cm | — | cm (stored as-is) |
+| `predict()` | — | `target_x` in cm | cm |
+
+**Conclusion:** All units are correctly aligned. Triangulation outputs cm, predictor works in cm internally, `cam_to_robot()` handles the cm→mm conversion. No changes needed.
+
+---
+
+## Next Steps (updated 2026-03-08)
 
 All verification tests COMPLETE with old stand. New 20° fixed-pitch stand built. Full recalibration needed. Axis convention fix DONE.
 

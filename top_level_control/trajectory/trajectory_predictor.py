@@ -33,6 +33,7 @@ PIPELINE:
 import time
 import math
 import numpy as np
+from collections import deque
 
 from .position_buffer import PositionBuffer
 from .velocity_estimator import VelocityEstimator
@@ -115,12 +116,12 @@ CM_TO_MM = 10.0
 # │  predictor.set_camera_pose(x, y, z, yaw, pitch, roll).        │
 # └─────────────────────────────────────────────────────────────────┘
 #
-CAM_POSE_X_MM   = 0.0      # PLACEHOLDER — measure lateral offset from robot center
-CAM_POSE_Y_MM   = 0.0      # PLACEHOLDER — measure along-table offset from robot center
-CAM_POSE_Z_MM   = 0.0      # PLACEHOLDER — measure vertical offset from robot base plate
-CAM_POSE_YAW    = 0.0      # degrees — PLACEHOLDER (0° if camera looks along robot +X)
-CAM_POSE_PITCH  = 20.0     # degrees — camera tilted 20° downward (known from fixed stand)
-CAM_POSE_ROLL   = 0.0      # degrees — PLACEHOLDER (0° if camera is level)
+CAM_POSE_X_MM   = 1885       # camera is to robot's RIGHT (+X)
+CAM_POSE_Y_MM   = 880       # camera is toward net from origin
+CAM_POSE_Z_MM   = 739       # camera is above base plate
+CAM_POSE_YAW    = 175.0     # camera faces -X (180°) - 5° yaw toward net
+CAM_POSE_PITCH  = 20.0      # camera tilted 20° downward (fixed stand)
+CAM_POSE_ROLL   = 0.0       # camera is level
 
 
 class TrajectoryPredictor:
@@ -140,7 +141,7 @@ class TrajectoryPredictor:
                                  #  dropouts from camera convergence angle)
 
     # --- Prediction readiness ---
-    MIN_TIME_SPAN     = 0.035    # seconds (~3 frames at 80fps)
+    MIN_TIME_SPAN     = 0.08     # seconds (~8 frames at 100fps)
 
     # --- Bounce detection ---
     MIN_BOUNCE_FALL   = 10.0     # cm minimum Y descent before accepting bounce
@@ -148,7 +149,7 @@ class TrajectoryPredictor:
 
     def __init__(self,
                  buffer_size=15,
-                 min_points=4,
+                 min_points=6,
                  velocity_method='regression',
                  gravity=981.0,
                  y_down=True,
@@ -180,6 +181,9 @@ class TrajectoryPredictor:
         self._bounce_count = 0
         self._y_min_since_reset = None    # track min Y for bounce threshold
         self._rising_count = 0            # consecutive rising frames
+
+        # Z-axis median filter (kills ±3cm stereo depth noise)
+        self._z_median_window = deque(maxlen=3)
 
         # Camera-to-robot rigid transform (rotation + translation)
         # Built from camera pose measurements. Call set_camera_pose() to update.
@@ -241,11 +245,11 @@ class TrajectoryPredictor:
         """
         # Stage 1: OpenCV optical axes → standard frame
         #   cam_z (forward) → +X
-        #   cam_x (right)   → +Y
+        #   cam_x (right)   → -Y  (camera right = robot's -Y)
         #   cam_y (down)    → -Z
         R_optical = np.array([
             [0.0, 0.0, 1.0],
-            [1.0, 0.0, 0.0],
+            [-1.0, 0.0, 0.0],
             [0.0, -1.0, 0.0],
         ])
 
@@ -281,6 +285,21 @@ class TrajectoryPredictor:
         self._t_cam_to_robot = np.array(pos_mm, dtype=float)
 
     # ================================================================
+    # Z-AXIS MEDIAN FILTER
+    # ================================================================
+
+    def _median_filter_z(self, z):
+        """3-point running median to kill stereo depth noise (±3cm spikes)."""
+        self._z_median_window.append(z)
+        n = len(self._z_median_window)
+        if n == 1:
+            return z
+        elif n == 2:
+            return (self._z_median_window[0] + self._z_median_window[1]) / 2.0
+        else:
+            return sorted(self._z_median_window)[1]
+
+    # ================================================================
     # OUTLIER REJECTION
     # ================================================================
 
@@ -302,6 +321,7 @@ class TrajectoryPredictor:
             self._velocity_valid = False
             self._y_min_since_reset = None
             self._rising_count = 0
+            self._z_median_window.clear()
             return True, None
 
         dx = x - last['x']
@@ -335,7 +355,8 @@ class TrajectoryPredictor:
         self._last_reject_reason = None
 
         self._accepted_count += 1
-        self.position_buffer.add(x, y, z, timestamp)
+        z_filtered = self._median_filter_z(z)
+        self.position_buffer.add(x, y, z_filtered, timestamp)
 
         # Check for bounce — reset buffer to start fresh arc
         if self._detect_bounce():
@@ -405,7 +426,10 @@ class TrajectoryPredictor:
         self._rising_count = 0
         self._bounce_count += 1
 
+        # Re-seed Z median window with the kept points' Z values
+        self._z_median_window.clear()
         for pt in last_two:
+            self._z_median_window.append(pt['z'])
             self.position_buffer.add(pt['x'], pt['y'], pt['z'], pt['t'])
 
     def _update_velocity(self):
@@ -677,6 +701,7 @@ class TrajectoryPredictor:
         self._bounce_count = 0
         self._y_min_since_reset = None
         self._rising_count = 0
+        self._z_median_window.clear()
 
     def get_stats(self):
         vel = self.get_velocity()

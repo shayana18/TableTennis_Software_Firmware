@@ -35,8 +35,8 @@ if parent_dir not in sys.path:
 
 from tracking.stereo_triangulator import StereoTriangulator
 from trajectory.trajectory_predictor import (
-    TrajectoryPredictor, ROBOT_LIMIT_X, ROBOT_LIMIT_Y, ROBOT_LIMIT_Z, ROBOT_HOME,
-    CM_TO_MM)
+    TrajectoryPredictor, ROBOT_LIMIT_X, ROBOT_LIMIT_Y, ROBOT_LIMIT_Z,
+    ROBOT_HOME, CM_TO_MM)
 from config.camera_config import load_camera_settings
 
 
@@ -249,7 +249,7 @@ class TrajectoryView3D:
                         cv2.FONT_HERSHEY_SIMPLEX, 0.3, (80,80,160), 1)
 
     def _draw_workspace_box(self, img, predictor):
-        """Draw robot workspace as wireframe box in camera coords."""
+        """Draw robot workspace as rectangular wireframe box in camera coords."""
         xlo, xhi = ROBOT_LIMIT_X
         ylo, yhi = ROBOT_LIMIT_Y
         zlo, zhi = ROBOT_LIMIT_Z
@@ -273,7 +273,7 @@ class TrajectoryView3D:
         # Label
         mid = corners_c[6]  # top-far corner
         if self._ok(*mid, 50):
-            cv2.putText(img, "WS", (mid[0]+5, mid[1]-5),
+            cv2.putText(img, "WS", (mid[0] + 5, mid[1] - 5),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.28, ws_clr, 1)
 
         # Robot home marker
@@ -281,7 +281,7 @@ class TrajectoryView3D:
         hp = self.project(hx, hy, hz)
         if self._ok(*hp):
             cv2.drawMarker(img, hp, (0, 200, 200), cv2.MARKER_STAR, 10, 1)
-            cv2.putText(img, "HOME", (hp[0]+8, hp[1]+4),
+            cv2.putText(img, "HOME", (hp[0] + 8, hp[1] + 4),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.25, (0, 200, 200), 1)
 
     def _draw_axes(self, img):

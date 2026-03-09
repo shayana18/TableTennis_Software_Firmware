@@ -130,7 +130,7 @@ class ThrowAnalyzer:
             'rms_z': float(np.sqrt(np.mean(res_z**2))),
         }
 
-        # Forward prediction errors (using expected gravity)
+        # Forward prediction errors (whole trajectory — kept for reference)
         pred_errors = self._compute_prediction_errors(
             t, x, y, z, posthoc_vx, posthoc_vy0, posthoc_vz,
             gravity=self.GRAVITY_EXPECTED)
@@ -140,12 +140,19 @@ class ThrowAnalyzer:
             t, x, y, z, posthoc_vx, posthoc_vy0, posthoc_vz,
             gravity=abs(measured_g))
 
-        # Real-time vs post-hoc comparison — AT THE SAME TIMESTAMP
-        #
-        # RT velocity is corrected to t_snap (the snapshot time).
-        # Post-hoc Vy changes with time: Vy(t) = Vy0 + measured_g * t
-        # Post-hoc Vx and Vz are constant (linear fits).
-        # We must compare both at t_snap for a fair comparison.
+        # Per-arc forward prediction (MEANINGFUL metric — stays within arc)
+        per_arc_pred_errors = []
+        for arc, ar in zip(arcs, arc_results):
+            arc_vx = ar['fit_x']['slope']
+            arc_vy0 = ar['fit_y']['b']
+            arc_vz = ar['fit_z']['slope']
+            pe_arc = self._compute_prediction_errors(
+                arc['t'], arc['x'], arc['y'], arc['z'],
+                arc_vx, arc_vy0, arc_vz,
+                gravity=self.GRAVITY_EXPECTED)
+            per_arc_pred_errors.append(pe_arc)
+
+        # Real-time vs post-hoc comparison — use PER-ARC fit at snapshot time
         rt_comparison = None
         if self.predictor_was_ready and self.rt_corrected is not None:
             rt_vx, rt_vy, rt_vz = self.rt_corrected
@@ -153,10 +160,20 @@ class ThrowAnalyzer:
 
             t_snap = self.rt_snap_time if self.rt_snap_time is not None else 0.0
 
-            # Post-hoc velocity at snapshot time
-            ph_vx_at_snap = posthoc_vx                              # constant
-            ph_vy_at_snap = posthoc_vy0 + measured_g * t_snap       # Vy0 + g*t
-            ph_vz_at_snap = posthoc_vz                              # constant
+            # Find which arc the snapshot falls in
+            snap_arc = self._find_arc_for_time(t_snap, arcs, arc_results)
+
+            if snap_arc is not None:
+                # Use per-arc fit as reference
+                t_in_arc = t_snap - snap_arc['t_abs'][0]
+                ph_vx_at_snap = snap_arc['fit_x']['slope']
+                ph_vy_at_snap = snap_arc['fit_y']['b'] + snap_arc['fit_y']['measured_g'] * t_in_arc
+                ph_vz_at_snap = snap_arc['fit_z']['slope']
+            else:
+                # Fallback to whole-trajectory fit
+                ph_vx_at_snap = posthoc_vx
+                ph_vy_at_snap = posthoc_vy0 + measured_g * t_snap
+                ph_vz_at_snap = posthoc_vz
 
             rt_comparison = {
                 'rt_vx': rt_vx, 'rt_vy': rt_vy, 'rt_vz': rt_vz,
@@ -190,11 +207,13 @@ class ThrowAnalyzer:
             'fit_residuals': fit_residuals,
             'pred_errors': pred_errors,
             'pred_errors_measured': pred_errors_measured,
+            'per_arc_pred_errors': per_arc_pred_errors,
             'rt_comparison': rt_comparison,
             't': t,
             'x': x, 'y': y, 'z': z,
             'bounce_indices': bounce_indices,
             'n_bounces': len(bounce_indices),
+            'arcs': arcs,
             'arc_results': arc_results,
             'best_arc': best_arc,
         }
@@ -277,6 +296,7 @@ class ThrowAnalyzer:
 
     MIN_BOUNCE_FALL = 10.0   # cm, same as real-time detector
     BOUNCE_RISE_FRAMES = 2
+    GAP_THRESHOLD = 0.06     # seconds — gaps larger than this split arcs
 
     def _detect_bounces(self, t, y):
         """
@@ -312,16 +332,32 @@ class ThrowAnalyzer:
 
         return bounces
 
+    def _detect_gaps(self, t):
+        """Find indices where time gaps exceed GAP_THRESHOLD."""
+        gaps = []
+        for i in range(1, len(t)):
+            if t[i] - t[i - 1] > self.GAP_THRESHOLD:
+                gaps.append(i)
+        return gaps
+
     def _segment_arcs(self, t, x, y, z):
         """
-        Segment trajectory into arcs between bounces.
+        Segment trajectory into arcs split by bounces AND time gaps.
+
+        Time gaps (stereo dead zone) mean the ball crossed between cameras
+        and may have bounced invisibly. Each continuous segment gets its
+        own arc with independent physics fits.
 
         Returns list of dicts with per-arc data arrays and indices.
         """
         bounce_indices = self._detect_bounces(t, y)
+        gap_indices = self._detect_gaps(t)
 
-        # Build arc boundaries: [0, bounce0, bounce1, ..., end]
-        boundaries = [0] + bounce_indices + [len(t)]
+        # Merge all split points (bounces and gaps), deduplicate and sort
+        all_splits = sorted(set(bounce_indices + gap_indices))
+
+        # Build arc boundaries: [0, split0, split1, ..., end]
+        boundaries = [0] + all_splits + [len(t)]
         arcs = []
         for i in range(len(boundaries) - 1):
             start = boundaries[i]
@@ -372,6 +408,17 @@ class ThrowAnalyzer:
         if abs(reference) < 5.0:
             return None  # absolute error only
         return abs(actual - reference) / abs(reference) * 100.0
+
+    @staticmethod
+    def _find_arc_for_time(t_abs, arcs, arc_results):
+        """Find which arc a given absolute time falls in. Returns arc_result with t_abs attached, or None."""
+        for arc, ar in zip(arcs, arc_results):
+            if arc['t_abs'][0] <= t_abs <= arc['t_abs'][-1]:
+                # Return arc_result with t_abs for reference
+                result = dict(ar)
+                result['t_abs'] = arc['t_abs']
+                return result
+        return None
 
 
 # ================================================================
@@ -767,15 +814,13 @@ class VelocityValidator:
         if mg < 700 or mg > 1300:
             print(f"  ** ANOMALOUS GRAVITY (whole traj): {mg:.0f} cm/s² **")
 
-        # Per-arc bounce analysis
-        n_bounces = analysis.get('n_bounces', 0)
+        # Per-arc analysis (arcs split by bounces AND time gaps)
         arc_results = analysis.get('arc_results', [])
+        arcs = analysis.get('arcs', [])
         best_arc = analysis.get('best_arc')
-        if n_bounces > 0:
-            bounce_idx = analysis.get('bounce_indices', [])
-            t_arr = analysis.get('t', np.array([]))
-            bounce_times = [t_arr[i] * 1000 for i in bounce_idx if i < len(t_arr)]
-            print(f"\n  BOUNCES DETECTED: {n_bounces} at t={bounce_times}")
+        n_arcs = len(arc_results)
+        if n_arcs > 1:
+            print(f"\n  ARCS: {n_arcs} (split by bounces + stereo gaps)")
             print(f"  Per-arc gravity:")
             for ar in arc_results:
                 marker = " <<<" if best_arc and ar['arc_num'] == best_arc['arc_num'] else ""
@@ -787,8 +832,11 @@ class VelocityValidator:
             if best_arc:
                 print(f"  Best arc gravity: {best_arc['measured_g']:.0f} cm/s² "
                       f"({best_arc['g_error_pct']:+.1f}%)")
-        elif len(arc_results) == 1:
-            print(f"  No bounces (single arc)")
+        elif n_arcs == 1:
+            ar = arc_results[0]
+            g_color = "OK" if abs(ar['g_error_pct']) < 10 else "!"
+            print(f"  Single arc: g={ar['measured_g']:.0f} ({ar['g_error_pct']:+.1f}%)  "
+                  f"R²={ar['fit_y']['r_squared']:.3f}  {g_color}")
 
         # Fit residuals
         fr = analysis.get('fit_residuals')
@@ -828,43 +876,60 @@ class VelocityValidator:
         else:
             print(f"  Real-time: (predictor not ready — no comparison)")
 
-        pe = analysis['pred_errors']
-        pe_m = analysis.get('pred_errors_measured')
-        if pe['n_points'] > 0:
-            print(f"  Forward pred (g=981):     mean={pe['mean']:.1f}cm  "
-                  f"max={pe['max']:.1f}cm  ({pe['n_points']} pts)")
-        if pe_m and pe_m['n_points'] > 0:
-            print(f"  Forward pred (g={mg:.0f}):  mean={pe_m['mean']:.1f}cm  "
-                  f"max={pe_m['max']:.1f}cm  ({pe_m['n_points']} pts)")
+        # Per-arc forward prediction (meaningful — stays within each arc)
+        pa_pe = analysis.get('per_arc_pred_errors', [])
+        if pa_pe:
+            all_arc_means = [p['mean'] for p in pa_pe if p['n_points'] > 0]
+            all_arc_maxes = [p['max'] for p in pa_pe if p['n_points'] > 0]
+            if all_arc_means:
+                overall_mean = np.mean(all_arc_means)
+                overall_max = max(all_arc_maxes)
+                print(f"  Per-arc fwd pred (g=981): mean={overall_mean:.1f}cm  "
+                      f"max={overall_max:.1f}cm  ({len(all_arc_means)} arcs)")
+                for i, p in enumerate(pa_pe):
+                    if p['n_points'] > 0:
+                        print(f"    Arc {i}: mean={p['mean']:.1f}cm  "
+                              f"max={p['max']:.1f}cm  ({p['n_points']} pts)")
 
-        # --- Velocity convergence table ---
+        # --- Velocity convergence table (per-arc reference) ---
         snapshots = analysis.get('velocity_snapshots', [])
         if snapshots and analysis.get('valid'):
-            ph_vx = analysis['posthoc_vx']
-            ph_vy0 = analysis['posthoc_vy0']
-            ph_vz = analysis['posthoc_vz']
-            m_g = analysis['measured_g']
-
             print()
-            print(f"  Velocity convergence (RT corrected vs post-hoc):")
-            print(f"  {'#pt':>3}  {'t(s)':>6}  |  "
-                  f"{'Vx_RT':>7}  {'Vy_raw':>7}  {'Vy_corr':>7}  {'Vz_RT':>7}  |  "
+            print(f"  Velocity convergence (RT vs per-arc fit):")
+            print(f"  {'#pt':>3}  {'t(s)':>6}  {'arc':>3}  |  "
+                  f"{'Vx_RT':>7}  {'Vy_corr':>7}  {'Vz_RT':>7}  |  "
+                  f"{'ref_Vx':>7}  {'ref_Vy':>7}  {'ref_Vz':>7}  |  "
                   f"{'eVx':>5}  {'eVy':>5}  {'eVz':>5}  {'e3D':>5}")
-            print(f"  {'─'*3}  {'─'*6}  |  "
-                  f"{'─'*7}  {'─'*7}  {'─'*7}  {'─'*7}  |  "
+            print(f"  {'─'*3}  {'─'*6}  {'─'*3}  |  "
+                  f"{'─'*7}  {'─'*7}  {'─'*7}  |  "
+                  f"{'─'*7}  {'─'*7}  {'─'*7}  |  "
                   f"{'─'*5}  {'─'*5}  {'─'*5}  {'─'*5}")
 
             for snap in snapshots:
                 t_s = snap['t']
-                # Post-hoc velocity at this time
-                ph_vy_t = ph_vy0 + m_g * t_s
-                evx = abs(snap['vx'] - ph_vx)
-                evy = abs(snap['vy_corr'] - ph_vy_t)
-                evz = abs(snap['vz'] - ph_vz)
+                # Find which arc this snapshot belongs to
+                snap_arc = ThrowAnalyzer._find_arc_for_time(t_s, arcs, arc_results)
+                if snap_arc is not None:
+                    t_in_arc = t_s - snap_arc['t_abs'][0]
+                    ref_vx = snap_arc['fit_x']['slope']
+                    ref_vy = snap_arc['fit_y']['b'] + snap_arc['fit_y']['measured_g'] * t_in_arc
+                    ref_vz = snap_arc['fit_z']['slope']
+                    arc_label = str(snap_arc['arc_num'])
+                else:
+                    # No matching arc (snapshot in gap)
+                    ref_vx = analysis['posthoc_vx']
+                    ref_vy = analysis['posthoc_vy0'] + analysis['measured_g'] * t_s
+                    ref_vz = analysis['posthoc_vz']
+                    arc_label = "?"
+
+                evx = abs(snap['vx'] - ref_vx)
+                evy = abs(snap['vy_corr'] - ref_vy)
+                evz = abs(snap['vz'] - ref_vz)
                 e3d = math.sqrt(evx**2 + evy**2 + evz**2)
-                print(f"  {snap['n_pts']:3d}  {t_s:6.3f}  |  "
-                      f"{snap['vx']:+7.1f}  {snap['vy_raw']:+7.1f}  "
-                      f"{snap['vy_corr']:+7.1f}  {snap['vz']:+7.1f}  |  "
+                print(f"  {snap['n_pts']:3d}  {t_s:6.3f}  {arc_label:>3}  |  "
+                      f"{snap['vx']:+7.1f}  {snap['vy_corr']:+7.1f}  "
+                      f"{snap['vz']:+7.1f}  |  "
+                      f"{ref_vx:+7.1f}  {ref_vy:+7.1f}  {ref_vz:+7.1f}  |  "
                       f"{evx:5.1f}  {evy:5.1f}  {evz:5.1f}  {e3d:5.1f}")
 
         # --- Raw data dump ---
@@ -896,12 +961,9 @@ class VelocityValidator:
             tn = a['throw_number']
             n = a['n_points']
             dur = a['duration'] * 1000
-            mg = a['measured_g']
-            ge = a['g_error_pct']
-            pe = a['pred_errors']
-            rt = a.get('rt_comparison')
-            nb = a.get('n_bounces', 0)
+            n_arcs = len(a.get('arc_results', []))
             best = a.get('best_arc')
+            rt = a.get('rt_comparison')
 
             rt_str = ""
             if rt:
@@ -911,25 +973,20 @@ class VelocityValidator:
             else:
                 rt_str = "  (no RT)"
 
+            # Per-arc forward prediction
+            pa_pe = a.get('per_arc_pred_errors', [])
+            arc_means = [p['mean'] for p in pa_pe if p['n_points'] > 0]
             pred_str = ""
-            if pe['n_points'] > 0:
-                pred_str = f"  fwd: {pe['mean']:.1f}/{pe['max']:.1f}cm"
+            if arc_means:
+                pred_str = f"  fwd: {np.mean(arc_means):.1f}/{max(arc_means):.1f}cm"
 
-            bounce_str = f"  B={nb}" if nb > 0 else ""
+            arc_str = f"  arcs={n_arcs}" if n_arcs > 1 else ""
             best_g_str = ""
-            if best and nb > 0:
+            if best:
                 best_g_str = f"  best_g={best['measured_g']:.0f}"
 
-            print(f"  #{tn:2d}: {n:2d}pts {dur:4.0f}ms  "
-                  f"g={mg:5.0f}({ge:+5.1f}%)"
-                  f"{bounce_str}{best_g_str}{rt_str}{pred_str}")
-
-        # Aggregate gravity stats (whole trajectory)
-        g_vals = [a['measured_g'] for a in valid]
-        g_mean = np.mean(g_vals)
-        g_std = np.std(g_vals)
-        print(f"\n  Gravity (whole): mean={g_mean:.0f}  std={g_std:.0f}  "
-              f"expected={ThrowAnalyzer.GRAVITY_EXPECTED:.0f}")
+            print(f"  #{tn:2d}: {n:2d}pts {dur:4.0f}ms"
+                  f"{arc_str}{best_g_str}{rt_str}{pred_str}")
 
         # Aggregate gravity stats (best arc per throw)
         best_g_vals = [a['best_arc']['measured_g'] for a in valid
@@ -937,25 +994,31 @@ class VelocityValidator:
         if best_g_vals:
             bg_mean = np.mean(best_g_vals)
             bg_std = np.std(best_g_vals)
-            print(f"  Gravity (best arc): mean={bg_mean:.0f}  std={bg_std:.0f}")
+            print(f"\n  Gravity (best arc): mean={bg_mean:.0f}  std={bg_std:.0f}  "
+                  f"expected={ThrowAnalyzer.GRAVITY_EXPECTED:.0f}")
 
-        # Aggregate velocity errors (only throws with RT comparison)
+        # Aggregate velocity errors (only throws with RT comparison, per-arc ref)
         rt_errs = [a['rt_comparison'] for a in valid
                    if a.get('rt_comparison') is not None]
         if rt_errs:
             vx_errs = [r['err_vx'] for r in rt_errs]
             vy_errs = [r['err_vy'] for r in rt_errs]
             vz_errs = [r['err_vz'] for r in rt_errs]
-            print(f"  Vel err: Vx={np.mean(vx_errs):.1f}  "
+            print(f"  Vel err (per-arc ref): Vx={np.mean(vx_errs):.1f}  "
                   f"Vy={np.mean(vy_errs):.1f}  "
                   f"Vz={np.mean(vz_errs):.1f} cm/s  ({len(rt_errs)} throws)")
 
-        # Aggregate forward prediction
-        pred_means = [a['pred_errors']['mean'] for a in valid
-                      if a['pred_errors']['n_points'] > 0]
-        if pred_means:
-            print(f"  Fwd pred: mean={np.mean(pred_means):.1f}cm  "
-                  f"worst={np.max(pred_means):.1f}cm")
+        # Aggregate per-arc forward prediction
+        all_arc_means = []
+        for a in valid:
+            pa_pe = a.get('per_arc_pred_errors', [])
+            for p in pa_pe:
+                if p['n_points'] > 0:
+                    all_arc_means.append(p['mean'])
+        if all_arc_means:
+            print(f"  Per-arc fwd pred: mean={np.mean(all_arc_means):.1f}cm  "
+                  f"worst={np.max(all_arc_means):.1f}cm  "
+                  f"({len(all_arc_means)} arcs)")
 
         print(f"  {'═'*56}")
 
@@ -1129,7 +1192,7 @@ class VelocityValidator:
             return
 
         self.pred = TrajectoryPredictor(
-            buffer_size=15, min_points=4, velocity_method='regression',
+            buffer_size=15, min_points=6, velocity_method='regression',
             gravity=981.0, y_down=True, enable_drag=False)
 
         print("--- Ready! Toss ball to begin tracking ---\n")
