@@ -1,0 +1,12 @@
+{
+	"InstallScripts" : 
+	[
+		"/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/build/MinSizeRel/cmake_install.cmake",
+		"/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/build/MinSizeRel/cubemx/cmake/stm32cubemx/cmake_install.cmake",
+		"/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/build/MinSizeRel/hw/cmake_install.cmake",
+		"/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/build/MinSizeRel/io/cmake_install.cmake",
+		"/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/build/MinSizeRel/app/cmake_install.cmake",
+		"/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/build/MinSizeRel/datatypes/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

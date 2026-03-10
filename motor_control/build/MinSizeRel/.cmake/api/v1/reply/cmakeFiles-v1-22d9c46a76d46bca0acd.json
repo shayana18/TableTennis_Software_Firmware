@@ -1,0 +1,218 @@
+{
+	"globsDependent" : 
+	[
+		{
+			"expression" : "/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/app/*.c",
+			"listDirectories" : true,
+			"paths" : 
+			[
+				"/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/app/app_motor_comm.c",
+				"/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/app/motion_execute.c",
+				"/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/app/robot.c",
+				"/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/app/robot_fsm.c",
+				"/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/app/robot_runtime.c"
+			]
+		},
+		{
+			"expression" : "/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/hw/*.c",
+			"listDirectories" : true,
+			"paths" : 
+			[
+				"/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/hw/hw_uart.c"
+			]
+		},
+		{
+			"expression" : "/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/io/*.c",
+			"listDirectories" : true,
+			"paths" : 
+			[
+				"/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/io/io_laptop_com.c",
+				"/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/io/io_motor_com.c"
+			]
+		}
+	],
+	"inputs" : 
+	[
+		{
+			"path" : "CMakeLists.txt"
+		},
+		{
+			"path" : "cubemx/cmake/gcc-arm-none-eabi.cmake"
+		},
+		{
+			"isGenerated" : true,
+			"path" : "build/MinSizeRel/CMakeFiles/4.0.1/CMakeSystem.cmake"
+		},
+		{
+			"path" : "cubemx/cmake/gcc-arm-none-eabi.cmake"
+		},
+		{
+			"isCMake" : true,
+			"isExternal" : true,
+			"path" : "/Users/shykizzy/Library/Application Support/stm32cube/bundles/cmake/4.0.1+st.3/CMake.app/Contents/share/cmake-4.0/Modules/CMakeSystemSpecificInitialize.cmake"
+		},
+		{
+			"isGenerated" : true,
+			"path" : "build/MinSizeRel/CMakeFiles/4.0.1/CMakeCCompiler.cmake"
+		},
+		{
+			"isGenerated" : true,
+			"path" : "build/MinSizeRel/CMakeFiles/4.0.1/CMakeASMCompiler.cmake"
+		},
+		{
+			"isCMake" : true,
+			"isExternal" : true,
+			"path" : "/Users/shykizzy/Library/Application Support/stm32cube/bundles/cmake/4.0.1+st.3/CMake.app/Contents/share/cmake-4.0/Modules/CMakeSystemSpecificInformation.cmake"
+		},
+		{
+			"isCMake" : true,
+			"isExternal" : true,
+			"path" : "/Users/shykizzy/Library/Application Support/stm32cube/bundles/cmake/4.0.1+st.3/CMake.app/Contents/share/cmake-4.0/Modules/CMakeGenericSystem.cmake"
+		},
+		{
+			"isCMake" : true,
+			"isExternal" : true,
+			"path" : "/Users/shykizzy/Library/Application Support/stm32cube/bundles/cmake/4.0.1+st.3/CMake.app/Contents/share/cmake-4.0/Modules/CMakeInitializeConfigs.cmake"
+		},
+		{
+			"isCMake" : true,
+			"isExternal" : true,
+			"path" : "/Users/shykizzy/Library/Application Support/stm32cube/bundles/cmake/4.0.1+st.3/CMake.app/Contents/share/cmake-4.0/Modules/Platform/Generic.cmake"
+		},
+		{
+			"isCMake" : true,
+			"isExternal" : true,
+			"path" : "/Users/shykizzy/Library/Application Support/stm32cube/bundles/cmake/4.0.1+st.3/CMake.app/Contents/share/cmake-4.0/Modules/CMakeCInformation.cmake"
+		},
+		{
+			"isCMake" : true,
+			"isExternal" : true,
+			"path" : "/Users/shykizzy/Library/Application Support/stm32cube/bundles/cmake/4.0.1+st.3/CMake.app/Contents/share/cmake-4.0/Modules/CMakeLanguageInformation.cmake"
+		},
+		{
+			"isCMake" : true,
+			"isExternal" : true,
+			"path" : "/Users/shykizzy/Library/Application Support/stm32cube/bundles/cmake/4.0.1+st.3/CMake.app/Contents/share/cmake-4.0/Modules/Compiler/GNU-C.cmake"
+		},
+		{
+			"isCMake" : true,
+			"isExternal" : true,
+			"path" : "/Users/shykizzy/Library/Application Support/stm32cube/bundles/cmake/4.0.1+st.3/CMake.app/Contents/share/cmake-4.0/Modules/Compiler/GNU.cmake"
+		},
+		{
+			"isCMake" : true,
+			"isExternal" : true,
+			"path" : "/Users/shykizzy/Library/Application Support/stm32cube/bundles/cmake/4.0.1+st.3/CMake.app/Contents/share/cmake-4.0/Modules/Compiler/CMakeCommonCompilerMacros.cmake"
+		},
+		{
+			"isCMake" : true,
+			"isExternal" : true,
+			"path" : "/Users/shykizzy/Library/Application Support/stm32cube/bundles/cmake/4.0.1+st.3/CMake.app/Contents/share/cmake-4.0/Modules/Platform/Generic.cmake"
+		},
+		{
+			"isCMake" : true,
+			"isExternal" : true,
+			"path" : "/Users/shykizzy/Library/Application Support/stm32cube/bundles/cmake/4.0.1+st.3/CMake.app/Contents/share/cmake-4.0/Modules/CMakeCommonLanguageInclude.cmake"
+		},
+		{
+			"isCMake" : true,
+			"isExternal" : true,
+			"path" : "/Users/shykizzy/Library/Application Support/stm32cube/bundles/cmake/4.0.1+st.3/CMake.app/Contents/share/cmake-4.0/Modules/Internal/CMakeCLinkerInformation.cmake"
+		},
+		{
+			"isCMake" : true,
+			"isExternal" : true,
+			"path" : "/Users/shykizzy/Library/Application Support/stm32cube/bundles/cmake/4.0.1+st.3/CMake.app/Contents/share/cmake-4.0/Modules/Internal/CMakeCommonLinkerInformation.cmake"
+		},
+		{
+			"isCMake" : true,
+			"isExternal" : true,
+			"path" : "/Users/shykizzy/Library/Application Support/stm32cube/bundles/cmake/4.0.1+st.3/CMake.app/Contents/share/cmake-4.0/Modules/CMakeASMInformation.cmake"
+		},
+		{
+			"isCMake" : true,
+			"isExternal" : true,
+			"path" : "/Users/shykizzy/Library/Application Support/stm32cube/bundles/cmake/4.0.1+st.3/CMake.app/Contents/share/cmake-4.0/Modules/Compiler/GNU-ASM.cmake"
+		},
+		{
+			"isCMake" : true,
+			"isExternal" : true,
+			"path" : "/Users/shykizzy/Library/Application Support/stm32cube/bundles/cmake/4.0.1+st.3/CMake.app/Contents/share/cmake-4.0/Modules/Compiler/GNU.cmake"
+		},
+		{
+			"isCMake" : true,
+			"isExternal" : true,
+			"path" : "/Users/shykizzy/Library/Application Support/stm32cube/bundles/cmake/4.0.1+st.3/CMake.app/Contents/share/cmake-4.0/Modules/Internal/CMakeASMLinkerInformation.cmake"
+		},
+		{
+			"isGenerated" : true,
+			"path" : "build/MinSizeRel/CMakeFiles/4.0.1/CMakeCXXCompiler.cmake"
+		},
+		{
+			"isCMake" : true,
+			"isExternal" : true,
+			"path" : "/Users/shykizzy/Library/Application Support/stm32cube/bundles/cmake/4.0.1+st.3/CMake.app/Contents/share/cmake-4.0/Modules/CMakeCXXInformation.cmake"
+		},
+		{
+			"isCMake" : true,
+			"isExternal" : true,
+			"path" : "/Users/shykizzy/Library/Application Support/stm32cube/bundles/cmake/4.0.1+st.3/CMake.app/Contents/share/cmake-4.0/Modules/CMakeLanguageInformation.cmake"
+		},
+		{
+			"isCMake" : true,
+			"isExternal" : true,
+			"path" : "/Users/shykizzy/Library/Application Support/stm32cube/bundles/cmake/4.0.1+st.3/CMake.app/Contents/share/cmake-4.0/Modules/Compiler/GNU-CXX.cmake"
+		},
+		{
+			"isCMake" : true,
+			"isExternal" : true,
+			"path" : "/Users/shykizzy/Library/Application Support/stm32cube/bundles/cmake/4.0.1+st.3/CMake.app/Contents/share/cmake-4.0/Modules/Compiler/GNU.cmake"
+		},
+		{
+			"isCMake" : true,
+			"isExternal" : true,
+			"path" : "/Users/shykizzy/Library/Application Support/stm32cube/bundles/cmake/4.0.1+st.3/CMake.app/Contents/share/cmake-4.0/Modules/Platform/Generic.cmake"
+		},
+		{
+			"isCMake" : true,
+			"isExternal" : true,
+			"path" : "/Users/shykizzy/Library/Application Support/stm32cube/bundles/cmake/4.0.1+st.3/CMake.app/Contents/share/cmake-4.0/Modules/CMakeCommonLanguageInclude.cmake"
+		},
+		{
+			"isCMake" : true,
+			"isExternal" : true,
+			"path" : "/Users/shykizzy/Library/Application Support/stm32cube/bundles/cmake/4.0.1+st.3/CMake.app/Contents/share/cmake-4.0/Modules/Internal/CMakeCXXLinkerInformation.cmake"
+		},
+		{
+			"isCMake" : true,
+			"isExternal" : true,
+			"path" : "/Users/shykizzy/Library/Application Support/stm32cube/bundles/cmake/4.0.1+st.3/CMake.app/Contents/share/cmake-4.0/Modules/Internal/CMakeCommonLinkerInformation.cmake"
+		},
+		{
+			"path" : "cubemx/cmake/stm32cubemx/CMakeLists.txt"
+		},
+		{
+			"path" : "hw/CMakeLists.txt"
+		},
+		{
+			"path" : "io/CMakeLists.txt"
+		},
+		{
+			"path" : "app/CMakeLists.txt"
+		},
+		{
+			"path" : "datatypes/CMakeLists.txt"
+		}
+	],
+	"kind" : "cmakeFiles",
+	"paths" : 
+	{
+		"build" : "/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/build/MinSizeRel",
+		"source" : "/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control"
+	},
+	"version" : 
+	{
+		"major" : 1,
+		"minor" : 1
+	}
+}

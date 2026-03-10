@@ -1,0 +1,519 @@
+{
+	"archive" : {},
+	"artifacts" : 
+	[
+		{
+			"path" : "app/libapp_lib.a"
+		}
+	],
+	"backtrace" : 1,
+	"backtraceGraph" : 
+	{
+		"commands" : 
+		[
+			"add_library",
+			"target_link_libraries",
+			"target_include_directories",
+			"target_sources"
+		],
+		"files" : 
+		[
+			"app/CMakeLists.txt"
+		],
+		"nodes" : 
+		[
+			{
+				"file" : 0
+			},
+			{
+				"command" : 0,
+				"file" : 0,
+				"line" : 6,
+				"parent" : 0
+			},
+			{
+				"command" : 1,
+				"file" : 0,
+				"line" : 11,
+				"parent" : 0
+			},
+			{
+				"command" : 2,
+				"file" : 0,
+				"line" : 8,
+				"parent" : 0
+			},
+			{
+				"command" : 3,
+				"file" : 0,
+				"line" : 7,
+				"parent" : 0
+			}
+		]
+	},
+	"compileGroups" : 
+	[
+		{
+			"compileCommandFragments" : 
+			[
+				{
+					"fragment" : " -mcpu=cortex-m0plus  -Wall -Wextra -Wpedantic -fdata-sections -ffunction-sections -Og -g3 -mcpu=cortex-m0plus  -Wall -Wextra -Wpedantic -fdata-sections -ffunction-sections -Og -g3 -g -std=gnu11"
+				}
+			],
+			"defines" : 
+			[
+				{
+					"backtrace" : 2,
+					"define" : "DEBUG"
+				},
+				{
+					"backtrace" : 2,
+					"define" : "STM32C031xx"
+				},
+				{
+					"backtrace" : 2,
+					"define" : "USE_HAL_DRIVER"
+				},
+				{
+					"backtrace" : 2,
+					"define" : "USE_NUCLEO_64"
+				}
+			],
+			"includes" : 
+			[
+				{
+					"backtrace" : 3,
+					"path" : "/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/app"
+				},
+				{
+					"backtrace" : 2,
+					"path" : "/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/io"
+				},
+				{
+					"backtrace" : 2,
+					"path" : "/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/hw"
+				},
+				{
+					"backtrace" : 2,
+					"path" : "/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/cubemx/cmake/stm32cubemx/../../Core/Inc"
+				},
+				{
+					"backtrace" : 2,
+					"path" : "/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/cubemx/cmake/stm32cubemx/../../Drivers/STM32C0xx_HAL_Driver/Inc"
+				},
+				{
+					"backtrace" : 2,
+					"path" : "/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/cubemx/cmake/stm32cubemx/../../Drivers/STM32C0xx_HAL_Driver/Inc/Legacy"
+				},
+				{
+					"backtrace" : 2,
+					"path" : "/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/cubemx/cmake/stm32cubemx/../../Drivers/BSP/STM32C0xx_Nucleo"
+				},
+				{
+					"backtrace" : 2,
+					"path" : "/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/cubemx/cmake/stm32cubemx/../../Drivers/CMSIS/Device/ST/STM32C0xx/Include"
+				},
+				{
+					"backtrace" : 2,
+					"path" : "/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/cubemx/cmake/stm32cubemx/../../Drivers/CMSIS/Include"
+				},
+				{
+					"backtrace" : 2,
+					"path" : "/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/cubemx/cmake/stm32cubemx/../../datatypes"
+				},
+				{
+					"backtrace" : 2,
+					"path" : "/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/datatypes"
+				}
+			],
+			"language" : "C",
+			"languageStandard" : 
+			{
+				"backtraces" : 
+				[
+					1
+				],
+				"standard" : "11"
+			},
+			"sourceIndexes" : 
+			[
+				0,
+				1,
+				2,
+				3,
+				4,
+				5,
+				6,
+				7,
+				8,
+				9,
+				10,
+				11,
+				12,
+				13,
+				14,
+				15,
+				16,
+				17,
+				18,
+				19,
+				20,
+				21,
+				22,
+				23,
+				24,
+				25,
+				26,
+				27,
+				28,
+				29,
+				30
+			]
+		},
+		{
+			"compileCommandFragments" : 
+			[
+				{
+					"fragment" : " -mcpu=cortex-m0plus  -Wall -Wextra -Wpedantic -fdata-sections -ffunction-sections -Og -g3 -mcpu=cortex-m0plus  -Wall -Wextra -Wpedantic -fdata-sections -ffunction-sections -Og -g3 -x assembler-with-cpp -MMD -MP -g"
+				}
+			],
+			"defines" : 
+			[
+				{
+					"backtrace" : 2,
+					"define" : "DEBUG"
+				},
+				{
+					"backtrace" : 2,
+					"define" : "STM32C031xx"
+				},
+				{
+					"backtrace" : 2,
+					"define" : "USE_HAL_DRIVER"
+				},
+				{
+					"backtrace" : 2,
+					"define" : "USE_NUCLEO_64"
+				}
+			],
+			"includes" : 
+			[
+				{
+					"backtrace" : 3,
+					"path" : "/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/app"
+				},
+				{
+					"backtrace" : 2,
+					"path" : "/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/io"
+				},
+				{
+					"backtrace" : 2,
+					"path" : "/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/hw"
+				},
+				{
+					"backtrace" : 2,
+					"path" : "/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/cubemx/cmake/stm32cubemx/../../Core/Inc"
+				},
+				{
+					"backtrace" : 2,
+					"path" : "/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/cubemx/cmake/stm32cubemx/../../Drivers/STM32C0xx_HAL_Driver/Inc"
+				},
+				{
+					"backtrace" : 2,
+					"path" : "/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/cubemx/cmake/stm32cubemx/../../Drivers/STM32C0xx_HAL_Driver/Inc/Legacy"
+				},
+				{
+					"backtrace" : 2,
+					"path" : "/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/cubemx/cmake/stm32cubemx/../../Drivers/BSP/STM32C0xx_Nucleo"
+				},
+				{
+					"backtrace" : 2,
+					"path" : "/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/cubemx/cmake/stm32cubemx/../../Drivers/CMSIS/Device/ST/STM32C0xx/Include"
+				},
+				{
+					"backtrace" : 2,
+					"path" : "/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/cubemx/cmake/stm32cubemx/../../Drivers/CMSIS/Include"
+				},
+				{
+					"backtrace" : 2,
+					"path" : "/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/cubemx/cmake/stm32cubemx/../../datatypes"
+				},
+				{
+					"backtrace" : 2,
+					"path" : "/Users/shykizzy/Desktop/Desktop_Repos/TableTennis_Software_Firmware/motor_control/datatypes"
+				}
+			],
+			"language" : "ASM",
+			"sourceIndexes" : 
+			[
+				31
+			]
+		}
+	],
+	"dependencies" : 
+	[
+		{
+			"backtrace" : 2,
+			"id" : "hw_lib::@b18398d7833590a2dabd"
+		},
+		{
+			"backtrace" : 2,
+			"id" : "io_lib::@9998546b0f8df173ae92"
+		},
+		{
+			"backtrace" : 2,
+			"id" : "datatypes_lib::@e24c9820414dafca418a"
+		}
+	],
+	"id" : "app_lib::@5f5a17c01335469806cb",
+	"name" : "app_lib",
+	"nameOnDisk" : "libapp_lib.a",
+	"paths" : 
+	{
+		"build" : "app",
+		"source" : "app"
+	},
+	"sourceGroups" : 
+	[
+		{
+			"name" : "Source Files",
+			"sourceIndexes" : 
+			[
+				0,
+				1,
+				2,
+				3,
+				4,
+				5,
+				6,
+				7,
+				8,
+				9,
+				10,
+				11,
+				12,
+				13,
+				14,
+				15,
+				16,
+				17,
+				18,
+				19,
+				20,
+				21,
+				22,
+				23,
+				24,
+				25,
+				26,
+				27,
+				28,
+				29,
+				30
+			]
+		},
+		{
+			"name" : "",
+			"sourceIndexes" : 
+			[
+				31
+			]
+		}
+	],
+	"sources" : 
+	[
+		{
+			"backtrace" : 4,
+			"compileGroupIndex" : 0,
+			"path" : "app/app_motor_comm.c",
+			"sourceGroupIndex" : 0
+		},
+		{
+			"backtrace" : 4,
+			"compileGroupIndex" : 0,
+			"path" : "app/motion_execute.c",
+			"sourceGroupIndex" : 0
+		},
+		{
+			"backtrace" : 4,
+			"compileGroupIndex" : 0,
+			"path" : "app/robot.c",
+			"sourceGroupIndex" : 0
+		},
+		{
+			"backtrace" : 4,
+			"compileGroupIndex" : 0,
+			"path" : "app/robot_fsm.c",
+			"sourceGroupIndex" : 0
+		},
+		{
+			"backtrace" : 4,
+			"compileGroupIndex" : 0,
+			"path" : "app/robot_runtime.c",
+			"sourceGroupIndex" : 0
+		},
+		{
+			"backtrace" : 2,
+			"compileGroupIndex" : 0,
+			"path" : "cubemx/Core/Src/main.c",
+			"sourceGroupIndex" : 0
+		},
+		{
+			"backtrace" : 2,
+			"compileGroupIndex" : 0,
+			"path" : "cubemx/Core/Src/stm32c0xx_it.c",
+			"sourceGroupIndex" : 0
+		},
+		{
+			"backtrace" : 2,
+			"compileGroupIndex" : 0,
+			"path" : "cubemx/Core/Src/stm32c0xx_hal_msp.c",
+			"sourceGroupIndex" : 0
+		},
+		{
+			"backtrace" : 2,
+			"compileGroupIndex" : 0,
+			"path" : "cubemx/Core/Src/stm32c0xx_hal_timebase_tim.c",
+			"sourceGroupIndex" : 0
+		},
+		{
+			"backtrace" : 2,
+			"compileGroupIndex" : 0,
+			"path" : "cubemx/Drivers/BSP/STM32C0xx_Nucleo/stm32c0xx_nucleo.c",
+			"sourceGroupIndex" : 0
+		},
+		{
+			"backtrace" : 2,
+			"compileGroupIndex" : 0,
+			"path" : "cubemx/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_usart_ex.c",
+			"sourceGroupIndex" : 0
+		},
+		{
+			"backtrace" : 2,
+			"compileGroupIndex" : 0,
+			"path" : "cubemx/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal.c",
+			"sourceGroupIndex" : 0
+		},
+		{
+			"backtrace" : 2,
+			"compileGroupIndex" : 0,
+			"path" : "cubemx/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_cortex.c",
+			"sourceGroupIndex" : 0
+		},
+		{
+			"backtrace" : 2,
+			"compileGroupIndex" : 0,
+			"path" : "cubemx/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_rcc.c",
+			"sourceGroupIndex" : 0
+		},
+		{
+			"backtrace" : 2,
+			"compileGroupIndex" : 0,
+			"path" : "cubemx/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_rcc_ex.c",
+			"sourceGroupIndex" : 0
+		},
+		{
+			"backtrace" : 2,
+			"compileGroupIndex" : 0,
+			"path" : "cubemx/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_flash.c",
+			"sourceGroupIndex" : 0
+		},
+		{
+			"backtrace" : 2,
+			"compileGroupIndex" : 0,
+			"path" : "cubemx/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_flash_ex.c",
+			"sourceGroupIndex" : 0
+		},
+		{
+			"backtrace" : 2,
+			"compileGroupIndex" : 0,
+			"path" : "cubemx/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_gpio.c",
+			"sourceGroupIndex" : 0
+		},
+		{
+			"backtrace" : 2,
+			"compileGroupIndex" : 0,
+			"path" : "cubemx/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_dma.c",
+			"sourceGroupIndex" : 0
+		},
+		{
+			"backtrace" : 2,
+			"compileGroupIndex" : 0,
+			"path" : "cubemx/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_dma_ex.c",
+			"sourceGroupIndex" : 0
+		},
+		{
+			"backtrace" : 2,
+			"compileGroupIndex" : 0,
+			"path" : "cubemx/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_pwr.c",
+			"sourceGroupIndex" : 0
+		},
+		{
+			"backtrace" : 2,
+			"compileGroupIndex" : 0,
+			"path" : "cubemx/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_pwr_ex.c",
+			"sourceGroupIndex" : 0
+		},
+		{
+			"backtrace" : 2,
+			"compileGroupIndex" : 0,
+			"path" : "cubemx/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_exti.c",
+			"sourceGroupIndex" : 0
+		},
+		{
+			"backtrace" : 2,
+			"compileGroupIndex" : 0,
+			"path" : "cubemx/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_tim.c",
+			"sourceGroupIndex" : 0
+		},
+		{
+			"backtrace" : 2,
+			"compileGroupIndex" : 0,
+			"path" : "cubemx/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_tim_ex.c",
+			"sourceGroupIndex" : 0
+		},
+		{
+			"backtrace" : 2,
+			"compileGroupIndex" : 0,
+			"path" : "cubemx/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_uart.c",
+			"sourceGroupIndex" : 0
+		},
+		{
+			"backtrace" : 2,
+			"compileGroupIndex" : 0,
+			"path" : "cubemx/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_uart_ex.c",
+			"sourceGroupIndex" : 0
+		},
+		{
+			"backtrace" : 2,
+			"compileGroupIndex" : 0,
+			"path" : "cubemx/Drivers/STM32C0xx_HAL_Driver/Src/stm32c0xx_hal_usart.c",
+			"sourceGroupIndex" : 0
+		},
+		{
+			"backtrace" : 2,
+			"compileGroupIndex" : 0,
+			"path" : "cubemx/Core/Src/system_stm32c0xx.c",
+			"sourceGroupIndex" : 0
+		},
+		{
+			"backtrace" : 2,
+			"compileGroupIndex" : 0,
+			"path" : "cubemx/Core/Src/sysmem.c",
+			"sourceGroupIndex" : 0
+		},
+		{
+			"backtrace" : 2,
+			"compileGroupIndex" : 0,
+			"path" : "cubemx/Core/Src/syscalls.c",
+			"sourceGroupIndex" : 0
+		},
+		{
+			"backtrace" : 2,
+			"compileGroupIndex" : 1,
+			"path" : "cubemx/startup_stm32c031xx.s",
+			"sourceGroupIndex" : 1
+		}
+	],
+	"type" : "STATIC_LIBRARY"
+}
