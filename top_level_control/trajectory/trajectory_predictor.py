@@ -116,10 +116,10 @@ CM_TO_MM = 10.0
 # │  predictor.set_camera_pose(x, y, z, yaw, pitch, roll).        │
 # └─────────────────────────────────────────────────────────────────┘
 #
-CAM_POSE_X_MM   = 1885       # camera is to robot's RIGHT (+X)
-CAM_POSE_Y_MM   = 880       # camera is toward net from origin
-CAM_POSE_Z_MM   = 739       # camera is above base plate
-CAM_POSE_YAW    = 175.0     # camera faces -X (180°) - 5° yaw toward net
+CAM_POSE_X_MM   = 1050       # camera is to robot's RIGHT (+X)
+CAM_POSE_Y_MM   = 1250       # camera is toward net from origin
+CAM_POSE_Z_MM   = 640       # camera is above base plate
+CAM_POSE_YAW    = 185     # camera faces -X (180°) - 5° yaw toward net
 CAM_POSE_PITCH  = 20.0      # camera tilted 20° downward (fixed stand)
 CAM_POSE_ROLL   = 0.0       # camera is level
 
