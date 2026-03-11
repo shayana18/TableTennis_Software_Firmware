@@ -120,12 +120,12 @@ CM_TO_MM = 10.0
 # │  predictor.set_camera_pose(x, y, z, yaw, pitch, roll).        │
 # └─────────────────────────────────────────────────────────────────┘
 #
-CAM_POSE_X_MM   = 1050       # camera is to robot's RIGHT (+X)
-CAM_POSE_Y_MM   = 1250       # camera is toward net from origin
-CAM_POSE_Z_MM   = 640       # camera is above base plate
-CAM_POSE_YAW    = 185     # camera faces -X (180°) - 5° yaw toward net
-CAM_POSE_PITCH  = 20.0      # camera tilted 20° downward (fixed stand)
-CAM_POSE_ROLL   = 0.0       # camera is level
+CAM_POSE_X_MM   = 1582.5      # camera is to robot's RIGHT (+X)
+CAM_POSE_Y_MM   = 1500.0     # camera is toward net from origin
+CAM_POSE_Z_MM   = -452.4     # camera is below base plate (-Z)
+CAM_POSE_YAW    = 185        # camera faces -X (180°) + 5° yaw toward net
+CAM_POSE_PITCH  = 20.0       # camera tilted 20° downward (fixed stand)
+CAM_POSE_ROLL   = 0.0        # camera is level
 
 
 class TrajectoryPredictor:
@@ -173,9 +173,12 @@ class TrajectoryPredictor:
                  gravity=981.0,
                  y_down=True,
                  enable_drag=True,
+                 camera_pitch_deg=20.0,
                  robot_x_cam=None):
         """
         Args:
+            camera_pitch_deg: Camera pitch angle in degrees (20° for our setup).
+                              Decomposes gravity into Y and Z components.
             robot_x_cam: Camera-X coordinate of robot endline (cm).
                          Ball intercept happens at this X value.
         """
@@ -188,7 +191,8 @@ class TrajectoryPredictor:
         self.position_buffer = PositionBuffer(max_size=buffer_size)
         self.velocity_estimator = VelocityEstimator(method=velocity_method)
         self.physics_model = PhysicsModel(
-            gravity=gravity, y_down=y_down, enable_drag=enable_drag)
+            gravity=gravity, y_down=y_down, enable_drag=enable_drag,
+            camera_pitch_deg=camera_pitch_deg)
 
         self._current_velocity = None
         self._velocity_valid = False
@@ -490,20 +494,19 @@ class TrajectoryPredictor:
                 self.position_buffer.get_time_span() >= self.MIN_TIME_SPAN)
 
     def _get_corrected_velocity(self):
-        """Correct Vy for regression midpoint bias."""
+        """Correct Vy and Vz for regression midpoint bias (gravity acts on both)."""
         vel = self.get_velocity()
         if not vel['valid']: return None
 
         _, timestamps = self.position_buffer.get_as_arrays()
         t_latest = timestamps[-1]
         t_mean = timestamps.mean()
+        dt = t_latest - t_mean
 
-        vy_corrected = vel['vy'] + (
-            self.physics_model.gravity_sign *
-            self.physics_model.gravity *
-            (t_latest - t_mean))
+        vy_corrected = vel['vy'] + self.physics_model.g_y * dt
+        vz_corrected = vel['vz'] + self.physics_model.g_z * dt
 
-        return (vel['vx'], vy_corrected, vel['vz'])
+        return (vel['vx'], vy_corrected, vz_corrected)
 
     # ================================================================
     # PREDICTION — workspace-first interception with apex fallback

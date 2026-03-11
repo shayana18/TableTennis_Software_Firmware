@@ -115,11 +115,12 @@ class IntegrationTestDay:
     def initialize_predictor(self) -> None:
         self.predictor = TrajectoryPredictor(
             buffer_size=15,
-            min_points=4,
+            min_points=6,
             velocity_method="regression",
             gravity=981.0,
             y_down=True,
             enable_drag=True,
+            camera_pitch_deg=20.0,
             robot_x_cam=self.robot_x_cm,
         )
 

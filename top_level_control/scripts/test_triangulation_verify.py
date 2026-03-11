@@ -295,6 +295,17 @@ class TriangulationVerifier:
             pt_right, tri.cmtx1, tri.dist1, tri.R_rect1, tri.P_rect1)
 
         disp = pt_l_rect[0] - pt_r_rect[0]
+        epipolar_err = abs(pt_l_rect[1] - pt_r_rect[1])
+
+        # Diagnostic: show rectified coords and epipolar quality
+        print(f"  [DIAG] Raw  L=({pt_left[0]}, {pt_left[1]})  R=({pt_right[0]}, {pt_right[1]})")
+        print(f"  [DIAG] Rect L=({pt_l_rect[0]:.1f}, {pt_l_rect[1]:.1f})  "
+              f"R=({pt_r_rect[0]:.1f}, {pt_r_rect[1]:.1f})")
+        print(f"  [DIAG] Disparity={disp:.1f}px  Epipolar dy={epipolar_err:.1f}px")
+        if epipolar_err > 3.0:
+            print(f"  [DIAG] *** HIGH EPIPOLAR ERROR ({epipolar_err:.1f}px) — "
+                  f"rectification quality is poor, likely bad intrinsics ***")
+
         if disp <= 0:
             print("  ERROR: Negative disparity — left/right points may be swapped")
             return None, None
@@ -306,6 +317,7 @@ class TriangulationVerifier:
 
         err_l, err_r = tri._reprojection_error(pos, pt_l_rect, pt_r_rect)
         reproj = max(err_l, err_r)
+        print(f"  [DIAG] Reproj: L={err_l:.2f}px  R={err_r:.2f}px  max={reproj:.2f}px")
 
         return tuple(pos), reproj
 
@@ -1044,6 +1056,35 @@ class TriangulationVerifier:
         print(f"\n  Resolution: {self.frame_width}x{self.frame_height}")
         print(f"  Baseline: {self.triangulator.get_baseline():.2f} cm")
         print(f"  Focal length: {self.triangulator.get_focal_length_px():.1f} px")
+
+        # Calibration quality diagnostics
+        tri = self.triangulator
+        fx0, fy0 = tri.cmtx0[0, 0], tri.cmtx0[1, 1]
+        fx1, fy1 = tri.cmtx1[0, 0], tri.cmtx1[1, 1]
+        d0 = tri.dist0.flatten()
+        d1 = tri.dist1.flatten()
+        fx_diff_pct = abs(fx0 - fx1) / min(fx0, fx1) * 100
+        print(f"\n  --- Calibration Quality Check ---")
+        print(f"  cam0: fx={fx0:.1f}  fy={fy0:.1f}  k1={d0[0]:.3f}  k2={d0[1]:.3f}  k3={d0[4]:.3f}")
+        print(f"  cam1: fx={fx1:.1f}  fy={fy1:.1f}  k1={d1[0]:.3f}  k2={d1[1]:.3f}  k3={d1[4]:.3f}")
+        print(f"  fx difference: {fx_diff_pct:.1f}% (same lens model should be <3%)")
+        if fx_diff_pct > 5.0:
+            print(f"  *** WARNING: {fx_diff_pct:.1f}% focal length difference is suspicious! ***")
+            print(f"  *** This usually means one camera's intrinsics are poorly calibrated ***")
+            print(f"  *** Recalibrate with more images (30+) covering full frame ***")
+        if len(d0) >= 5 and abs(d0[4]) > 0.3:
+            print(f"  *** WARNING: cam0 k3={d0[4]:.3f} is very high — possible overfitting ***")
+        if len(d1) >= 5 and abs(d1[4]) > 0.3:
+            print(f"  *** WARNING: cam1 k3={d1[4]:.3f} is very high — possible overfitting ***")
+
+        # Show rectified focal length vs raw (large ratio = heavy zoom from alpha=0)
+        rect_f = tri.P_rect0[0, 0]
+        raw_f = (fx0 + fx1) / 2
+        zoom = rect_f / raw_f
+        print(f"  Rectified focal: {rect_f:.0f}px  Raw avg: {raw_f:.0f}px  Zoom: {zoom:.2f}x")
+        if zoom > 1.5:
+            print(f"  Note: {zoom:.1f}x zoom amplifies click errors — "
+                  f"1px click error → {zoom:.1f}px rectified error")
 
         print("\n  MODES:")
         print("    1 = DISTANCE  (verify Z depth)")

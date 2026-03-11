@@ -12,7 +12,9 @@ Coordinate system (camera frame, cameras on SIDE of table looking ACROSS width):
     Y: Vertical (positive = down in camera coords)
     Z: Depth from camera = across table WIDTH (152.5 cm + ~110 cm offset)
 
-    Gravity acts on Y only (no X/Z acceleration without drag).
+    With camera pitched down, gravity decomposes into Y and Z components:
+        g_y = g * cos(pitch)   (dominant, along camera Y)
+        g_z = -g * sin(pitch)  (toward camera, along camera Z)
 
 Part of trajectory prediction pipeline:
   position_buffer.py  →  velocity_estimator.py  →  trajectory_predictor.py
@@ -58,14 +60,22 @@ class PhysicsModel:
     """
 
     def __init__(self, gravity=GRAVITY_CM_S2, y_down=True,
-                 enable_drag=False, drag_coefficient=DEFAULT_DRAG_CD):
+                 enable_drag=False, drag_coefficient=DEFAULT_DRAG_CD,
+                 camera_pitch_deg=0.0):
         self.gravity = gravity
         self.y_down = y_down
         self.enable_drag = enable_drag
         self.drag_coefficient = drag_coefficient
+        self.camera_pitch_deg = camera_pitch_deg
 
         # +1 if Y increases downward (camera), -1 if Y increases upward
         self.gravity_sign = 1.0 if y_down else -1.0
+
+        # Decompose gravity into camera-frame components
+        # Camera pitched down → gravity has Y and Z components
+        pitch_rad = math.radians(camera_pitch_deg)
+        self.g_y = self.gravity_sign * gravity * math.cos(pitch_rad)
+        self.g_z = -gravity * math.sin(pitch_rad)  # negative = toward camera
 
         # Precompute drag constant: k = (ρ · Cd · A) / (2 · m)
         cross_section = math.pi * BALL_RADIUS_CM ** 2
@@ -94,7 +104,8 @@ class PhysicsModel:
         x, y, z = float(position[0]), float(position[1]), float(position[2])
         vx, vy, vz = float(velocity[0]), float(velocity[1]), float(velocity[2])
         k = self.drag_k
-        g_acc = self.gravity_sign * self.gravity
+        g_y_acc = self.g_y
+        g_z_acc = self.g_z
 
         trajectory = [] if record_trajectory else None
         next_record_t = 0.0
@@ -121,12 +132,12 @@ class PhysicsModel:
                 speed = math.sqrt(vx*vx + vy*vy + vz*vz)
                 drag = -k * speed
                 ax = drag * vx
-                ay = drag * vy + g_acc
-                az = drag * vz
+                ay = drag * vy + g_y_acc
+                az = drag * vz + g_z_acc
             else:
                 ax = 0.0
-                ay = g_acc
-                az = 0.0
+                ay = g_y_acc
+                az = g_z_acc
 
             # Semi-implicit Euler
             vx += ax * sim_dt
@@ -221,9 +232,9 @@ class PhysicsModel:
         """
         Predict position after time dt.
 
-        X(t) = X₀ + Vx·t           (no X acceleration)
-        Y(t) = Y₀ + Vy·t + ½g·t²  (gravity on Y)
-        Z(t) = Z₀ + Vz·t           (no Z acceleration)
+        X(t) = X₀ + Vx·t                (no X acceleration)
+        Y(t) = Y₀ + Vy·t + ½g_y·t²     (gravity Y component)
+        Z(t) = Z₀ + Vz·t + ½g_z·t²     (gravity Z component from camera pitch)
         """
         if self.enable_drag:
             result = self._simulate(position, velocity, max_time=dt)
@@ -231,17 +242,16 @@ class PhysicsModel:
 
         x0, y0, z0 = position
         vx, vy, vz = velocity
-        g = self.gravity_sign * self.gravity
 
         return (x0 + vx * dt,
-                y0 + vy * dt + 0.5 * g * dt * dt,
-                z0 + vz * dt)
+                y0 + vy * dt + 0.5 * self.g_y * dt * dt,
+                z0 + vz * dt + 0.5 * self.g_z * dt * dt)
 
     def predict_velocity(self, velocity, dt):
         """
         Predict velocity after time dt.
 
-        Vx unchanged, Vy += g·t, Vz unchanged.
+        Vx unchanged, Vy += g_y·t, Vz += g_z·t.
         """
         if self.enable_drag:
             result = self._simulate((0, 0, 0), velocity, max_time=dt)
@@ -249,8 +259,8 @@ class PhysicsModel:
 
         vx, vy, vz = velocity
         return (vx,
-                vy + self.gravity_sign * self.gravity * dt,
-                vz)
+                vy + self.g_y * dt,
+                vz + self.g_z * dt)
 
     def predict_trajectory(self, position, velocity, duration, dt=0.001):
         """Predict full trajectory as list of (X, Y, Z, t)."""
@@ -280,12 +290,36 @@ class PhysicsModel:
         return t if t > 0 else None
 
     def time_to_z(self, position, velocity, target_z):
-        """Time for ball to reach target Z. Returns None if unreachable."""
+        """Time for ball to reach target Z. Returns None if unreachable.
+
+        With camera pitch, Z has gravity component: Z(t) = Z₀ + Vz·t + ½g_z·t²
+        Solve: ½g_z·t² + Vz·t + (Z₀ - target_z) = 0
+        """
         vz = velocity[2]
-        if abs(vz) < 1e-6:
+        dz = position[2] - target_z
+
+        if abs(self.g_z) < 1e-9:
+            # No Z acceleration — linear
+            if abs(vz) < 1e-6:
+                return None
+            t = -dz / vz
+            return t if t > 0 else None
+
+        # Quadratic: ½g_z·t² + vz·t + dz = 0
+        a = 0.5 * self.g_z
+        b = vz
+        c = dz
+        disc = b * b - 4 * a * c
+        if disc < 0:
             return None
-        t = (target_z - position[2]) / vz
-        return t if t > 0 else None
+
+        sqrt_disc = math.sqrt(disc)
+        t1 = (-b + sqrt_disc) / (2 * a)
+        t2 = (-b - sqrt_disc) / (2 * a)
+
+        # Return smallest positive root
+        candidates = [t for t in (t1, t2) if t > 1e-9]
+        return min(candidates) if candidates else None
 
     def position_at_x(self, position, velocity, target_x):
         """
@@ -352,7 +386,7 @@ class PhysicsModel:
                 return fail
             return self._simulate(position, velocity, stop_at_apex=True)
 
-        t_apex = -vy / (self.gravity_sign * self.gravity)
+        t_apex = -vy / self.g_y
         if t_apex <= 0:
             return fail
 

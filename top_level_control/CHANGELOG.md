@@ -1,5 +1,301 @@
 # Stereo Pipeline — Change Log & Debug Report
 
+## Session: 2026-03-10 (Integration Script — Robot-Frame Prediction + UART)
+
+### Status: test_integration_simple.py v4 complete. Air drag model + rectangle workspace. Ready for testing.
+
+---
+
+### Background: Why a New Script
+
+`test_integration_day.py` used `TrajectoryPredictor` which predicts in **camera frame** — decomposing gravity along camera axes, then transforming to robot coords. This produced wildly inaccurate intercept predictions (e.g., Z positive when the ball is below the robot base). The camera-frame gravity decomposition amplified errors through the rotation matrix.
+
+**Solution:** Create `test_integration_simple.py` that predicts entirely in **robot frame (mm)** where gravity is simply `(0, 0, -9810)` mm/s². No axis decomposition needed.
+
+---
+
+### Change #15: Created test_integration_simple.py (v1)
+
+**File:** `scripts/test_integration_simple.py` — **NEW**
+
+**What:** End-to-end integration script replacing test_integration_day.py.
+
+**Pipeline:**
+1. Triangulate ball in camera frame (cm) via verified `StereoTriangulator`
+2. Transform to robot frame (mm) via verified `cam_to_robot()` rotation matrix
+3. Buffer robot-frame positions, estimate velocity via linear regression
+4. Predict trajectory with gravity: `pos(t) = p0 + v*t + 0.5*(0,0,-9810)*t²`
+5. Scan forward in time for first point entering workspace with enough reaction time
+6. Send `(x, y, z, time)` to robot via UART — no velocity data sent
+
+**Key design:**
+- `RobotPredictor` class: self-contained robot-frame predictor
+  - X, Y velocity: linear regression (no gravity)
+  - Z velocity: gravity-corrected regression (`z_corrected = z - 0.5*g*dt²`)
+  - Workspace: elliptic XY (790×540mm, scaled by SAFE_XY_SCALE) + Z bounds
+  - Direction filter: only predict when ball approaches workspace
+  - Reachability check: trapezoidal velocity profile estimate
+- `cam_to_robot()`: same verified rotation matrix as trajectory_predictor.py
+- Camera pose constants duplicated at top of file (not imported, for standalone use)
+
+**Camera pose:**
+```
+CAM_POSE_X_MM  = 1582.5    (camera to robot's RIGHT)
+CAM_POSE_Y_MM  = 1500.0    (camera toward net)
+CAM_POSE_Z_MM  = -452.4    (camera below base plate)
+CAM_POSE_YAW   = 185°      (looking in -X, 5° toward net)
+CAM_POSE_PITCH = 20°       (fixed stand)
+CAM_POSE_ROLL  = 0°
+```
+
+---
+
+### Test Results: v1 (~30 throws)
+
+- Robot went to 23 intercepts total, but:
+  - 7 rejected by STM32 ("TARGET OUT OF WORKSPACE") — deep Z (<-1000) or large XY at extreme Z
+  - Only ~2 of 30 throws produced visually accurate intercepts
+  - Most predictions were spatially close but not accurate enough for interception
+- **Key issue:** Manual 'c' key needed between throws to clear `intercept_sent` flag
+  - Many throws missed because the robot was still in "sent" state from previous throw
+
+---
+
+### Change #16: test_integration_simple.py v2 — Auto-Clear + State Machine
+
+**What:** Major update to fix usability and robustness issues.
+
+**Auto-clear on COMPLETED Q:**
+- No manual 'c' key needed between throws
+- After robot completes intercept → auto-send HOME → auto-clear on HOME completion
+- State machine: `_pending_action` tracks flow: `None → 'intercept' → 'homing' → None`
+
+**Tighter workspace bounds:**
+```python
+Z_MIN = -1000.0   # conservative (robot.h: -1050)
+Z_MAX = -731.0    # conservative (robot.h: -721)
+SAFE_XY_SCALE = 0.85  # initially; later reduced to 0.80
+```
+
+**Direction filter:**
+- `_ball_approaching()` — only predict when ball moves toward workspace
+- `MIN_APPROACH_VY = -200 mm/s` or Y < 600mm (ball already close)
+
+**Enhanced diagnostics:**
+- Per-throw log: target coords, ball position, velocity, buffer count, latency
+- Overlay: shows state (MOVING/HOMING/SENT/READY), approach indicator, throw count
+- Terminal: real-time position + velocity + intercept + reason ([AWAY], [NO_WS])
+- STM32 rejection handling: auto-clear on "TARGET OUT OF WORKSPACE"
+
+---
+
+### Test Results: v2 (6 throws)
+
+- 1 of 6 throws sent to robot (low success rate)
+- **Critical bug found:** HOME → COMPLETED Q → HOME infinite loop
+  - Each HOME command produces "COMPLETED Q" from STM32
+  - Script treated every "COMPLETED Q" as intercept completion → sent another HOME
+  - Robot oscillated between HOME commands indefinitely
+- Other throws: MIN_POINTS=8 too restrictive (not enough tracking frames), [NO_WS] rejections
+
+---
+
+### Change #17: HOME Loop Fix + Parameter Relaxation
+
+**HOME loop fix — state machine:**
+```python
+# _pending_action tracks what we're waiting for:
+#   None       = idle, ignore COMPLETED Q (startup noise)
+#   'intercept' = sent intercept → on COMPLETED Q, send HOME
+#   'homing'    = sent HOME → on COMPLETED Q, clear & reset
+```
+
+Only HOME is sent after an intercept completion. A "COMPLETED Q" during homing triggers the final clear (not another HOME). "COMPLETED Q" when idle is ignored.
+
+**Parameter relaxation:**
+```python
+MIN_POINTS:     8 → 6    # fewer frames needed to start predicting
+SCAN_DURATION:  1.0 → 1.5  # scan further forward in time
+SAFE_XY_SCALE:  0.85 → 0.80  # tighter XY to avoid IK rejections
+SAFE_Z_MARGIN:  20 → 15mm    # slightly wider Z range
+```
+
+**Rationale:** With MIN_POINTS=8, most throws didn't accumulate enough tracking frames before the ball left the camera FOV. At 100fps with stereo matching, we typically get 6-10 valid frames per throw. MIN_POINTS=6 is the sweet spot — stable enough for regression, fast enough to react.
+
+---
+
+### Test Results: v2 (13 throws, retested after HOME loop fix)
+
+- 13 throws sent to robot — all reached STM32 and robot attempted intercept
+- **Accuracy:** Poor — robot went to wrong positions (visually ~10-30cm off)
+- **Arc visualization:** Trail appeared inverted/wrong direction
+- **Root cause analysis:**
+  - Predictions made from only 6 points at Y=1700mm+ (ball still far from robot)
+  - No air drag model: horizontal velocity decelerates 15-25% due to drag on ping pong ball
+  - At 3-4 m/s over 300-400ms flight time, drag causes 80-350mm position error
+  - Arc visualization only showed 0.4s window with no-drag physics — didn't match actual ball path
+
+---
+
+### Test Results: v3 (3 throws, proximity filter + continuous updates)
+
+- Added MAX_PREDICT_Y=1400mm proximity filter and continuous update while STM32 in PLAN
+- 3 throws sent — still inaccurate
+- Predictions improved slightly (closer predictions) but still ~5-15cm off
+- Arc trail still visually incorrect
+- Confirmed: air drag is the dominant error source, not a code bug
+
+---
+
+### Change #18: test_integration_simple.py v4 — Air Drag + Rectangle Workspace
+
+**What:** Major physics and workspace overhaul for accurate interception.
+
+**Air drag model (Euler integration):**
+```python
+DRAG_K = 0.000112  # mm^-1 — Cd=0.40, mass=2.7g, diameter=40mm
+# Per step: drag = DRAG_K * speed; a_drag = -drag * v_component
+# Euler integration at dt=0.001s for predict, dt=0.01s for arc visualization
+```
+- Ping pong ball drag is 15-20% of gravity at typical 3-4 m/s speeds
+- Over 400ms flight: no-drag model overshoots Y by ~84mm, undershoots Z by ~29mm
+- Sanity check: at v=3000mm/s over 300ms, Vy decelerates from -3000 to -2682 (10.6%)
+
+**Rectangle workspace (10% bigger than robot.h):**
+```python
+WS_HALF_X = 869.0   # mm (790 * 1.1) — firmware handles actual bounds
+WS_HALF_Y = 594.0   # mm (540 * 1.1)
+Z_MIN     = -1050.0  # mm (robot.h value, no margin)
+Z_MAX     = -721.0   # mm (robot.h value, no margin)
+```
+- Was: elliptic XY with 0.80 safe scale + Z margins
+- Now: simple rectangle, slightly oversized — let firmware IK reject if truly unreachable
+- Rationale: firmware `check_workspace()` in robot.h handles actual bounds
+
+**Proximity filter:**
+- `MAX_PREDICT_Y = 1400mm` — don't predict until ball is within 1400mm of robot in Y
+- Prevents wild predictions from far-away detections (was sending from Y=1700+)
+
+**Continuous updates:**
+- Track `_stm32_moving` flag: set True on "STATE: MOVE" UART line, cleared on completion
+- While `_pending_action == 'intercept'` and `_stm32_moving is False`: keep sending refined predictions
+- Once robot starts moving, stop updating (can't change target mid-move)
+
+**Arc visualization fix:**
+- Was: 0.4s no-drag parabola (appeared inverted because ball was going UP early in trajectory)
+- Now: 1.0s drag-aware Euler integration — arc curves realistically and matches actual prediction
+- Same `_step_euler()` used for both prediction and visualization — guaranteed consistency
+
+**Other parameter changes:**
+```python
+MIN_TIME_SPAN: 0.06 → 0.08s   # need more data for stable velocity
+MIN_TIME_HIT:  0.15 → 0.10s   # allow faster reactions
+SCAN_DURATION: 1.5s            # scan 1.5s into future
+```
+
+---
+
+### Pending: v4 Testing
+
+1. Run `python scripts/test_integration_simple.py --port COM6`
+2. Verify drag model improves interception accuracy
+3. Tune DRAG_K if predictions still systematically off
+4. Verify arc visualization matches actual ball path
+5. Check rectangle workspace — expect fewer "TARGET OUT OF WORKSPACE" rejections
+
+---
+
+## Session: 2026-03-10 (Diagnosing High Reprojection Error)
+
+### Problem: 4-5px Reprojection Error in Triangulation Verification
+
+User recalibrated cameras and re-ran `test_triangulation_verify.py` mode 1 (DISTANCE). Got 4.5-5.5px reproj error, compared to 0.2-0.8px with the 2026-03-07 calibration.
+
+### Root Cause: cam0 Intrinsic Calibration is Unstable
+
+**Evidence — comparing current vs previous (working) calibration:**
+
+| Parameter | 2026-03-07 (worked) | Current (broken) | Change |
+|-----------|---------------------|-------------------|--------|
+| cam0 fx   | 545.15              | 576.13            | +5.7%  |
+| cam1 fx   | 531.07              | 532.65            | +0.3%  |
+| cam0 k2   | 0.277               | 0.544             | 2x     |
+| cam0 k3   | -0.006              | -0.506            | 84x    |
+| fx diff   | 2.6%                | 8.2%              | —      |
+
+- cam0 focal length jumped 5.7% while cam1 barely changed. Same lens model (OV9782) — should be <3% apart.
+- cam0 k3 exploded from -0.006 to -0.51, k2 doubled. Higher-order distortion terms wildly unstable → **overfitting**.
+- When cam0 undistortion is wrong, `_rectify_point()` produces incorrect normalized coordinates.
+- Stereo rectification can't make epipolar lines horizontal → y-mismatch after rectification becomes ~8-10px.
+- DLT distributes this as ~4-5px reprojection error per camera.
+
+**Mechanism:** DLT reproj ≈ epipolar_error / 2. So 4-5px reproj → ~8-10px epipolar mismatch → rectification failure → bad undistortion → bad intrinsics.
+
+### Changes Made
+
+**1. Added calibration quality diagnostics to test_triangulation_verify.py**
+- Startup: prints both cameras' fx, fy, k1, k2, k3 + warns if fx difference >5% or k3 too high
+- Startup: tests rectification quality at image center (epipolar error of center points)
+- Per-click: prints raw coords, rectified coords, epipolar error (dy), per-camera reproj
+- Warns explicitly if epipolar error >3px ("rectification quality is poor, likely bad intrinsics")
+
+**2. Tightened MAX_EPIPOLAR_ERR in stereo_triangulator.py**
+- `MAX_EPIPOLAR_ERR`: 35 → 15px (catches bad rectification with informative message in auto-detection path)
+
+### Change: Swapped Camera Order (device 1 ↔ device 2)
+
+After recalibration with good intrinsics, epipolar error dropped to **0.3px** (excellent!), but disparity was negative — cameras were physically swapped. Device 1 (camera0 in calibration) was on the RIGHT, device 2 (camera1) was on the LEFT.
+
+**Fix applied (no recalibration needed):**
+1. Swapped camera0_intrinsics.dat ↔ camera1_intrinsics.dat
+2. Inverted extrinsics: new camera0 (device 2, LEFT) = origin, new camera1 (device 1, RIGHT) = R^T, -R^T@T
+3. Updated camera_config.py: LEFT=2, RIGHT=1
+4. Updated calibration_settings.yaml: camera0=2, camera1=1
+5. Baseline preserved: 23.41 cm
+
+### Result: 0.5px Reproj — Triangulation Verified!
+
+After camera swap + alpha=-1 fix:
+- Reproj: **0.5px** (was 4-5px before recalibration)
+- Epipolar dy: sub-pixel
+- Rectified focal: ~518px (was 1287px with alpha=0 zoom)
+- Sample point: X=-4.36, Y=+31.33, Z=117.95 cm
+
+**Triangulation is now verified and accurate. Moving to camera→robot coordinate transform.**
+
+### Change: Camera→Robot Transform — Measured Offsets Applied
+
+**File:** `trajectory/trajectory_predictor.py`
+
+**Measured camera pose relative to robot base (mm):**
+```
+CAM_POSE_X_MM  = +1582.5   (camera to robot's RIGHT)
+CAM_POSE_Y_MM  = +1240.0   (camera toward net)
+CAM_POSE_Z_MM  = -452.4    (camera below base plate)
+CAM_POSE_YAW   = 185°      (looking in -X direction, 5° toward net)
+CAM_POSE_PITCH = 20°       (fixed stand)
+CAM_POSE_ROLL  = 0°
+```
+
+**Sanity check** with verified triangulation point (cam: -4.36, +31.33, 117.95 cm):
+- Robot: (588.9, 1109.3, -1150.2) mm
+- Point is on table surface (Z≈-1150, below workspace) and far toward net (Y=1109, outside ±540 workspace) — physically correct for a table-surface click
+- Robot HOME (0,0,-900) → camera (−110, −16, 174) cm — reasonable for 1582mm lateral offset
+
+---
+
+### Previous Fix Required (now resolved): Recalibrate cam0 Intrinsics
+
+The cam0 mono calibration needs to be redone with:
+1. **30+ images** covering the full frame (especially corners and edges)
+2. **Multiple distances** (20cm, 40cm, 60cm from camera)
+3. **Multiple orientations** of the checkerboard (tilted, rotated)
+4. Consider using `cv2.CALIB_FIX_K3` flag if k3 keeps being unstable — 5-coefficient model may overfit for this lens
+
+After re-running cam0 intrinsics, re-run stereo calibration (extrinsics), then verify with mode 1.
+
+---
+
 ## Session: 2026-03-08 (Velocity Estimation Debugging)
 
 ### Key Finding: Test Metrics Were Comparing Against Wrong Reference

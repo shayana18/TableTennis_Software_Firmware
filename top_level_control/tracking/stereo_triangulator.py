@@ -53,8 +53,8 @@ class StereoTriangulator:
     MAX_DISPARITY    = 500    # px — above this something is wrong
     MIN_Z            = 10     # calibration units — too close is suspect
     MAX_Z            = 500    # calibration units — too far is suspect
-    MAX_EPIPOLAR_ERR = 30     # px — rectification makes epipolar ~0, but detection
-                              #      centroid noise (motion blur, partial masks) adds 5-25px
+    MAX_EPIPOLAR_ERR = 15     # px — rectification makes epipolar ~0; if this fires
+                              #      it usually means bad calibration/rectification
     MAX_REPROJ_ERR   = 8      # px — max reprojection error to accept
 
     WARMUP_FRAMES = 120       # ~1.5s at 80fps — frames before detection is reliable
@@ -203,7 +203,7 @@ class StereoTriangulator:
             cv2.stereoRectify(
                 self.cmtx0, self.dist0, self.cmtx1, self.dist1,
                 image_size, self.R1, self.T1,
-                flags=cv2.CALIB_ZERO_DISPARITY, alpha=0)
+                flags=cv2.CALIB_ZERO_DISPARITY, alpha=-1)
 
         baseline = np.linalg.norm(self.T1 - self.T0)
         rect_f = self.P_rect0[0, 0]
