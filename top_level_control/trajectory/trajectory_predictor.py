@@ -13,9 +13,9 @@ GEOMETRY:
         Z = depth = across table WIDTH (152.5 cm + ~110cm camera offset)
 
     Robot frame (mm, delta robot from robot.h):
-        robot_x = horizontal, across table width    (±500mm)
-        robot_y = horizontal, along table length    (±350mm)
-        robot_z = vertical (down = more negative)   (-1100 to -700mm)
+        robot_x = horizontal, across table width
+        robot_y = horizontal, along table length
+        robot_z = vertical (down = more negative)
 
     Camera → Robot axis mapping:
         cam_z (table width)   → robot_x (horizontal)
@@ -48,10 +48,14 @@ TABLE_LENGTH_MM    = 2740.0
 TABLE_WIDTH_MM     = 1525.0
 NET_HEIGHT_MM      = 152.5
 
-# Delta robot workspace (from robot.h)
-ROBOT_LIMIT_X = (-500.0, 500.0)    # horizontal, across table width (mm)
-ROBOT_LIMIT_Y = (-350.0, 350.0)    # horizontal, along table length (mm)
-ROBOT_LIMIT_Z = (-1100.0, -700.0)  # vertical, down = more negative (mm)
+# Delta robot workspace (from updated robot.h)
+# XY workspace is an ellipse; Z has min/max limits.
+ELLIPSE_RADIUS_X = 790.0   # mm
+ELLIPSE_RADIUS_Y = 540.0   # mm
+LIMIT_POS_Z = -721.0       # mm (upper Z limit)
+LIMIT_NEG_Z = -1050.0      # mm (lower Z limit)
+NET_Z_TOP = -1000.0        # mm (provided for planner/policy logic)
+
 ROBOT_HOME    = (0.0, 0.0, -900.0) # mm
 MAX_CART_VEL  = 4000.0             # mm/s
 MAX_CART_ACC  = 20000.0            # mm/s²
@@ -81,7 +85,7 @@ CM_TO_MM = 10.0
 # │    +Y = toward the NET (along table length)                    │
 # │    +Z = UP (positive = above base plate)                       │
 # │    Note: workspace Z is negative because end-effector hangs    │
-# │    below the base plate (-700 to -1100 mm).                    │
+# │    below the base plate (-1050 to -721 mm).                    │
 # │                                                                │
 # │  1. POSITION (mm) — tape measure from robot base center        │
 # │     to camera 0 lens center:                                   │
@@ -126,10 +130,11 @@ CAM_POSE_ROLL   = 0.0       # camera is level
 
 class TrajectoryPredictor:
     """
-    Trajectory prediction with X-axis interception and robot output.
+    Trajectory prediction with robot-frame interception output.
 
-    The ball travels along camera X (table length).
-    Interception target is a camera-X position near the robot's endline.
+    Primary mode scans future trajectory points and chooses the first
+    conservative-safe post-bounce workspace point.
+    Legacy apex logic is kept as fallback.
     """
 
     # --- Outlier rejection ---
@@ -142,10 +147,24 @@ class TrajectoryPredictor:
 
     # --- Prediction readiness ---
     MIN_TIME_SPAN     = 0.08     # seconds (~8 frames at 100fps)
+    MAX_STALE_SAMPLE_S = 0.08    # do not predict from stale last sample
 
     # --- Bounce detection ---
     MIN_BOUNCE_FALL   = 10.0     # cm minimum Y descent before accepting bounce
     BOUNCE_RISE_FRAMES = 2       # consecutive rising frames to confirm bounce
+
+    # --- Workspace-first interception policy ---
+    # Intuition:
+    #   1) Sample future trajectory points in camera frame.
+    #   2) Transform ALL sampled points to robot frame.
+    #   3) Pick the first post-bounce point that is conservative-safe and
+    #      gives enough motion time margin.
+    INTERCEPT_SCAN_DURATION_S = 1.0
+    INTERCEPT_SCAN_DT_S = 0.01
+    POST_BOUNCE_BUFFER_S = 0.03
+    MIN_TIME_TO_HIT_S = 0.20
+    SAFE_XY_SCALE = 0.85
+    SAFE_Z_MARGIN_MM = 20.0
 
     def __init__(self,
                  buffer_size=15,
@@ -457,6 +476,15 @@ class TrajectoryPredictor:
         return (latest['x'], latest['y'], latest['z'])
 
     def is_ready(self):
+        latest = self.position_buffer.get_latest()
+        if latest is None:
+            return False
+
+        # Guard against "ghost" predictions when no fresh triangulation arrived.
+        sample_age_s = time.perf_counter() - float(latest['t'])
+        if sample_age_s > self.MAX_STALE_SAMPLE_S:
+            return False
+
         return (self.position_buffer.is_ready(self.min_points) and
                 self._velocity_valid and
                 self.position_buffer.get_time_span() >= self.MIN_TIME_SPAN)
@@ -478,15 +506,15 @@ class TrajectoryPredictor:
         return (vel['vx'], vy_corrected, vel['vz'])
 
     # ================================================================
-    # PREDICTION — intercept along camera X (table length)
+    # PREDICTION — workspace-first interception with apex fallback
     # ================================================================
 
     def predict(self, target_x=None):
         """
-        Predict where ball will be when it reaches target_x.
+        Predict interception command using workspace-first policy.
 
         Args:
-            target_x: Camera-X to intercept (cm). None = use robot_x_cam.
+            target_x: Legacy camera-X intercept plane (cm), used only by fallback.
 
         Returns:
             dict with intercept_x/y/z, time_to_intercept, strategy, etc.
@@ -503,7 +531,7 @@ class TrajectoryPredictor:
             'strategy': None
         }
 
-        if target_x is None or not self.is_ready():
+        if not self.is_ready():
             return result
 
         pos = self.get_current_position()
@@ -514,28 +542,57 @@ class TrajectoryPredictor:
         result['current_position'] = pos
         result['current_velocity'] = vel
 
-        vx = vel[0]
-        vy = vel[1]
         prediction = None
         strategy = None
 
-        # Is ball moving toward robot along X (table length)?
-        # Robot is at robot_x_cam. Ball needs to reach that X.
-        moving_toward = (target_x - pos[0]) * vx > 0
+        # Primary policy:
+        # scan future points and choose the first conservative-safe workspace
+        # point after bounce + time margin.
+        future_traj = self.physics_model.predict_trajectory(
+            position=pos,
+            velocity=vel,
+            duration=self.INTERCEPT_SCAN_DURATION_S,
+            dt=self.INTERCEPT_SCAN_DT_S,
+        )
+        future_points_cam = [(p[0], p[1], p[2]) for p in future_traj]
+        future_times_s = [p[3] for p in future_traj]
 
-        # Case 1: Ball rising → predict apex (for lobs)
-        if vy < 0 and (not moving_toward or abs(vy) > abs(vx) * 0.5):
-            prediction = self.physics_model.position_at_apex(
-                position=pos, velocity=vel)
-            if prediction['valid']:
-                strategy = 'apex'
+        # Bounce detector resets the buffer when a bounce is observed.
+        # If _bounce_count > 0, current arc is post-bounce and t=0 is "now".
+        intercept = None
+        if self._bounce_count > 0:
+            intercept = self.choose_intercept_point(
+                points_cam=future_points_cam,
+                times_s=future_times_s,
+                t_bounce=0.0,
+                bounce_buffer=self.POST_BOUNCE_BUFFER_S,
+                min_time_to_hit=self.MIN_TIME_TO_HIT_S,
+            )
 
-        # Case 2: X-plane interception (primary)
+        if intercept is not None:
+            t_hit = float(intercept['time_to_hit'])
+            prediction = {
+                'position': intercept['point_cam'],
+                'time': t_hit,
+                'velocity': self.physics_model.predict_velocity(vel, t_hit),
+                'valid': True,
+            }
+            strategy = 'workspace_first'
+
+        # Fallback to legacy logic when workspace-first is unavailable:
+        # apex-only fallback, as requested.
         if prediction is None or not prediction['valid']:
-            prediction = self.physics_model.position_at_x(
-                position=pos, velocity=vel, target_x=target_x)
-            if prediction['valid']:
-                strategy = 'x_plane'
+            vx = vel[0]
+            vy = vel[1]
+            moving_toward = (
+                target_x is not None and (target_x - pos[0]) * vx > 0
+            )
+
+            if vy < 0 and (target_x is None or not moving_toward or abs(vy) > abs(vx) * 0.5):
+                prediction = self.physics_model.position_at_apex(
+                    position=pos, velocity=vel)
+                if prediction['valid']:
+                    strategy = 'apex'
 
         if not prediction or not prediction['valid']:
             return result
@@ -549,6 +606,58 @@ class TrajectoryPredictor:
         result['strategy'] = strategy
         return result
 
+    def choose_intercept_point(
+            self,
+            points_cam,
+            times_s,
+            R=None,
+            t=None,
+            t_bounce=None,
+            bounce_buffer=0.03,
+            min_time_to_hit=0.20):
+        """
+        Choose first post-bounce safe interception point from sampled trajectory.
+
+        The important part is frame consistency:
+          - Sampled points are generated in camera frame (cm).
+          - They are transformed in batch to robot frame (mm).
+          - Workspace and reach checks run only in robot frame.
+
+        Note: R/t args are accepted for API similarity with calibration snippets,
+        but this predictor uses its internally configured camera→robot transform.
+        """
+        if points_cam is None or times_s is None:
+            return None
+        if len(points_cam) == 0 or len(times_s) == 0:
+            return None
+
+        n = min(len(points_cam), len(times_s))
+        if n <= 0:
+            return None
+
+        points_cam_arr = np.asarray(points_cam[:n], dtype=float).reshape(-1, 3)
+        points_robot_arr = self.cam_to_robot_batch(points_cam_arr)
+
+        for p_cam, p_robot, dt in zip(points_cam_arr, points_robot_arr, times_s[:n]):
+            dt = float(dt)
+
+            if t_bounce is not None and dt < (float(t_bounce) + float(bounce_buffer)):
+                continue
+            if dt < float(min_time_to_hit):
+                continue
+
+            rx, ry, rz = float(p_robot[0]), float(p_robot[1]), float(p_robot[2])
+            if not self.check_safe_workspace(rx, ry, rz):
+                continue
+
+            return {
+                'point_cam': (float(p_cam[0]), float(p_cam[1]), float(p_cam[2])),
+                'point_robot': (rx, ry, rz),
+                'time_to_hit': dt,
+            }
+
+        return None
+
     # ================================================================
     # ROBOT COMMAND
     # ================================================================
@@ -560,9 +669,9 @@ class TrajectoryPredictor:
         Returns both camera coords (cm) and robot coords (mm).
 
         Robot frame (mm, delta robot):
-            robot_x: horizontal, across table width    (±500)
-            robot_y: horizontal, along table length    (±350)
-            robot_z: vertical, down = more negative    (-1100 to -700)
+            robot_x: horizontal, across table width    (ellipse radius 790)
+            robot_y: horizontal, along table length    (ellipse radius 540)
+            robot_z: vertical, down = more negative    (-1050 to -721)
         """
         cmd = {
             'valid': False,
@@ -624,6 +733,16 @@ class TrajectoryPredictor:
         p_robot = self._R_cam_to_robot @ p_cam_mm + self._t_cam_to_robot
         return (float(p_robot[0]), float(p_robot[1]), float(p_robot[2]))
 
+    def cam_to_robot_batch(self, points_cam):
+        """Batch transform Nx3 camera points (cm) → robot points (mm)."""
+        pts = np.asarray(points_cam, dtype=float)
+        if pts.size == 0:
+            return np.empty((0, 3), dtype=float)
+        pts = pts.reshape(-1, 3)
+
+        p_cam_mm = pts * CM_TO_MM
+        return (self._R_cam_to_robot @ p_cam_mm.T).T + self._t_cam_to_robot
+
     def robot_to_cam(self, robot_x, robot_y, robot_z):
         """
         Inverse transform: robot coords (mm) → camera coords (cm).
@@ -638,10 +757,29 @@ class TrajectoryPredictor:
         return (float(p_cam_cm[0]), float(p_cam_cm[1]), float(p_cam_cm[2]))
 
     def check_workspace(self, robot_x, robot_y, robot_z):
-        """Check if point is within robot rectangular workspace (from robot.h)."""
-        return (ROBOT_LIMIT_X[0] <= robot_x <= ROBOT_LIMIT_X[1] and
-                ROBOT_LIMIT_Y[0] <= robot_y <= ROBOT_LIMIT_Y[1] and
-                ROBOT_LIMIT_Z[0] <= robot_z <= ROBOT_LIMIT_Z[1])
+        """Check if point is within robot workspace (ellipse in XY + Z bounds)."""
+        if not (LIMIT_NEG_Z <= robot_z <= LIMIT_POS_Z):
+            return False
+
+        nx = robot_x / ELLIPSE_RADIUS_X
+        ny = robot_y / ELLIPSE_RADIUS_Y
+        return (nx * nx + ny * ny) <= 1.0
+
+    def check_safe_workspace(self, robot_x, robot_y, robot_z):
+        """
+        Conservative workspace for selecting interception points.
+
+        We keep margin away from hard bounds so the chosen point is easier
+        for timing/model error and path planning.
+        """
+        z_lo = LIMIT_NEG_Z + self.SAFE_Z_MARGIN_MM
+        z_hi = LIMIT_POS_Z - self.SAFE_Z_MARGIN_MM
+        if not (z_lo <= robot_z <= z_hi):
+            return False
+
+        nx = robot_x / (ELLIPSE_RADIUS_X * self.SAFE_XY_SCALE)
+        ny = robot_y / (ELLIPSE_RADIUS_Y * self.SAFE_XY_SCALE)
+        return (nx * nx + ny * ny) <= 1.0
 
     def check_reachable(self, robot_x, robot_y, robot_z, time_available):
         """Check if robot can reach position in time (trapezoidal profile estimate)."""

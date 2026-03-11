@@ -4,14 +4,15 @@ Live stereo integration test: updated triangulation + updated trajectory planner
 This script is the test-day integration entrypoint and keeps the same core behavior:
 1) Send TARGET_HOME on startup.
 2) Wait for home confirmation from STM32.
-3) Run live stereo tracking and trajectory prediction.
-4) Send latency-compensated TARGET_INTERCEPT messages while running.
+3) Keep top-level pipeline gated OFF until user opens it.
+4) When gate is ON, run tracking/prediction and send one intercept at a time.
 5) On quit, stop intercept TX and send one TARGET_HOME.
 """
 
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import sys
 import time
@@ -71,6 +72,8 @@ class IntegrationTestDay:
         self.accept_intercept_targets = False
         self.shutdown_requested = False
         self.shutdown_home_sent = False
+        self.run_top_level = False
+        self.intercept_target_sent = True
 
         self.home_ack_timeout_s = home_ack_timeout_s
         self.tx_interval_s = float(tx_interval_s)
@@ -136,12 +139,16 @@ class IntegrationTestDay:
 
         self.robot_homed = True
         self.accept_intercept_targets = True
-        _planner_print("Robot homed, game can start now")
+        self.run_top_level = False
+        self.intercept_target_sent = True
+        _planner_print("Robot homed; top-level pipeline is gated OFF (press 'g' to run)")
         return True
 
     def request_shutdown_home(self) -> None:
         self.shutdown_requested = True
         self.accept_intercept_targets = False
+        self.run_top_level = False
+        self.intercept_target_sent = True
         if self.shutdown_home_sent:
             return
 
@@ -152,10 +159,41 @@ class IntegrationTestDay:
         except Exception as exc:
             _planner_print(f"[UART] Failed to send shutdown home command: {exc}")
 
+    def clear_intercept_send_flag(self, reason: str = "user") -> None:
+        self.intercept_target_sent = False
+        _planner_print(
+            f"[UART] Intercept-send flag cleared ({reason}); next valid target can be sent"
+        )
+
+    def set_run_top_level(self, enabled: bool, reason: str = "user") -> None:
+        enabled = bool(enabled)
+        if self.run_top_level == enabled:
+            return
+
+        self.run_top_level = enabled
+        if self.predictor is not None:
+            self.predictor.reset()
+
+        if enabled:
+            # Opening gate: allow one fresh intercept send.
+            self.intercept_target_sent = False
+            _planner_print(f"[GATE] run_top_level=ON ({reason})")
+        else:
+            # Closing gate: hard-stop downstream TX until re-open.
+            self.intercept_target_sent = True
+            _planner_print(f"[GATE] run_top_level=OFF ({reason})")
+
     def maybe_send_intercept_target(self, cmd: dict, frame_timestamp_s: float) -> None:
-        if not self.robot_homed or not self.accept_intercept_targets or self.shutdown_requested:
+        if (
+            not self.robot_homed
+            or not self.accept_intercept_targets
+            or not self.run_top_level
+            or self.shutdown_requested
+        ):
             return
         if not cmd.get("valid"):
+            return
+        if self.intercept_target_sent:
             return
         if not cmd.get("in_workspace", False):
             now = time.perf_counter()
@@ -186,6 +224,13 @@ class IntegrationTestDay:
             )
             self.last_tx_time = time_sent
             self.last_cmd = cmd
+            self.intercept_target_sent = True
+            _planner_print(
+                "[UART] Intercept sent "
+                f"(robot mm: x={cmd['robot_x']:+.1f}, y={cmd['robot_y']:+.1f}, z={cmd['robot_z']:+.1f}; "
+                f"t={adjusted_intercept_time*1000.0:.0f} ms)"
+            )
+            _planner_print("[UART] Waiting for manual clear before next send")
         except Exception as exc:
             _planner_print(f"[UART] Failed to send intercept target: {exc}")
 
@@ -240,14 +285,22 @@ class IntegrationTestDay:
             uv = self.triangulator.project_to_image((x, y, z), camera="left")
             if uv is None:
                 continue
-            points.append((int(uv[0]), int(uv[1])))
+            u, v = float(uv[0]), float(uv[1])
+            if not math.isfinite(u) or not math.isfinite(v):
+                continue
+            px = int(round(u))
+            py = int(round(v))
+            # Skip wildly out-of-frame points to avoid OpenCV parse/overflow issues.
+            if px < -5000 or py < -5000 or px > frame.shape[1] + 5000 or py > frame.shape[0] + 5000:
+                continue
+            points.append((px, py))
 
         for i in range(len(points) - 1):
             cv2.line(frame, points[i], points[i + 1], color, 2, cv2.LINE_AA)
         for i in range(0, len(points), max(1, len(points) // 15)):
             cv2.circle(frame, points[i], 3, color, -1)
 
-    def draw_intercept(self, frame, cmd: dict) -> None:
+    def draw_intercept(self, frame, cmd: dict, label: str = "SENT") -> None:
         if not cmd.get("valid"):
             return
 
@@ -256,15 +309,21 @@ class IntegrationTestDay:
         )
         if uv is None:
             return
-        px, py = int(uv[0]), int(uv[1])
+        u, v = float(uv[0]), float(uv[1])
+        if not math.isfinite(u) or not math.isfinite(v):
+            return
+        px = int(round(u))
+        py = int(round(v))
+        if px < -5000 or py < -5000 or px > frame.shape[1] + 5000 or py > frame.shape[0] + 5000:
+            return
 
-        color = (0, 255, 0) if cmd.get("in_workspace") else (0, 0, 255)
+        color = (0, 255, 255) if label.upper() == "SENT" else ((0, 255, 0) if cmd.get("in_workspace") else (0, 0, 255))
         cv2.line(frame, (px - 12, py - 12), (px + 12, py + 12), color, 2)
         cv2.line(frame, (px - 12, py + 12), (px + 12, py - 12), color, 2)
         cv2.circle(frame, (px, py), 16, color, 2)
         cv2.putText(
             frame,
-            f"t={cmd['t']*1000:.0f}ms {cmd.get('strategy','?')}",
+            f"{label} t={cmd['t']*1000:.0f}ms {cmd.get('strategy','?')}",
             (px + 20, py - 6),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.45,
@@ -272,7 +331,15 @@ class IntegrationTestDay:
             1,
         )
 
-    def draw_overlay(self, left_vis, right_vis, fps: float, result: dict, cmd: dict) -> None:
+    def draw_overlay(
+        self,
+        left_vis,
+        right_vis,
+        fps: float,
+        result: dict,
+        cmd: dict,
+        tri_robot_pos: Optional[tuple[float, float, float]],
+    ) -> None:
         stats = self.predictor.get_stats()
         vel = self.predictor.get_velocity()
 
@@ -318,10 +385,17 @@ class IntegrationTestDay:
                 1,
             )
 
-        tx_state = "ON" if self.accept_intercept_targets and not self.shutdown_requested else "OFF"
+        if self.shutdown_requested or not self.accept_intercept_targets:
+            tx_state = "OFF"
+        elif not self.run_top_level:
+            tx_state = "GATED"
+        elif self.intercept_target_sent:
+            tx_state = "WAIT_CLEAR"
+        else:
+            tx_state = "READY"
         cv2.putText(
             right_vis,
-            f"Homed:{self.robot_homed}  TX:{tx_state}",
+            f"Homed:{self.robot_homed}  Gate:{'ON' if self.run_top_level else 'OFF'}  TX:{tx_state}",
             (10, 20),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.5,
@@ -329,13 +403,32 @@ class IntegrationTestDay:
             1,
         )
 
+        if tri_robot_pos is not None:
+            cv2.putText(
+                right_vis,
+                (
+                    f"Tri robot(mm): X={tri_robot_pos[0]:+.0f} "
+                    f"Y={tri_robot_pos[1]:+.0f} Z={tri_robot_pos[2]:+.0f}"
+                ),
+                (10, 42),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.42,
+                (0, 180, 255),
+                1,
+            )
+            cmd_row = 62
+            meta_row = 82
+        else:
+            cmd_row = 42
+            meta_row = 62
+
         if cmd.get("valid"):
             ws = "IN" if cmd.get("in_workspace") else "OUT"
             reach = "Y" if cmd.get("reachable") else "N"
             cv2.putText(
                 right_vis,
                 f"Robot(mm): X={cmd['robot_x']:+.0f} Y={cmd['robot_y']:+.0f} Z={cmd['robot_z']:+.0f}",
-                (10, 42),
+                (10, cmd_row),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.42,
                 (0, 220, 220),
@@ -344,7 +437,7 @@ class IntegrationTestDay:
             cv2.putText(
                 right_vis,
                 f"t={cmd['t']*1000:.0f}ms  {cmd.get('strategy','?')}  WS:{ws}  Reach:{reach}",
-                (10, 62),
+                (10, meta_row),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.42,
                 (220, 220, 220),
@@ -353,7 +446,7 @@ class IntegrationTestDay:
 
         cv2.putText(
             right_vis,
-            "q quit(home) | r reset | v vel | t traj | z/x plane | b bg",
+            "q quit(home) | g gate | c clearTX | r reset | v vel | t traj | z/x | b bg",
             (10, right_vis.shape[0] - 12),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.33,
@@ -367,7 +460,7 @@ class IntegrationTestDay:
         _planner_print("=" * 72)
         _planner_print(f"Cameras: L={self.cam_left_id} R={self.cam_right_id}")
         _planner_print(f"Interception plane (camera X): {self.robot_x_cm:.1f} cm")
-        _planner_print("Controls: q r v t p z x b")
+        _planner_print("Controls: q g c r v t p z x b")
         _planner_print("=" * 72)
 
         if not self.send_home_and_wait_for_confirmation():
@@ -402,6 +495,7 @@ class IntegrationTestDay:
             return
 
         _planner_print("--- LIVE TRACKING + UART TARGET TX ---")
+        _planner_print("Top-level pipeline is gated OFF. Press 'g' to start tracking/planning/TX.")
 
         fps_time = time.time()
         fps = 0.0
@@ -416,27 +510,34 @@ class IntegrationTestDay:
                 if result["left_frame"] is None:
                     continue
 
+                tri_robot_pos = None
                 frame_count += 1
                 if frame_count % 30 == 0:
                     fps = 30.0 / max(1e-6, (time.time() - fps_time))
                     fps_time = time.time()
 
-                if result["found_3d"]:
-                    self.predictor.add_position(*result["position_3d"], timestamp=frame_timestamp)
+                cmd = {"valid": False}
+                if self.run_top_level:
+                    if result["found_3d"]:
+                        self.predictor.add_position(*result["position_3d"], timestamp=frame_timestamp)
+                        tri_robot_pos = self.predictor.cam_to_robot(*result["position_3d"])
 
-                cmd = self.predictor.get_robot_command(target_x=self.robot_x_cm)
-                if result["found_3d"] and cmd.get("valid"):
-                    self.maybe_send_intercept_target(cmd, frame_timestamp)
+                    cmd = self.predictor.get_robot_command(target_x=self.robot_x_cm)
+                    if result["found_3d"] and cmd.get("valid"):
+                        self.maybe_send_intercept_target(cmd, frame_timestamp)
 
                 left_vis, right_vis = self.triangulator.draw_results(result)
 
-                if self.show_trajectory and self.predictor.is_ready():
-                    traj = self.predictor.predict_trajectory(duration=0.8, dt=0.005)
+                # Visualization uses a shorter horizon than interception planning
+                # so the on-screen arc stays near-term and easier to trust.
+                if (self.run_top_level and self.show_trajectory and
+                        result["found_3d"] and self.predictor.is_ready()):
+                    traj = self.predictor.predict_trajectory(duration=0.35, dt=0.005)
                     self.draw_trajectory(left_vis, traj)
-                if cmd.get("valid"):
-                    self.draw_intercept(left_vis, cmd)
+                if self.run_top_level and self.last_cmd and self.intercept_target_sent:
+                    self.draw_intercept(left_vis, self.last_cmd, label="SENT")
 
-                self.draw_overlay(left_vis, right_vis, fps, result, cmd)
+                self.draw_overlay(left_vis, right_vis, fps, result, cmd, tri_robot_pos)
 
                 dw = 640
                 dh = int(dw * self.frame_height / self.frame_width)
@@ -444,7 +545,7 @@ class IntegrationTestDay:
                 right_small = cv2.resize(right_vis, (dw, dh))
                 cv2.imshow("Integration Test Day", cv2.hconcat([left_small, right_small]))
 
-                if result["found_3d"] and self.predictor.get_velocity()["valid"]:
+                if self.run_top_level and result["found_3d"] and self.predictor.get_velocity()["valid"]:
                     x, y, z = result["position_3d"]
                     v = self.predictor.get_velocity()
                     line = (
@@ -463,8 +564,13 @@ class IntegrationTestDay:
                     _planner_print("[QUIT] Sending home and stopping intercept transmission...")
                     self.request_shutdown_home()
                     break
-                if key == ord("r"):
+                if key == ord("g"):
+                    self.set_run_top_level(not self.run_top_level, reason="keyboard")
+                elif key == ord("c"):
+                    self.clear_intercept_send_flag(reason="keyboard")
+                elif key == ord("r"):
                     self.predictor.reset()
+                    self.clear_intercept_send_flag(reason="reset")
                     _planner_print("[RESET]")
                 elif key == ord("v"):
                     self.show_velocity = not self.show_velocity
@@ -483,6 +589,7 @@ class IntegrationTestDay:
                 elif key == ord("b"):
                     self.triangulator.reset_background()
                     self.predictor.reset()
+                    self.clear_intercept_send_flag(reason="background reset")
                     _planner_print("[BG RESET] Re-learning background...")
                     if not self.warmup_background():
                         break
