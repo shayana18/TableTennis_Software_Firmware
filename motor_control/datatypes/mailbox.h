@@ -19,3 +19,6 @@ void mailbox_mail_arrived(mailbox_t *mb, const float *data);
 // Called from main loop/thread: returns true if new mail was consumed.
 // Resets flag, zeros mailbox data, and parses into target_t.
 bool mailbox_mail_received(mailbox_t *mb, target_t *out_target);
+
+// Optional helper to clear mail without consuming/processing it.
+void mailbox_clear(mailbox_t *mb);

@@ -73,7 +73,9 @@ def show_menu() -> None:
     safe_print("1) Send HOME")
     safe_print("2) Send INTERCEPT (custom position)")
     safe_print("3) Send INTERCEPT (quick default)")
-    safe_print("4) Exit")
+    safe_print("4) Send INTERCEPT (x=680 y=0 z=-700 t=2.0s)")
+    safe_print("5) Send INTERCEPT (x=-680 y=0 z=-1000 t=2.0s)")
+    safe_print("6) Exit")
     safe_print("=" * 54)
 
 
@@ -96,7 +98,7 @@ def main() -> int:
     try:
         while True:
             show_menu()
-            choice = input("Enter choice (1-4): ").strip()
+            choice = input("Enter choice (1-6): ").strip()
 
             if choice == "1":
                 send_home(DEFAULT_HOME)
@@ -112,10 +114,14 @@ def main() -> int:
             elif choice == "3":
                 send_intercept(50.0, -25.0, -800.0, 0.5)
             elif choice == "4":
+                send_intercept(680.0, 0.0, -700.0, 2.0)
+            elif choice == "5":
+                send_intercept(-680.0, 0.0, -1000.0, 2.0)
+            elif choice == "6":
                 safe_print("[INFO] Exiting.")
                 break
             else:
-                safe_print("[WARN] Invalid choice. Enter 1-4.")
+                safe_print("[WARN] Invalid choice. Enter 1-6.")
 
             time.sleep(0.15)
     except KeyboardInterrupt:
