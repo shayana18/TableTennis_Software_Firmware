@@ -59,6 +59,10 @@ class ThrowAnalyzer:
     """
 
     GRAVITY_EXPECTED = 981.0  # cm/s²
+    CAMERA_PITCH_DEG = 20.0   # camera pitched 20° down
+    # Gravity decomposed into camera frame
+    G_Y_EXPECTED = 981.0 * math.cos(math.radians(20.0))   # ~921.5 cm/s²
+    G_Z_EXPECTED = -981.0 * math.sin(math.radians(20.0))  # ~-335.5 cm/s²
 
     def __init__(self, positions, rt_velocity=None, rt_corrected_velocity=None,
                  predictor_was_ready=False, rt_snap_time=None):
@@ -105,17 +109,23 @@ class ThrowAnalyzer:
         # Post-hoc curve fits (whole trajectory — kept for backward compat)
         fit_x = self._fit_linear(t, x)
         fit_y = self._fit_quadratic(t, y)
-        fit_z = self._fit_linear(t, z)
+        fit_z = self._fit_quadratic(t, z)  # Z is quadratic due to camera pitch
 
         # Post-hoc velocities (initial)
         posthoc_vx = fit_x['slope']
         posthoc_vy0 = fit_y['b']  # dy/dt at t=0
-        posthoc_vz = fit_z['slope']
+        posthoc_vz = fit_z['b']   # dz/dt at t=0 (quadratic initial velocity)
         posthoc_speed = math.sqrt(posthoc_vx**2 + posthoc_vy0**2 + posthoc_vz**2)
 
-        # Gravity measurement
-        measured_g = fit_y['measured_g']
+        # Gravity measurement (decomposed into camera frame)
+        measured_g_y = fit_y['measured_g']
+        measured_g_z = fit_z['measured_g']
+        # Composite gravity magnitude
+        measured_g = math.sqrt(measured_g_y**2 + measured_g_z**2)
         g_error_pct = (measured_g - self.GRAVITY_EXPECTED) / self.GRAVITY_EXPECTED * 100
+        g_y_error_pct = (measured_g_y - self.G_Y_EXPECTED) / self.G_Y_EXPECTED * 100
+        g_z_error_pct = ((measured_g_z - self.G_Z_EXPECTED) / abs(self.G_Z_EXPECTED) * 100
+                         if abs(self.G_Z_EXPECTED) > 1 else 0.0)
 
         # Finite-difference velocities
         fd = self._compute_finite_differences(t, x, y, z)
@@ -133,23 +143,26 @@ class ThrowAnalyzer:
         # Forward prediction errors (whole trajectory — kept for reference)
         pred_errors = self._compute_prediction_errors(
             t, x, y, z, posthoc_vx, posthoc_vy0, posthoc_vz,
-            gravity=self.GRAVITY_EXPECTED)
+            gravity=self.GRAVITY_EXPECTED,
+            camera_pitch_deg=self.CAMERA_PITCH_DEG)
 
         # Forward prediction errors (using measured gravity from fit)
         pred_errors_measured = self._compute_prediction_errors(
             t, x, y, z, posthoc_vx, posthoc_vy0, posthoc_vz,
-            gravity=abs(measured_g))
+            gravity=abs(measured_g),
+            camera_pitch_deg=self.CAMERA_PITCH_DEG)
 
         # Per-arc forward prediction (MEANINGFUL metric — stays within arc)
         per_arc_pred_errors = []
         for arc, ar in zip(arcs, arc_results):
             arc_vx = ar['fit_x']['slope']
             arc_vy0 = ar['fit_y']['b']
-            arc_vz = ar['fit_z']['slope']
+            arc_vz = ar['fit_z']['b']  # quadratic initial velocity
             pe_arc = self._compute_prediction_errors(
                 arc['t'], arc['x'], arc['y'], arc['z'],
                 arc_vx, arc_vy0, arc_vz,
-                gravity=self.GRAVITY_EXPECTED)
+                gravity=self.GRAVITY_EXPECTED,
+                camera_pitch_deg=self.CAMERA_PITCH_DEG)
             per_arc_pred_errors.append(pe_arc)
 
         # Real-time vs post-hoc comparison — use PER-ARC fit at snapshot time
@@ -168,12 +181,12 @@ class ThrowAnalyzer:
                 t_in_arc = t_snap - snap_arc['t_abs'][0]
                 ph_vx_at_snap = snap_arc['fit_x']['slope']
                 ph_vy_at_snap = snap_arc['fit_y']['b'] + snap_arc['fit_y']['measured_g'] * t_in_arc
-                ph_vz_at_snap = snap_arc['fit_z']['slope']
+                ph_vz_at_snap = snap_arc['fit_z']['b'] + snap_arc['fit_z']['measured_g'] * t_in_arc
             else:
                 # Fallback to whole-trajectory fit
                 ph_vx_at_snap = posthoc_vx
-                ph_vy_at_snap = posthoc_vy0 + measured_g * t_snap
-                ph_vz_at_snap = posthoc_vz
+                ph_vy_at_snap = posthoc_vy0 + measured_g_y * t_snap
+                ph_vz_at_snap = posthoc_vz + measured_g_z * t_snap
 
             rt_comparison = {
                 'rt_vx': rt_vx, 'rt_vy': rt_vy, 'rt_vz': rt_vz,
@@ -202,7 +215,11 @@ class ThrowAnalyzer:
             'posthoc_vz': posthoc_vz,
             'posthoc_speed': posthoc_speed,
             'measured_g': measured_g,
+            'measured_g_y': measured_g_y,
+            'measured_g_z': measured_g_z,
             'g_error_pct': g_error_pct,
+            'g_y_error_pct': g_y_error_pct,
+            'g_z_error_pct': g_z_error_pct,
             'finite_diff': fd,
             'fit_residuals': fit_residuals,
             'pred_errors': pred_errors,
@@ -258,7 +275,7 @@ class ThrowAnalyzer:
         return {'t': fd_t, 'vx': fd_vx, 'vy': fd_vy, 'vz': fd_vz}
 
     def _compute_prediction_errors(self, t, x, y, z, vx0, vy0, vz0,
-                                    gravity=None):
+                                    gravity=None, camera_pitch_deg=0.0):
         """Forward prediction from first point using physics model."""
         if len(t) < 2:
             return {'t': np.array([]), 'errors': np.array([]),
@@ -266,7 +283,8 @@ class ThrowAnalyzer:
 
         g = gravity if gravity is not None else self.GRAVITY_EXPECTED
         model = PhysicsModel(gravity=g, y_down=True,
-                             enable_drag=False)
+                             enable_drag=False,
+                             camera_pitch_deg=camera_pitch_deg)
         pos0 = (float(x[0]), float(y[0]), float(z[0]))
         vel0 = (vx0, vy0, vz0)
 
@@ -383,18 +401,29 @@ class ThrowAnalyzer:
         t, y = arc['t'], arc['y']
         fit_y = self._fit_quadratic(t, y)
         fit_x = self._fit_linear(t, arc['x'])
-        fit_z = self._fit_linear(t, arc['z'])
+        fit_z = self._fit_quadratic(t, arc['z'])  # Z is quadratic (camera pitch)
 
-        measured_g = fit_y['measured_g']
+        measured_g_y = fit_y['measured_g']
+        measured_g_z = fit_z['measured_g']
+        measured_g = math.sqrt(measured_g_y**2 + measured_g_z**2)
         g_error_pct = ((measured_g - self.GRAVITY_EXPECTED) /
                        self.GRAVITY_EXPECTED * 100)
+        g_y_error_pct = ((measured_g_y - self.G_Y_EXPECTED) /
+                         self.G_Y_EXPECTED * 100)
+        g_z_error_pct = ((measured_g_z - self.G_Z_EXPECTED) /
+                         abs(self.G_Z_EXPECTED) * 100
+                         if abs(self.G_Z_EXPECTED) > 1 else 0.0)
 
         return {
             'arc_num': arc['arc_num'],
             'n_points': arc['n_points'],
             'duration': arc['duration'],
             'measured_g': measured_g,
+            'measured_g_y': measured_g_y,
+            'measured_g_z': measured_g_z,
             'g_error_pct': g_error_pct,
+            'g_y_error_pct': g_y_error_pct,
+            'g_z_error_pct': g_z_error_pct,
             'fit_y': fit_y,
             'fit_x': fit_x,
             'fit_z': fit_z,
@@ -482,7 +511,7 @@ class VelocityChart:
         self._plot_position(axes[0, 1], t, y, t_fit, fit_y, 'Y(t)',
                             is_quadratic=True, analysis=analysis)
         self._plot_position(axes[0, 2], t, z, t_fit, fit_z, 'Z(t)',
-                            is_quadratic=False)
+                            is_quadratic=True)
 
         # ---- Row 2: Velocity ----
         rt_snap_t = rt['snap_time'] if rt else None
@@ -490,9 +519,7 @@ class VelocityChart:
                             rt['rt_vx'] if rt else None, 'Vx(t)',
                             rt_time=rt_snap_t)
         self._plot_velocity_y(axes[1, 1], fd, fit_y, analysis, rt)
-        self._plot_velocity(axes[1, 2], fd, 'vz', fit_z['slope'],
-                            rt['rt_vz'] if rt else None, 'Vz(t)',
-                            rt_time=rt_snap_t)
+        self._plot_velocity_z(axes[1, 2], fd, fit_z, analysis, rt)
 
         fig.suptitle(f'Throw #{throw_number}  |  {analysis["n_points"]} pts  |  '
                      f'{analysis["duration"]*1000:.0f}ms  |  '
@@ -581,14 +608,47 @@ class VelocityChart:
             ax.scatter([t_snap * 1000], [rt_vy], c='#ee4444', s=60,
                        marker='D', zorder=5, label=f'RT={rt_vy:.1f}')
 
-        mg = analysis['measured_g']
-        ge = analysis['g_error_pct']
-        ax.text(0.97, 0.05, f"g={mg:.0f} ({ge:+.1f}%)",
+        mg = analysis.get('measured_g_y', analysis.get('measured_g', 0))
+        ge = analysis.get('g_y_error_pct', analysis.get('g_error_pct', 0))
+        ax.text(0.97, 0.05, f"g_y={mg:.0f} ({ge:+.1f}%)",
                 transform=ax.transAxes, fontsize=7,
                 color='#33cc55' if abs(ge) < 5 else '#dd3333',
                 ha='right', va='bottom', family='monospace')
 
         ax.set_title('Vy(t)', color='#aaa', fontsize=9)
+        ax.set_xlabel('ms', color='#666', fontsize=7)
+        ax.set_ylabel('cm/s', color='#666', fontsize=7)
+        ax.legend(fontsize=6, loc='best', facecolor='#222', edgecolor='#444',
+                  labelcolor='#ccc')
+
+    def _plot_velocity_z(self, ax, fd, fit_z, analysis, rt):
+        """Plot Vz with time-varying reference (gravity in Z from camera pitch)."""
+        if len(fd['t']) > 0:
+            ax.scatter(fd['t'] * 1000, fd['vz'], c='#5588ee',
+                       s=10, alpha=0.7, zorder=3, label='FD')
+
+        # Expected Vz(t) = Vz0 + g_z*t (from quadratic fit)
+        t_range = fd['t']
+        if len(t_range) > 0:
+            t_line = np.linspace(t_range[0], t_range[-1], 100)
+            vz_line = fit_z['b'] + fit_z['measured_g'] * t_line
+            ax.plot(t_line * 1000, vz_line, color='#dda830', linewidth=1.5,
+                    label=f'posthoc Vz(t)')
+
+        if rt is not None:
+            rt_vz = rt['rt_vz']
+            t_snap = rt.get('snap_time', 0.0)
+            ax.scatter([t_snap * 1000], [rt_vz], c='#ee4444', s=60,
+                       marker='D', zorder=5, label=f'RT={rt_vz:.1f}')
+
+        mg_z = analysis.get('measured_g_z', 0)
+        ge_z = analysis.get('g_z_error_pct', 0)
+        ax.text(0.97, 0.05, f"g_z={mg_z:.0f} ({ge_z:+.1f}%)",
+                transform=ax.transAxes, fontsize=7,
+                color='#33cc55' if abs(ge_z) < 20 else '#dd3333',
+                ha='right', va='bottom', family='monospace')
+
+        ax.set_title('Vz(t)', color='#aaa', fontsize=9)
         ax.set_xlabel('ms', color='#666', fontsize=7)
         ax.set_ylabel('cm/s', color='#666', fontsize=7)
         ax.legend(fontsize=6, loc='best', facecolor='#222', edgecolor='#444',
@@ -805,9 +865,12 @@ class VelocityValidator:
               f"{'':>20}R²={fx['r_squared']:.3f}{r2x_flag}")
         print(f"    Y(t) = {fy['a']:.1f}t² {fy['b']:+.1f}t {fy['c']:+.1f}"
               f"{'':>10}R²={fy['r_squared']:.3f}{r2y_flag}"
-              f"   g={fy['measured_g']:.0f} ({analysis['g_error_pct']:+.1f}%)")
-        print(f"    Z(t) = {fz['slope']:+.1f}t + {fz['intercept']:.1f}"
-              f"{'':>20}R²={fz['r_squared']:.3f}{r2z_flag}")
+              f"   g_y={fy['measured_g']:.0f} ({analysis['g_y_error_pct']:+.1f}%)")
+        print(f"    Z(t) = {fz['a']:.1f}t² {fz['b']:+.1f}t {fz['c']:+.1f}"
+              f"{'':>10}R²={fz['r_squared']:.3f}{r2z_flag}"
+              f"   g_z={fz['measured_g']:.0f} ({analysis['g_z_error_pct']:+.1f}%)")
+        print(f"    |g| = sqrt(g_y²+g_z²) = {analysis['measured_g']:.0f} "
+              f"({analysis['g_error_pct']:+.1f}% vs 981)")
 
         # Flag anomalous gravity
         mg = analysis['measured_g']
@@ -821,22 +884,26 @@ class VelocityValidator:
         n_arcs = len(arc_results)
         if n_arcs > 1:
             print(f"\n  ARCS: {n_arcs} (split by bounces + stereo gaps)")
-            print(f"  Per-arc gravity:")
+            print(f"  Per-arc gravity (expected: g_y={ThrowAnalyzer.G_Y_EXPECTED:.0f}  "
+                  f"g_z={ThrowAnalyzer.G_Z_EXPECTED:.0f}):")
             for ar in arc_results:
                 marker = " <<<" if best_arc and ar['arc_num'] == best_arc['arc_num'] else ""
                 g_color = "OK" if abs(ar['g_error_pct']) < 10 else "!"
                 print(f"    Arc {ar['arc_num']}: {ar['n_points']:2d} pts  "
                       f"{ar['duration']*1000:.0f}ms  "
-                      f"g={ar['measured_g']:.0f} ({ar['g_error_pct']:+.1f}%)  "
-                      f"R²={ar['fit_y']['r_squared']:.3f}  {g_color}{marker}")
+                      f"|g|={ar['measured_g']:.0f} ({ar['g_error_pct']:+.1f}%)  "
+                      f"g_y={ar['measured_g_y']:.0f}  g_z={ar['measured_g_z']:.0f}  "
+                      f"R²y={ar['fit_y']['r_squared']:.3f}  {g_color}{marker}")
             if best_arc:
-                print(f"  Best arc gravity: {best_arc['measured_g']:.0f} cm/s² "
-                      f"({best_arc['g_error_pct']:+.1f}%)")
+                print(f"  Best arc: |g|={best_arc['measured_g']:.0f} "
+                      f"g_y={best_arc['measured_g_y']:.0f} "
+                      f"g_z={best_arc['measured_g_z']:.0f}")
         elif n_arcs == 1:
             ar = arc_results[0]
             g_color = "OK" if abs(ar['g_error_pct']) < 10 else "!"
-            print(f"  Single arc: g={ar['measured_g']:.0f} ({ar['g_error_pct']:+.1f}%)  "
-                  f"R²={ar['fit_y']['r_squared']:.3f}  {g_color}")
+            print(f"  Single arc: |g|={ar['measured_g']:.0f} ({ar['g_error_pct']:+.1f}%)  "
+                  f"g_y={ar['measured_g_y']:.0f}  g_z={ar['measured_g_z']:.0f}  "
+                  f"R²y={ar['fit_y']['r_squared']:.3f}  {g_color}")
 
         # Fit residuals
         fr = analysis.get('fit_residuals')
@@ -913,13 +980,13 @@ class VelocityValidator:
                     t_in_arc = t_s - snap_arc['t_abs'][0]
                     ref_vx = snap_arc['fit_x']['slope']
                     ref_vy = snap_arc['fit_y']['b'] + snap_arc['fit_y']['measured_g'] * t_in_arc
-                    ref_vz = snap_arc['fit_z']['slope']
+                    ref_vz = snap_arc['fit_z']['b'] + snap_arc['fit_z']['measured_g'] * t_in_arc
                     arc_label = str(snap_arc['arc_num'])
                 else:
                     # No matching arc (snapshot in gap)
                     ref_vx = analysis['posthoc_vx']
-                    ref_vy = analysis['posthoc_vy0'] + analysis['measured_g'] * t_s
-                    ref_vz = analysis['posthoc_vz']
+                    ref_vy = analysis['posthoc_vy0'] + analysis['measured_g_y'] * t_s
+                    ref_vz = analysis['posthoc_vz'] + analysis['measured_g_z'] * t_s
                     arc_label = "?"
 
                 evx = abs(snap['vx'] - ref_vx)
@@ -983,7 +1050,8 @@ class VelocityValidator:
             arc_str = f"  arcs={n_arcs}" if n_arcs > 1 else ""
             best_g_str = ""
             if best:
-                best_g_str = f"  best_g={best['measured_g']:.0f}"
+                best_g_str = (f"  |g|={best['measured_g']:.0f}"
+                              f"(y={best['measured_g_y']:.0f},z={best['measured_g_z']:.0f})")
 
             print(f"  #{tn:2d}: {n:2d}pts {dur:4.0f}ms"
                   f"{arc_str}{best_g_str}{rt_str}{pred_str}")
@@ -991,11 +1059,20 @@ class VelocityValidator:
         # Aggregate gravity stats (best arc per throw)
         best_g_vals = [a['best_arc']['measured_g'] for a in valid
                        if a.get('best_arc')]
+        best_gy_vals = [a['best_arc']['measured_g_y'] for a in valid
+                        if a.get('best_arc')]
+        best_gz_vals = [a['best_arc']['measured_g_z'] for a in valid
+                        if a.get('best_arc')]
         if best_g_vals:
-            bg_mean = np.mean(best_g_vals)
-            bg_std = np.std(best_g_vals)
-            print(f"\n  Gravity (best arc): mean={bg_mean:.0f}  std={bg_std:.0f}  "
-                  f"expected={ThrowAnalyzer.GRAVITY_EXPECTED:.0f}")
+            print(f"\n  Gravity (best arc):")
+            print(f"    |g|: mean={np.mean(best_g_vals):.0f}  "
+                  f"std={np.std(best_g_vals):.0f}  expected=981")
+            print(f"    g_y: mean={np.mean(best_gy_vals):.0f}  "
+                  f"std={np.std(best_gy_vals):.0f}  "
+                  f"expected={ThrowAnalyzer.G_Y_EXPECTED:.0f}")
+            print(f"    g_z: mean={np.mean(best_gz_vals):.0f}  "
+                  f"std={np.std(best_gz_vals):.0f}  "
+                  f"expected={ThrowAnalyzer.G_Z_EXPECTED:.0f}")
 
         # Aggregate velocity errors (only throws with RT comparison, per-arc ref)
         rt_errs = [a['rt_comparison'] for a in valid
@@ -1193,7 +1270,8 @@ class VelocityValidator:
 
         self.pred = TrajectoryPredictor(
             buffer_size=15, min_points=6, velocity_method='regression',
-            gravity=981.0, y_down=True, enable_drag=False)
+            gravity=981.0, y_down=True, enable_drag=True,
+            camera_pitch_deg=20.0)
 
         print("--- Ready! Toss ball to begin tracking ---\n")
 
