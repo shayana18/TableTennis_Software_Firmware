@@ -35,7 +35,8 @@ if parent_dir not in sys.path:
 
 from tracking.stereo_triangulator import StereoTriangulator
 from trajectory.trajectory_predictor import (
-    TrajectoryPredictor, ROBOT_LIMIT_X, ROBOT_LIMIT_Y, ROBOT_LIMIT_Z,
+    TrajectoryPredictor, ELLIPSE_RADIUS_X, ELLIPSE_RADIUS_Y,
+    LIMIT_POS_Z, LIMIT_NEG_Z,
     ROBOT_HOME, CM_TO_MM)
 from config.camera_config import load_camera_settings
 
@@ -137,9 +138,9 @@ class TrajectoryView3D:
         if robot_x_cam is not None and actual:
             self._draw_x_plane(img, robot_x_cam, actual)
 
-        # Workspace wireframe (robot limits → camera coords)
+        # Workspace wireframe (ellipse limits → camera coords)
         if predictor is not None and predictor._R_cam_to_robot is not None:
-            self._draw_workspace_box(img, predictor)
+            self._draw_workspace_ellipse(img, predictor)
 
         self._draw_axes(img)
 
@@ -248,32 +249,34 @@ class TrajectoryView3D:
             cv2.putText(img, f"Robot X={tx:.0f}cm", (lp[0]-30, lp[1]-5),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.3, (80,80,160), 1)
 
-    def _draw_workspace_box(self, img, predictor):
-        """Draw robot workspace as rectangular wireframe box in camera coords."""
-        xlo, xhi = ROBOT_LIMIT_X
-        ylo, yhi = ROBOT_LIMIT_Y
-        zlo, zhi = ROBOT_LIMIT_Z
-        # 8 corners of the workspace box in robot coords
-        corners_r = [
-            (xlo, ylo, zlo), (xhi, ylo, zlo), (xhi, yhi, zlo), (xlo, yhi, zlo),
-            (xlo, ylo, zhi), (xhi, ylo, zhi), (xhi, yhi, zhi), (xlo, yhi, zhi),
-        ]
-        # Convert to camera coords via predictor's inverse transform
-        corners_c = []
-        for rx, ry, rz in corners_r:
-            cx, cy, cz = predictor.robot_to_cam(rx, ry, rz)
-            corners_c.append(self.project(cx, cy, cz))
-        # Draw 12 edges of the box
-        edges = [(0,1),(1,2),(2,3),(3,0),  # bottom
-                 (4,5),(5,6),(6,7),(7,4),  # top
-                 (0,4),(1,5),(2,6),(3,7)]  # verticals
+    def _draw_workspace_ellipse(self, img, predictor):
+        """Draw robot workspace as an elliptical cylinder in camera coords."""
         ws_clr = (60, 120, 60)
-        for i, j in edges:
-            self._ln(img, corners_c[i], corners_c[j], ws_clr, 1)
-        # Label
-        mid = corners_c[6]  # top-far corner
-        if self._ok(*mid, 50):
-            cv2.putText(img, "WS", (mid[0] + 5, mid[1] - 5),
+        segments = 48
+        bottom_ring = []
+        top_ring = []
+
+        for i in range(segments):
+            th = 2.0 * math.pi * i / segments
+            rx = ELLIPSE_RADIUS_X * math.cos(th)
+            ry = ELLIPSE_RADIUS_Y * math.sin(th)
+
+            bcx, bcy, bcz = predictor.robot_to_cam(rx, ry, LIMIT_NEG_Z)
+            tcx, tcy, tcz = predictor.robot_to_cam(rx, ry, LIMIT_POS_Z)
+            bottom_ring.append(self.project(bcx, bcy, bcz))
+            top_ring.append(self.project(tcx, tcy, tcz))
+
+        for i in range(segments):
+            j = (i + 1) % segments
+            self._ln(img, bottom_ring[i], bottom_ring[j], ws_clr, 1)
+            self._ln(img, top_ring[i], top_ring[j], ws_clr, 1)
+
+        for i in range(0, segments, max(1, segments // 8)):
+            self._ln(img, bottom_ring[i], top_ring[i], ws_clr, 1)
+
+        label_pt = top_ring[0]
+        if self._ok(*label_pt, 50):
+            cv2.putText(img, "WS", (label_pt[0] + 5, label_pt[1] - 5),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.28, ws_clr, 1)
 
         # Robot home marker
