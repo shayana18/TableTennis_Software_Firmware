@@ -118,7 +118,8 @@ static void motion_abort(robot_t *robot, const char *reason)
   robot->flag_ready_to_move = false;
   robot->flag_path_abort = true;
 
-  robot_runtime_stop_joint_speed();
+  // setting velocity to 0 makes robot jerk! Revisit
+  //robot_runtime_stop_joint_speed();
   if (reason != NULL) {
     robot_runtime_send_status(reason);
   }
@@ -164,14 +165,25 @@ bool motion_execute_consume_tick_due(void)
 
 bool motion_execute_safety_check_joint_limits(float q1_deg, float q2_deg, float q3_deg)
 {
+  char msg[100];
+
   // Check if all joint angles are within the configured limits.
   if (q1_deg < MIN_JOINT_ANGLE_LIMIT || q1_deg > MAX_JOINT_ANGLE_LIMIT) {
+    long q1_deg_rounded = (long)lroundf(q1_deg);
+    snprintf(msg, sizeof(msg), "Invalid Joint 1 Angle: %ld deg\r\n", q1_deg_rounded);
+    robot_runtime_send_status(msg);
     return false;
   }
   if (q2_deg < MIN_JOINT_ANGLE_LIMIT || q2_deg > MAX_JOINT_ANGLE_LIMIT) {
+    long q2_deg_rounded = (long)lroundf(q2_deg);
+    snprintf(msg, sizeof(msg), "Invalid Joint 2 Angle: %ld deg\r\n", q2_deg_rounded);
+    robot_runtime_send_status(msg);
     return false;
   }
   if (q3_deg < MIN_JOINT_ANGLE_LIMIT || q3_deg > MAX_JOINT_ANGLE_LIMIT) {
+    long q3_deg_rounded = (long)lroundf(q3_deg);
+    snprintf(msg, sizeof(msg), "Invalid Joint 3 Angle: %ld deg\r\n", q3_deg_rounded);
+    robot_runtime_send_status(msg);
     return false;
   }
   return true;
@@ -189,15 +201,27 @@ void motion_execute_plan_strike(robot_t *robot)
   // Temporary strike motion
   robot->current_target.type = TARGET_STRIKE;
   robot->current_target.pos.x += 50.0f;  // mm
-  robot->current_target.t_arrival_s = 2.0f;
+  robot->current_target.t_arrival_s = 1.0f;
+  robot->current_target.timestamp = HAL_GetTick() * 0.001f;
 }
 
 void motion_execute_plan(robot_t *robot)
 {
   move_plan *plan = &robot->current_move_plan;
   const uint32_t now_ms = HAL_GetTick();
-  const vec3 start = robot_get_current_pos();
   const vec3 target = robot->current_target.pos;
+
+  // Use a single joint sample to seed both start pose and unwrap reference.
+  float q1_now, q2_now, q3_now;
+  if (!robot_get_joint_angles(&q1_now, &q2_now, &q3_now)) {
+    plan->prev_joint_valid = false;
+    plan->feedback_valid = false;
+    plan->feedback_miss_ticks = 0U;
+    robot_runtime_send_status("ERR: prev q unset\r\n");
+    return;
+  }
+
+  const vec3 start = FK(q1_now, q2_now, q3_now);
   float dx, dy, dz;
   const float D = robot_calc_dist(start, target, &dx, &dy, &dz);
 
@@ -224,26 +248,16 @@ void motion_execute_plan(robot_t *robot)
     return;
   }
 
-  // Seed previous joint state from live encoder readings so unwrap/reference
-  // logic has a valid starting point on the first execute tick.
-  float q1_now, q2_now, q3_now;
-  if (robot_get_joint_angles(&q1_now, &q2_now, &q3_now)) {
-    plan->prev_joint_deg[0] = q1_now;
-    plan->prev_joint_deg[1] = q2_now;
-    plan->prev_joint_deg[2] = q3_now;
-    plan->prev_joint_valid = true;
-    plan->last_feedback_deg[0] = q1_now;
-    plan->last_feedback_deg[1] = q2_now;
-    plan->last_feedback_deg[2] = q3_now;
-    plan->feedback_valid = true;
-    plan->feedback_miss_ticks = 0U;
-  } else {
-    plan->prev_joint_valid = false;
-    plan->feedback_valid = false;
-    plan->feedback_miss_ticks = 0U;
-    robot_runtime_send_status("ERR: prev q unset\r\n");
-    return;
-  }
+  // Seed previous joint state from the same sample used for start pose.
+  plan->prev_joint_deg[0] = q1_now;
+  plan->prev_joint_deg[1] = q2_now;
+  plan->prev_joint_deg[2] = q3_now;
+  plan->prev_joint_valid = true;
+  plan->last_feedback_deg[0] = q1_now;
+  plan->last_feedback_deg[1] = q2_now;
+  plan->last_feedback_deg[2] = q3_now;
+  plan->feedback_valid = true;
+  plan->feedback_miss_ticks = 0U;
 
   // Planning
 
@@ -261,10 +275,25 @@ void motion_execute_plan(robot_t *robot)
     t_cruise = (D - 2.0f * s_ramp_dist) / MAX_CART_VEL;
   }
 
-  const float t_move = (2.0f * t_acc) + t_cruise;
-  float t_extra = robot->current_target.t_arrival_s - t_move;
+  const float t_move = (2.0f * t_acc) + t_cruise; // Total move time
+  float delay = robot->current_target.timestamp - (now_ms * 0.001f);
+
+  delay = 0;  // For now, ignore timestamp since no realtime target updates
+
+  // char msg[100];
+  // long delay_ms = (long)lroundf(delay * 1000.0f);
+  // snprintf(msg, sizeof(msg), "Delay: %ld ms\r\n", delay_ms);
+  // robot_runtime_send_status(msg);
+
+  float t_extra = robot->current_target.t_arrival_s - t_move + delay - BUFFER_TIME;
+
+  // long t_extra_ms = (long)lroundf(t_extra * 1000.0f);
+  // snprintf(msg, sizeof(msg), "Extra Time: %ld ms\r\n", t_extra_ms);
+  // robot_runtime_send_status(msg);
+
   if (t_extra < 0.0f) {
     t_extra = 0.0f;
+    robot_runtime_send_status("WARN: Robot will be late\r\n");
   }
 
   plan->t1 = t_extra;
@@ -326,8 +355,8 @@ void motion_execute_tick(robot_t *robot)
     q3_ik = unwrap_deg_near(q3_ik, plan->prev_joint_deg[2]);
   }
 
-  if (!motion_execute_safety_check_joint_limits(q1_ik, q2_ik, q3_ik) &&
-      (robot->current_target.type != TARGET_HOME)) {
+  const bool joints_ok = motion_execute_safety_check_joint_limits(q1_ik, q2_ik, q3_ik);
+  if (!joints_ok && !(robot->current_target.type == TARGET_HOME)) {
     motion_abort(robot, "PATH_ABORT: ROBOT JOINT LIMITS EXCEEDED\r\n");
     return;
   }

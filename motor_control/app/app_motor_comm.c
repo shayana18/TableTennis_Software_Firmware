@@ -9,8 +9,8 @@
 #include "io_motor_com.h"
 #include "main.h"
 
-#define MOTOR_POS_READ_TIMEOUT_MS 100U
-#define MOTOR_POS_READ_RETRIES 3U
+#define MOTOR_POS_READ_TIMEOUT_MS 200U
+#define MOTOR_POS_READ_RETRIES 5U
 #define MOTOR_POS_RETRY_GAP_MS 2U
 #define MOTOR_UART_RECOVER_DEBUG 0U
 
