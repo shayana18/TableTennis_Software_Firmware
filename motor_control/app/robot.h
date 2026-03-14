@@ -78,6 +78,9 @@
 #define PULSES_PER_REV 65536.0f
 #define MAX_MOTOR_SPEED_CMD MAX_JOINT_VEL
 #define ENCODER_ZERO_TO_IK_OFFSET 57.2242812f  // deg
+// Temporary bench mode for testing logic with arm drivers unplugged.
+// Set to 0 when testing with all drivers connected.
+#define ARMS_OFF_TEST_MODE 1
 #define HOME_PULSE_OFFSET_DEFAULT (ENCODER_ZERO_TO_IK_OFFSET * (PULSES_PER_REV / 360.0f) * JOINT_GEAR_RATIO)
 // Calibrated offsets from end-stop encoder zero to true kinematic HOME (z = HOME_Z).
 // Tune per motor from measured pulses after homing procedure.

@@ -151,9 +151,9 @@ def main() -> int:
             elif choice == "3":
                 send_intercept(50.0, -25.0, -800.0, 0.5)
             elif choice == "4":
-                send_intercept(680.0, 0.0, -700.0, 2.0)
+                send_intercept(200.0, 200.0, -800.0, 2.0)
             elif choice == "5":
-                send_intercept(-680.0, 0.0, -1000.0, 2.0)
+                send_intercept(-200.0, -200.0, -800.0, 2.0)
             elif choice == "6":
                 safe_print("[INFO] Exiting.")
                 break

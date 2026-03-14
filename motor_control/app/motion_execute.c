@@ -145,6 +145,8 @@ void motion_execute_make_home_target(robot_t *robot)
   robot->current_target.pos = home;
   robot->current_target.t_arrival_s = HOME_TIME;
   robot->current_target.received_time = HAL_GetTick();
+  // Keep paddle axis aligned to its zero reference whenever we send the robot home.
+  robot_runtime_set_paddle_abs_deg(0.0f);
 }
 
 void motion_execute_prepare_strike(robot_t *robot)
@@ -254,6 +256,14 @@ void motion_execute_plan_strike(robot_t *robot) {
     paddle_yaw = 0.0f; 
   }
 
+  {
+    long yaw_norm_cdeg = (long)lroundf(yaw_norm * (18000.0f / PI_F));
+    long paddle_yaw_cdeg = (long)lroundf(paddle_yaw * (18000.0f / PI_F));
+    char msg[96];
+    snprintf(msg, sizeof(msg), "PADDLE YAW: norm=%ld cmd=%ld cdeg\r\n", yaw_norm_cdeg, paddle_yaw_cdeg);
+    robot_runtime_send_status(msg);
+  }
+
   float x_offset = PADDLE_ARM_OFFSET * nx;
   float y_offset = PADDLE_ARM_OFFSET * ny;
 
@@ -333,7 +343,7 @@ void motion_execute_plan(robot_t *robot)
   const vec3 target = robot->current_target.pos;
 
   if (!robot_EE_in_workspace(target)) {
-    motion_abort(robot, "PATH_ABORT: TARGET OUT OF WORKSPACE\r\n");
+    motion_abort(robot, "PATH_ABORT: EE OUT OF WORKSPACE\r\n");
     robot->state = STATE_IDLE;
     set_idle(robot);
     robot_runtime_send_status("STATE: IDLE\r\n");
