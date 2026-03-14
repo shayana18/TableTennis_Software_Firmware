@@ -463,7 +463,7 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
   if (huart->Instance == USART2) {
     // float msg[TARGET_MSG_FLOAT_COUNT];
     memcpy(msg, uart2_rx_buf, sizeof(msg));
-    mailbox_mail_arrived(&traj_new_mail, msg);
+    mailbox_mail_arrived(&traj_new_mail, msg, HAL_GetTick());
     HAL_UART_Receive_IT(&huart2, uart2_rx_buf, sizeof(uart2_rx_buf));
 
   }

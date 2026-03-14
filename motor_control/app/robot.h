@@ -14,6 +14,7 @@
 #define TAN60 SQRT3
 #define SIN120 0.8660254037844386f
 #define COS120 -0.5f
+#define HALF_PI_F (PI_F / 2.0f)
 
 // Robot motion limits
 #define MAX_JOINT_ANGLE_LIMIT ENCODER_ZERO_TO_IK_OFFSET // degrees
@@ -21,8 +22,10 @@
 #define MAX_JOINT_VEL 3000.0L      // RPM, Conservative values
 #define MAX_JOINT_ACC 1000.0L     // RPM/s, Conservative Values
 
-#define MAX_CART_VEL 2000.0f     // mm/s Default: 4000
-#define MAX_CART_ACC 2000.0f    // mm/s^2  default: 20000
+#define MAX_CART_VEL 4000.0f     // mm/s Default: 4000
+#define MAX_CART_ACC 20000.0f    // mm/s^2  default: 20000
+
+#define MAX_STRIKE_VEL 2000.0f    // mm/s
 
 // Home position (mm)
 #define HOME_X 0.0f
@@ -43,15 +46,27 @@
 #define EE_RADIUS 50.0f
 #define UPPER_ARM_LENGTH 350.0f
 #define LOWER_ARM_LENGTH 1000.0f
-#define PADDLE_OFFSET_X 206.0f // mm
+#define PADDLE_ARM_OFFSET 206.0f // mm
 #define PADDLE_OFFSET_Z -50.0f   // mm
 
-// Workspace bounds (mm) - (Paddle)  Elliptic Cylinder
-#define ELLIPSE_RADIUS_X 790.0f
-#define ELLIPSE_RADIUS_Y 540.0f
-#define LIMIT_POS_Z -721.0f
-#define LIMIT_NEG_Z -1050.0f
+// PADDLE Workspace bounds (mm) - (Paddle)  Elliptic Cylinder
+#define PADDLE_ELLIPSE_RADIUS_X 790.0f
+#define PADDLE_ELLIPSE_RADIUS_Y 540.0f
+#define PADDLE_LIMIT_POS_Z -721.0f
+#define PADDLE_LIMIT_NEG_Z -1050.0f
 #define NET_Z_TOP -1000.0f
+
+// ROBOT EE Workspace bounds (mm) - (Robot EE)  Elliptic Cylinder
+#define ROBOT_EE_ELLIPSE_RADIUS_X   PADDLE_ELLIPSE_RADIUS_X - PADDLE_ARM_OFFSET
+#define ROBOT_EE_ELLIPSE_RADIUS_Y   PADDLE_ELLIPSE_RADIUS_Y
+#define ROBOT_EE_LIMIT_POS_Z        PADDLE_LIMIT_POS_Z - PADDLE_OFFSET_Z
+#define ROBOT_EE_LIMIT_NEG_Z        PADDLE_LIMIT_NEG_Z - PADDLE_OFFSET_Z
+
+// Interception Workspace bounds (mm)
+#define INTERCEPTION_ELLIPSE_RADIUS_X PADDLE_ELLIPSE_RADIUS_X - sqrtf(MAX_STRIKE_VEL * MAX_STRIKE_VEL / (2.0f * MAX_CART_ACC)) - STRIKE_BUFFER_DIST
+#define INTERCEPTION_ELLIPSE_RADIUS_Y PADDLE_ELLIPSE_RADIUS_Y - sqrtf(MAX_STRIKE_VEL * MAX_STRIKE_VEL / (2.0f * MAX_CART_ACC)) - STRIKE_BUFFER_DIST
+#define INTERCEPTION_LIMIT_POS_Z PADDLE_LIMIT_POS_Z 
+#define INTERCEPTION_LIMIT_NEG_Z PADDLE_LIMIT_NEG_Z
 
 // Paddle Workspace Bounds (mm)
 #define ELLIPSE_RADIUS_X_PADDLE 820.0f
@@ -74,7 +89,7 @@
 #define ROBOT_JOINT_SIGN -1.0f
 #define Q_TOLERANCE 0.5 // degrees
 
-#define BUFFER_TIME 0.05f // seconds, Time buffer to account for communication and execution delays when planning to target arrival time.
+#define BUFFER_TIME 0.01f // seconds, Time buffer to account for communication and execution delays when planning to target arrival time.
 
 
 // Motor IDs on the daisy-chain
@@ -92,6 +107,7 @@ typedef struct {
   vec3 vel;
   float t_arrival_s;
   float timestamp;
+  uint32_t received_time;
 } robot_target_t;
 
 
@@ -151,6 +167,7 @@ int robot_delta_inv_jacobian(const float theta_deg[3], vec3 C, float Jinv[3][3])
 void robot_set_target_from_mail(robot_target_t *dst, const target_t *src);
 // Calculate distance and output component differences. Returns euclidean distance.
 float robot_calc_dist(vec3 current, vec3 target, float *out_dx, float *out_dy, float *out_dz);
+bool robot_EE_in_workspace(vec3 pos);
 bool robot_target_in_workspace(vec3 pos);
 
 bool robot_get_joint_angles(float *q1_deg, float *q2_deg, float *q3_deg);

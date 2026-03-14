@@ -1,7 +1,7 @@
 #include "mailbox.h"
 #include <string.h>
 
-static void mailbox_parse_target(const float *data, target_t *out_target)
+static void mailbox_parse_target(const float *data, target_t *out_target, uint32_t received_time_ms)
 {
     out_target->type = (target_type)((int)data[TARGET_MSG_TYPE]);
     out_target->intercept_pos.x = data[TARGET_MSG_X_POS];
@@ -13,23 +13,27 @@ static void mailbox_parse_target(const float *data, target_t *out_target)
     out_target->intercept_time = data[TARGET_MSG_INTERCEPT_TIME];
     out_target->time_sent = data[TARGET_MSG_TIME_SENT];
     out_target->timestamp = data[TARGET_MSG_TIMESTAMP];
+    out_target->received_time = received_time_ms;
 }
 
 void mailbox_init(mailbox_t *mb)
 {
     mb->new_interception_point_in = false;
+    mb->received_time_ms = 0U;
     memset(mb->data, 0, sizeof(mb->data));
 }
 
-void mailbox_mail_arrived(mailbox_t *mb, const float *data)
+void mailbox_mail_arrived(mailbox_t *mb, const float *data, uint32_t received_time_ms)
 {
     memcpy(mb->data, data, sizeof(mb->data));
+    mb->received_time_ms = received_time_ms;
     mb->new_interception_point_in = true;
 }
 
 bool mailbox_mail_received(mailbox_t *mb, target_t *out_target)
 {
     float local[TARGET_MSG_FLOAT_COUNT];
+    uint32_t received_time_ms = 0U;
 
     if(!mb->new_interception_point_in)
     {
@@ -38,9 +42,11 @@ bool mailbox_mail_received(mailbox_t *mb, target_t *out_target)
 
     mb->new_interception_point_in = false;
     memcpy(local, mb->data, sizeof(mb->data));
+    received_time_ms = mb->received_time_ms;
 
-    mailbox_parse_target(local,out_target);
+    mailbox_parse_target(local, out_target, received_time_ms);
 
+    mb->received_time_ms = 0U;
     memset(mb->data, 0, sizeof(mb->data));
     return true;
 }
@@ -48,5 +54,6 @@ bool mailbox_mail_received(mailbox_t *mb, target_t *out_target)
 void mailbox_clear(mailbox_t *mb)
 {
     mb->new_interception_point_in = false;
+    mb->received_time_ms = 0U;
     memset(mb->data, 0, sizeof(mb->data));
 }

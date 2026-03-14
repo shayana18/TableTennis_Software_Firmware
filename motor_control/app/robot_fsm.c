@@ -133,7 +133,7 @@ void delta_fsm(robot_t *robot)
 
     case STATE_STRIKE:
       motion_execute_prepare_strike(robot);
-      if (!robot_target_in_workspace(robot->current_target.pos)) {
+      if (!robot_EE_in_workspace(robot->current_target.pos)) {
         robot->state = STATE_IDLE;
         set_idle(robot);
         robot_runtime_send_status("STATE: IDLE\r\n");

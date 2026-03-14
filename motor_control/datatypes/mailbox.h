@@ -7,6 +7,7 @@
 typedef struct mailbox
 {
     float data[TARGET_MSG_FLOAT_COUNT];
+    uint32_t received_time_ms;
     volatile bool new_interception_point_in;
 } mailbox_t;
 
@@ -14,7 +15,7 @@ void mailbox_init(mailbox_t *mb);
 
 // Called from ISR: overwrite with newest data and set flag.
 // 'data' must point to TARGET_MSG_FLOAT_COUNT floats.
-void mailbox_mail_arrived(mailbox_t *mb, const float *data);
+void mailbox_mail_arrived(mailbox_t *mb, const float *data, uint32_t received_time_ms);
 
 // Called from main loop/thread: returns true if new mail was consumed.
 // Resets flag, zeros mailbox data, and parses into target_t.

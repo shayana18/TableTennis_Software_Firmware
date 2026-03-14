@@ -144,6 +144,7 @@ void motion_execute_make_home_target(robot_t *robot)
   robot->current_target.type = TARGET_HOME;
   robot->current_target.pos = home;
   robot->current_target.t_arrival_s = HOME_TIME;
+  robot->current_target.received_time = HAL_GetTick();
 }
 
 void motion_execute_prepare_strike(robot_t *robot)
@@ -225,26 +226,36 @@ void motion_execute_plan_strike(robot_t *robot) {
   }
 
 
-  if (paddle_speed > MAX_CART_VEL) {
-    paddle_speed = MAX_CART_VEL;
+  if (paddle_speed > MAX_STRIKE_VEL) {
+    paddle_speed = MAX_STRIKE_VEL;
   }
 
   float dir_sign = (vp_n >= 0.0f) ? 1.0f : -1.0f;
   float dir_x = dir_sign * nx;
   float dir_y = dir_sign * ny;
 
+
   float interception_target_offset = paddle_speed * paddle_speed / (2.0f * MAX_CART_ACC) + STRIKE_BUFFER_DIST;
 
-  float paddle_yaw = yaw_norm + PI_F / 2.0f;  // map to [0, PI]
-  if (paddle_yaw < 0.0f) {
-    paddle_yaw += PI_F;
+  if (yaw_norm < 0.0f) {
+    motion_abort(robot, "Paddle yaw is negative?? \r\n");
+    robot->state = STATE_IDLE;
+    set_idle(robot);
+    robot_runtime_send_status("STATE: IDLE\r\n");
+    return;
   }
-  if (paddle_yaw > PI_F) {
-    paddle_yaw -= PI_F;
+  float paddle_yaw = yaw_norm; 
+
+  if (yaw_norm < (HALF_PI_F)) {
+    paddle_yaw += HALF_PI_F;  
+  } else if (yaw_norm > (HALF_PI_F)) {
+    paddle_yaw -= HALF_PI_F;
+  } else {
+    paddle_yaw = 0.0f; 
   }
 
-  float x_offset = PADDLE_OFFSET_X * nx;
-  float y_offset = PADDLE_OFFSET_X * ny;
+  float x_offset = PADDLE_ARM_OFFSET * nx;
+  float y_offset = PADDLE_ARM_OFFSET * ny;
 
   new_interception_target.x = (interception_target.x - x_offset) - (dir_x * interception_target_offset);
   new_interception_target.y = (interception_target.y - y_offset) - (dir_y * interception_target_offset); 
@@ -253,6 +264,14 @@ void motion_execute_plan_strike(robot_t *robot) {
   strike_finish_target.x = interception_target.x - x_offset + (dir_x * interception_target_offset);
   strike_finish_target.y = interception_target.y - y_offset + (dir_y * interception_target_offset); 
   strike_finish_target.z = interception_target.z - PADDLE_OFFSET_Z;
+
+  if (!robot_EE_in_workspace(strike_finish_target)) {
+    motion_abort(robot, "STRIKE TARGET OUT OF WORKSPACE\r\n");
+    robot->state = STATE_IDLE;
+    set_idle(robot);
+    robot_runtime_send_status("STATE: IDLE\r\n");
+    return;
+  }
 
   float dx, dy, dz;
   const float D = robot_calc_dist(new_interception_target, strike_finish_target, &dx, &dy, &dz);
@@ -295,6 +314,13 @@ void motion_execute_plan(robot_t *robot)
 
   // Do not plan offset if target is Home or test
   if (robot->current_target.type == TARGET_INTERCEPT) {
+    if (!robot_target_in_workspace(robot->current_target.pos)) {
+      motion_abort(robot, "PATH_ABORT: TARGET OUT OF WORKSPACE\r\n");
+      robot->state = STATE_IDLE;
+      set_idle(robot);
+      robot_runtime_send_status("STATE: IDLE\r\n");
+      return;
+    }
     motion_execute_plan_strike(robot);
     strike_time_buffer = robot->strike_move_plan.T / 2.0f;
 
@@ -306,7 +332,7 @@ void motion_execute_plan(robot_t *robot)
 
   const vec3 target = robot->current_target.pos;
 
-  if (!robot_target_in_workspace(target)) {
+  if (!robot_EE_in_workspace(target)) {
     motion_abort(robot, "PATH_ABORT: TARGET OUT OF WORKSPACE\r\n");
     robot->state = STATE_IDLE;
     set_idle(robot);
@@ -372,9 +398,10 @@ void motion_execute_plan(robot_t *robot)
   }
 
   const float t_move = (2.0f * t_acc) + t_cruise; // Total move time
+  const float t_processing_time_buffer = ((float)(HAL_GetTick() - robot->current_target.received_time)) * 0.001f;
 
 
-  float t_extra = robot->current_target.t_arrival_s - t_move - strike_time_buffer - BUFFER_TIME;
+  float t_extra = robot->current_target.t_arrival_s - t_move - strike_time_buffer - t_processing_time_buffer - BUFFER_TIME;
 
   if (t_extra < 0.0f) {
     t_extra = 0.0f;

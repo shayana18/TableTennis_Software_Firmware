@@ -50,6 +50,7 @@ void robot_set_target_from_mail(robot_target_t *dst, const target_t *src)
   dst->vel = src->intercept_vel;
   dst->t_arrival_s = src->intercept_time;
   dst->timestamp = src->timestamp;
+  dst->received_time = src->received_time;
 }
 
 float robot_calc_dist(vec3 current, vec3 target, float *out_dx, float *out_dy, float *out_dz)
@@ -63,18 +64,35 @@ float robot_calc_dist(vec3 current, vec3 target, float *out_dx, float *out_dy, f
   return sqrtf(x * x + y * y + z * z);
 }
 
-bool robot_target_in_workspace(vec3 pos)
+bool robot_EE_in_workspace(vec3 pos)
 {
 
   if (isnan(pos.x) || isnan(pos.y) || isnan(pos.z)) {
     return false;
   }
   // Ellipse Formula
-  float value = (pos.x * pos.x) / (ELLIPSE_RADIUS_X * ELLIPSE_RADIUS_X) + (pos.y * pos.y) / (ELLIPSE_RADIUS_Y * ELLIPSE_RADIUS_Y);
+  float value = (pos.x * pos.x) / (ROBOT_EE_ELLIPSE_RADIUS_X * ROBOT_EE_ELLIPSE_RADIUS_X) + (pos.y * pos.y) / (ROBOT_EE_ELLIPSE_RADIUS_Y * ROBOT_EE_ELLIPSE_RADIUS_Y);
 
   if (value > 1.0f) {
     return false;
-    } else if (pos.z > LIMIT_POS_Z || pos.z < LIMIT_NEG_Z) {
+    } else if (pos.z > ROBOT_EE_LIMIT_POS_Z || pos.z < ROBOT_EE_LIMIT_NEG_Z) {
+    return false; 
+  }
+
+  return true;
+}
+
+bool robot_target_in_workspace(vec3 pos)
+{
+  if (isnan(pos.x) || isnan(pos.y) || isnan(pos.z)) {
+    return false;
+  }
+  // Ellipse Formula
+  float value = (pos.x * pos.x) / (INTERCEPTION_ELLIPSE_RADIUS_X * INTERCEPTION_ELLIPSE_RADIUS_X) + (pos.y * pos.y) / (INTERCEPTION_ELLIPSE_RADIUS_Y * INTERCEPTION_ELLIPSE_RADIUS_Y);
+
+  if (value > 1.0f) {
+    return false;
+    } else if (pos.z > INTERCEPTION_LIMIT_POS_Z || pos.z < INTERCEPTION_LIMIT_NEG_Z) {
     return false; 
   }
 
