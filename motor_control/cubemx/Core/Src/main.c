@@ -143,11 +143,9 @@ int main(void)
 
   start_uart2_rx();
   Turn_const_speed(&motor_com, ROBOT_MOTOR_1_ID, 0);
-#if !ARMS_OFF_TEST_MODE
   Turn_const_speed(&motor_com, ROBOT_MOTOR_2_ID, 0);
   Turn_const_speed(&motor_com, ROBOT_MOTOR_3_ID, 0);
   Turn_const_speed(&motor_com, ROBOT_MOTOR_4_ID, 0);
-#endif
   /* USER CODE END 2 */
 
   /* Initialize leds */

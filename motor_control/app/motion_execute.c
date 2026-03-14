@@ -230,6 +230,7 @@ void motion_execute_plan_strike(robot_t *robot) {
 
   if (paddle_speed > MAX_STRIKE_VEL) {
     paddle_speed = MAX_STRIKE_VEL;
+    robot_runtime_send_status("Max Strike Speed Clamped!\r\n");
   }
 
   float dir_sign = (vp_n >= 0.0f) ? 1.0f : -1.0f;
@@ -466,6 +467,12 @@ void motion_execute_tick(robot_t *robot)
   const uint32_t now_ms = HAL_GetTick();
   // I 
   const float t_s = ((float)(now_ms - plan->t_start_ms)) * 0.001f;
+
+  // During intentional wait (t1), hold the last commanded point instead of
+  // re-commanding sampled start_pos, which can cause visible backtracking.
+  if (t_s < plan->t1) {
+    return;
+  }
 
   float s = motion_profile_distance(plan, t_s);
   if (s < 0.0f) {
