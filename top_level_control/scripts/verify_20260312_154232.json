@@ -1,0 +1,21 @@
+{
+  "timestamp": "20260312_154232",
+  "calibration_dir": "C:\\Users\\styag\\OneDrive\\Desktop\\TableTennis_Software_Firmware\\top_level_control\\camera_calibration\\camera_parameters",
+  "resolution": "640x480",
+  "trigger_sync_verified": true,
+  "distance_results": [
+    {
+      "n": 1,
+      "X": -7.97,
+      "Y": 16.03,
+      "Z": 160.58,
+      "reproj": 0.32
+    }
+  ],
+  "length_results": [],
+  "gravity_results": [],
+  "diameter_passes": [],
+  "distance_summary": {
+    "n": 1
+  }
+}

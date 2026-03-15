@@ -16,11 +16,13 @@ v5: firmware-matching ellipse workspace, clamp-to-workspace fallback,
 from __future__ import annotations
 
 import argparse
+import json
 import math
 import os
 import sys
 import time
 from collections import deque
+from datetime import datetime
 from typing import Optional
 
 import cv2
@@ -31,6 +33,7 @@ PARENT_DIR = os.path.dirname(SCRIPT_DIR)
 if PARENT_DIR not in sys.path:
     sys.path.insert(0, PARENT_DIR)
 
+from comm_function.points_based_transform import load_points_based_transform
 from comm_function.transmit_over_uart import UartComm
 from config.camera_config import load_camera_settings
 from tracking.stereo_triangulator import StereoTriangulator
@@ -39,16 +42,6 @@ from tracking.stereo_triangulator import StereoTriangulator
 def _print(*args, **kwargs):
     print("from planner in terminal", *args, **kwargs)
 
-
-# ================================================================
-# CAMERA POSE -- same verified values as trajectory_predictor.py
-# ================================================================
-CAM_POSE_X_MM  = 1582.5
-CAM_POSE_Y_MM  = 1500.0
-CAM_POSE_Z_MM  = -452.4
-CAM_POSE_YAW   = 185.0
-CAM_POSE_PITCH = 20.0
-CAM_POSE_ROLL  = 0.0
 
 # Workspace -- firmware ellipse with 5% safety margin to avoid IK rejections
 ELLIPSE_A    = 790.0 * 0.95   # mm X semi-axis (750.5)
@@ -69,35 +62,9 @@ GRAVITY_Z = -9810.0  # mm/s^2, robot Z is vertical, negative = down
 DRAG_K = 0.000112  # mm^-1 -- drag deceleration: a = -DRAG_K * |v| * v
 
 
-# ================================================================
-# CAMERA-TO-ROBOT TRANSFORM (same verified logic)
-# ================================================================
-
-def build_cam_to_robot(pos_mm, yaw_deg, pitch_deg, roll_deg):
-    """Build R, t for: p_robot = R @ (p_cam_cm * 10) + t"""
-    R_optical = np.array([
-        [0.0, 0.0, 1.0],
-        [-1.0, 0.0, 0.0],
-        [0.0, -1.0, 0.0],
-    ])
-
-    y, p, r = math.radians(yaw_deg), math.radians(pitch_deg), math.radians(roll_deg)
-    cy, sy = math.cos(y), math.sin(y)
-    cp, sp = math.cos(p), math.sin(p)
-    cr, sr = math.cos(r), math.sin(r)
-
-    Rz = np.array([[cy, -sy, 0], [sy, cy, 0], [0, 0, 1.0]])
-    Ry = np.array([[cp, 0, sp], [0, 1, 0], [-sp, 0, cp]])
-    Rx = np.array([[1, 0, 0], [0, cr, -sr], [0, sr, cr]])
-
-    R = Rz @ Ry @ Rx @ R_optical
-    t = np.array(pos_mm, dtype=float)
-    return R, t
-
-
-def cam_to_robot(R, t, cam_x, cam_y, cam_z):
-    """Camera coords (cm) -> robot coords (mm)."""
-    p = R @ (np.array([cam_x, cam_y, cam_z]) * CM_TO_MM) + t
+def cam_to_robot(R, t, scale, cam_x, cam_y, cam_z):
+    """Camera coords (cm) -> robot coords (mm) using points-based transform."""
+    p = R @ (np.array([cam_x, cam_y, cam_z]) * scale) + t
     return float(p[0]), float(p[1]), float(p[2])
 
 
@@ -373,10 +340,12 @@ class SimpleIntegration:
         self.predictor = RobotPredictor()
         self.uart = UartComm(port=uart_port, baud_rate=baud_rate, verbose=uart_verbose)
 
-        # Camera->robot transform
-        self.R, self.t_vec = build_cam_to_robot(
-            (CAM_POSE_X_MM, CAM_POSE_Y_MM, CAM_POSE_Z_MM),
-            CAM_POSE_YAW, CAM_POSE_PITCH, CAM_POSE_ROLL)
+        # Camera->robot transform (points-based)
+        tf = load_points_based_transform()
+        self.R = tf["rotation"]
+        self.t_vec = tf["translation"]
+        self.cam_scale = tf["camera_scale_to_robot_units"]
+        _print(f"Loaded points-based transform (scale={self.cam_scale})")
 
         self.robot_homed = False
         self.run_gate = False
@@ -403,6 +372,40 @@ class SimpleIntegration:
         # Throw counter for logging
         self.throw_count = 0
         self._update_count = 0
+
+        # Intercept log — saved to JSON on each throw
+        self._intercept_log: list[dict] = []
+        self._intercept_log_path = os.path.join(
+            SCRIPT_DIR, "intercept_log.json"
+        )
+
+    def _log_intercept(self, intercept: dict, t_adjusted: float, n_pts: int, latency: float) -> None:
+        """Append intercept to log and save to JSON file."""
+        pos = self.predictor.get_current_position()
+        entry = {
+            "throw": self.throw_count,
+            "timestamp": datetime.now().isoformat(timespec="milliseconds"),
+            "target_x_mm": round(intercept["x"], 1),
+            "target_y_mm": round(intercept["y"], 1),
+            "target_z_mm": round(intercept["z"], 1),
+            "time_to_intercept_ms": round(t_adjusted * 1000, 1),
+            "clamped": intercept.get("clamped", False),
+            "clamp_dist_mm": round(intercept.get("clamp_dist", 0), 1),
+            "ball_x_mm": round(pos[0], 1) if pos else None,
+            "ball_y_mm": round(pos[1], 1) if pos else None,
+            "ball_z_mm": round(pos[2], 1) if pos else None,
+            "vel_x_mm_s": round(self.predictor.velocity[0], 1) if self.predictor.velocity else None,
+            "vel_y_mm_s": round(self.predictor.velocity[1], 1) if self.predictor.velocity else None,
+            "vel_z_mm_s": round(self.predictor.velocity[2], 1) if self.predictor.velocity else None,
+            "buffer_points": n_pts,
+            "latency_ms": round(latency * 1000, 1),
+        }
+        self._intercept_log.append(entry)
+        try:
+            with open(self._intercept_log_path, "w", encoding="utf-8") as f:
+                json.dump(self._intercept_log, f, indent=2)
+        except Exception as e:
+            _print(f"[WARN] Failed to save intercept log: {e}")
 
     # --- UART RX processing ---
 
@@ -609,17 +612,10 @@ class SimpleIntegration:
                 self._stm32_moving = False
                 self.throw_count += 1
 
-                vx, vy, vz = self.predictor.velocity
-                pos = self.predictor.get_current_position()
                 clamped = intercept.get('clamped', False)
                 tag = " [CLAMPED]" if clamped else ""
-                _print(f"[THROW #{self.throw_count}] SENT{tag}")
-                _print(f"  Target(mm): x={x:+.0f} y={y:+.0f} z={z:+.0f}  t={t_adjusted*1000:.0f}ms")
-                if clamped:
-                    _print(f"  Clamp dist: {intercept.get('clamp_dist', 0):.0f}mm")
-                _print(f"  Ball now(mm): x={pos[0]:+.0f} y={pos[1]:+.0f} z={pos[2]:+.0f}")
-                _print(f"  Ball vel(mm/s): vx={vx:+.0f} vy={vy:+.0f} vz={vz:+.0f}")
-                _print(f"  Points in buffer: {n_pts}  Latency: {latency*1000:.1f}ms")
+                _print(f"[THROW #{self.throw_count}]{tag}  Target(mm): x={x:+.0f} y={y:+.0f} z={z:+.0f}  t={t_adjusted*1000:.0f}ms")
+                self._log_intercept(intercept, t_adjusted, n_pts, latency)
         except Exception as e:
             _print(f"[UART] Send failed: {e}")
 
@@ -631,7 +627,7 @@ class SimpleIntegration:
             return
         R_inv = self.R.T
         p_robot = np.array([intercept['x'], intercept['y'], intercept['z']])
-        p_cam_cm = R_inv @ (p_robot - self.t_vec) / CM_TO_MM
+        p_cam_cm = R_inv @ (p_robot - self.t_vec) / self.cam_scale
         uv = self.triangulator.project_to_image(
             (float(p_cam_cm[0]), float(p_cam_cm[1]), float(p_cam_cm[2])),
             camera="left")
@@ -722,7 +718,7 @@ class SimpleIntegration:
 
                 if self.run_gate and result["found_3d"]:
                     cx, cy, cz = result["position_3d"]
-                    rx, ry, rz = cam_to_robot(self.R, self.t_vec, cx, cy, cz)
+                    rx, ry, rz = cam_to_robot(self.R, self.t_vec, self.cam_scale, cx, cy, cz)
                     robot_pos = (rx, ry, rz)
                     self.predictor.add_position(rx, ry, rz, frame_ts)
 
@@ -771,26 +767,7 @@ class SimpleIntegration:
                     (10, left_vis.shape[0] - 12),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.33, (120, 120, 120), 1)
 
-                # Terminal output
-                if self.run_gate and robot_pos is not None:
-                    line = (f"\rfrom planner in terminal "
-                            f"Pos(mm):({robot_pos[0]:+6.0f},{robot_pos[1]:+6.0f},{robot_pos[2]:+7.0f})")
-                    if self.predictor.velocity is not None:
-                        vx, vy, vz = self.predictor.velocity
-                        line += f" Vel:({vx:+6.0f},{vy:+6.0f},{vz:+7.0f})"
-                    if intercept is not None:
-                        c_tag = "C" if intercept.get('clamped') else ""
-                        line += (f" Int:({intercept['x']:+6.0f},{intercept['y']:+6.0f},"
-                                 f"{intercept['z']:+7.0f}) t={intercept['time']*1000:5.0f}ms{c_tag}")
-                    elif self.predictor.velocity is not None:
-                        if not self.predictor._ball_approaching():
-                            line += " [AWAY]"
-                        elif (self.predictor.positions and
-                              self.predictor.positions[-1][1] > RobotPredictor.MAX_PREDICT_Y):
-                            line += f" [FAR Y={self.predictor.positions[-1][1]:.0f}]"
-                        else:
-                            line += " [NO_WS]"
-                    print(line + "   ", end="")
+                # Terminal output — minimal, only intercept is printed in maybe_send()
 
                 # Show
                 dw = 640

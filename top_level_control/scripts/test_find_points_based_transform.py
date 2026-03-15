@@ -65,7 +65,7 @@ def _print(*args, **kwargs) -> None:
 class PointsBasedTransformFinder:
     def __init__(
         self,
-        required_points: int = 8,
+        required_points: int = 15,
         camera_scale_to_robot_units: float = 10.0,
         output_file: str = DEFAULT_POINTS_BASED_TRANSFORM_FILE,
     ) -> None:
@@ -98,6 +98,13 @@ class PointsBasedTransformFinder:
         # Pair-click state for one correspondence: left then right.
         self.click_stage = 0
         self.click_points: list[tuple[int, int]] = []
+        self._pending_pair = False  # True = both clicks done, waiting for main loop to process
+
+        # Multi-click averaging state (press 'a' to enter averaging mode).
+        self.averaging_mode = False
+        self.avg_samples: list[tuple[float, float, float]] = []
+        self.avg_reproj_errors: list[float] = []
+        self.AVG_STD_THRESHOLD = 5.0  # mm after scaling; warn if std dev exceeds this
 
         # Collected correspondences.
         self.camera_points_raw: list[tuple[float, float, float]] = []
@@ -178,6 +185,112 @@ class PointsBasedTransformFinder:
     def _reset_current_click_pair(self) -> None:
         self.click_stage = 0
         self.click_points = []
+        self._pending_pair = False
+
+    def _process_pending_pair(self) -> None:
+        """Process the completed click pair (called from main loop after overlay is drawn)."""
+        if not self._pending_pair:
+            return
+        self._pending_pair = False
+
+        cam_raw, reproj = self._triangulate_click_pair(self.click_points[0], self.click_points[1])
+        if cam_raw is None:
+            self._reset_current_click_pair()
+            return
+
+        # --- Reproj error gate ---
+        _print(f"  Reproj error: {reproj:.2f} px")
+        if reproj > 3.0:
+            _print(f"  REJECTED: reproj {reproj:.2f}px > 3px threshold. Re-click.")
+            self._reset_current_click_pair()
+            return
+        if reproj > 1.0:
+            _print(f"  WARNING: reproj {reproj:.2f}px is marginal (1-3px).")
+            confirm = input("  Accept this point? (y/n)> ").strip().lower()
+            if confirm != "y":
+                _print("  Point discarded.")
+                self._reset_current_click_pair()
+                return
+
+        # --- Multi-click averaging mode ---
+        if self.averaging_mode:
+            self.avg_samples.append(cam_raw)
+            self.avg_reproj_errors.append(reproj)
+            n = len(self.avg_samples)
+            _print(
+                f"  [AVG MODE] Sample {n} added: "
+                f"({cam_raw[0]:+.2f}, {cam_raw[1]:+.2f}, {cam_raw[2]:+.2f}) "
+                f"reproj={reproj:.2f}px"
+            )
+            _print("  Click another pair for this same pose, or press 'f' to finalize average.")
+            self._reset_current_click_pair()
+            return
+
+        # --- Normal single-click mode ---
+        robot_xyz = self._prompt_robot_point()
+        if robot_xyz is None:
+            _print("Pair skipped.")
+            self._reset_current_click_pair()
+            return
+
+        self._add_correspondence(cam_raw, reproj, robot_xyz)
+        self._reset_current_click_pair()
+
+        if len(self.camera_points_scaled) >= self.required_points:
+            result = self._compute_transform()
+            self._print_transform_summary(result)
+            self._save_transform(result)
+
+    def _finalize_average(self) -> None:
+        """Finalize multi-click average: average samples, report std, prompt robot point."""
+        if not self.avg_samples:
+            _print("No samples to average.")
+            self.averaging_mode = False
+            return
+
+        n = len(self.avg_samples)
+        if n < 2:
+            _print(f"Only {n} sample — using it directly (need 2+ for averaging).")
+            cam_raw = self.avg_samples[0]
+            reproj = self.avg_reproj_errors[0]
+        else:
+            arr = np.asarray(self.avg_samples)
+            cam_raw_np = arr.mean(axis=0)
+            std_raw = arr.std(axis=0)
+            scale = self.camera_scale_to_robot_units
+            std_scaled = std_raw * scale
+            cam_raw = (float(cam_raw_np[0]), float(cam_raw_np[1]), float(cam_raw_np[2]))
+            reproj = float(np.mean(self.avg_reproj_errors))
+            _print(
+                f"  Averaged {n} samples → "
+                f"({cam_raw[0]:+.2f}, {cam_raw[1]:+.2f}, {cam_raw[2]:+.2f})"
+            )
+            _print(
+                f"  Std dev (robot units): "
+                f"({std_scaled[0]:.2f}, {std_scaled[1]:.2f}, {std_scaled[2]:.2f}) "
+                f"norm={np.linalg.norm(std_scaled):.2f}"
+            )
+            if np.linalg.norm(std_scaled) > self.AVG_STD_THRESHOLD:
+                _print(
+                    f"  WARNING: std dev {np.linalg.norm(std_scaled):.2f} > "
+                    f"{self.AVG_STD_THRESHOLD:.1f} threshold — clicks may be inconsistent."
+                )
+
+        robot_xyz = self._prompt_robot_point()
+        if robot_xyz is None:
+            _print("Averaged point discarded.")
+        else:
+            self._add_correspondence(cam_raw, reproj, robot_xyz)
+            if len(self.camera_points_scaled) >= self.required_points:
+                result = self._compute_transform()
+                self._print_transform_summary(result)
+                self._save_transform(result)
+
+        # Reset averaging state.
+        self.averaging_mode = False
+        self.avg_samples = []
+        self.avg_reproj_errors = []
+        self._reset_current_click_pair()
 
     def _add_correspondence(
         self,
@@ -211,13 +324,56 @@ class PointsBasedTransformFinder:
         residuals = rob - fitted
         per_point_err = np.linalg.norm(residuals, axis=1)
 
+        # --- Leave-one-out outlier detection ---
+        median_err = float(np.median(per_point_err))
+        outlier_threshold = max(median_err * 2.0, 5.0)  # at least 5 robot-units
+        outlier_mask = per_point_err > outlier_threshold
+        outlier_indices = list(np.where(outlier_mask)[0])
+
         result = {
             "R": R,
             "t": t,
             "diagnostics": diag,
             "residuals": residuals,
             "per_point_err": per_point_err,
+            "outlier_indices": outlier_indices,
+            "outlier_threshold": outlier_threshold,
         }
+
+        if outlier_indices:
+            _print(f"\n  OUTLIER WARNING: {len(outlier_indices)} point(s) have residual > {outlier_threshold:.1f}:")
+            for idx in outlier_indices:
+                _print(f"    Point {idx}: error={per_point_err[idx]:.2f}")
+            if len(cam) - len(outlier_indices) >= 3:
+                answer = input("  Re-solve excluding outliers? (y/n)> ").strip().lower()
+                if answer == "y":
+                    keep = ~outlier_mask
+                    cam_clean = cam[keep]
+                    rob_clean = rob[keep]
+                    R2, t2, diag2 = points_based_transform(cam_clean, rob_clean, return_diagnostics=True)
+                    fitted2 = transform_points(cam_clean, R2, t2)
+                    residuals2 = rob_clean - fitted2
+                    per_point_err2 = np.linalg.norm(residuals2, axis=1)
+                    _print(
+                        f"  Re-solved with {len(cam_clean)} points: "
+                        f"rmse={diag2['rmse']:.4f} (was {diag['rmse']:.4f})"
+                    )
+                    # Update stored lists to remove outliers.
+                    keep_list = list(np.where(keep)[0])
+                    self.camera_points_raw = [self.camera_points_raw[i] for i in keep_list]
+                    self.camera_points_scaled = [self.camera_points_scaled[i] for i in keep_list]
+                    self.robot_points = [self.robot_points[i] for i in keep_list]
+                    self.reproj_errors = [self.reproj_errors[i] for i in keep_list]
+                    result = {
+                        "R": R2,
+                        "t": t2,
+                        "diagnostics": diag2,
+                        "residuals": residuals2,
+                        "per_point_err": per_point_err2,
+                        "outlier_indices": [],
+                        "outlier_threshold": outlier_threshold,
+                    }
+
         self.transform_result = result
         return result
 
@@ -226,6 +382,8 @@ class PointsBasedTransformFinder:
         t = result["t"]
         diag = result["diagnostics"]
         per_point_err = result["per_point_err"]
+        outlier_indices = result.get("outlier_indices", [])
+        outlier_threshold = result.get("outlier_threshold", float("inf"))
 
         _print("")
         _print("=" * 74)
@@ -246,7 +404,28 @@ class PointsBasedTransformFinder:
             f"Fit quality: rmse={diag['rmse']:.4f}, mean={diag['mean_error']:.4f}, "
             f"max={diag['max_error']:.4f}, det(R)={diag['rotation_det']:.6f}"
         )
-        _print(f"Per-point error: {np.array2string(per_point_err, precision=4)}")
+
+        # --- Numbered pair table ---
+        _print("")
+        _print(
+            f"{'#':>3}  {'Camera Scaled (X,Y,Z)':>30}  "
+            f"{'Robot (X,Y,Z)':>30}  {'Residual':>9}  {'Flag':>7}"
+        )
+        _print("-" * 90)
+        for i in range(len(self.camera_points_scaled)):
+            cs = self.camera_points_scaled[i]
+            rp = self.robot_points[i]
+            err = per_point_err[i] if i < len(per_point_err) else float("nan")
+            flag = "OUTLIER" if i in outlier_indices else ""
+            _print(
+                f"{i:>3}  "
+                f"({cs[0]:+8.1f}, {cs[1]:+8.1f}, {cs[2]:+8.1f})  "
+                f"({rp[0]:+8.1f}, {rp[1]:+8.1f}, {rp[2]:+8.1f})  "
+                f"{err:>8.2f}  {flag:>7}"
+            )
+        _print("-" * 90)
+        if outlier_indices:
+            _print(f"Outlier threshold: {outlier_threshold:.1f} (2x median or 5.0, whichever larger)")
         _print("=" * 74)
 
     def _save_transform(self, result: dict) -> None:
@@ -280,26 +459,8 @@ class PointsBasedTransformFinder:
                 return
             self.click_points.append((orig_x, orig_y))
             self.click_stage = 2
+            self._pending_pair = True  # defer processing so overlay draws both markers
             _print(f"RIGHT click: ({orig_x}, {orig_y})")
-
-            cam_raw, reproj = self._triangulate_click_pair(self.click_points[0], self.click_points[1])
-            if cam_raw is None:
-                self._reset_current_click_pair()
-                return
-
-            robot_xyz = self._prompt_robot_point()
-            if robot_xyz is None:
-                _print("Pair skipped.")
-                self._reset_current_click_pair()
-                return
-
-            self._add_correspondence(cam_raw, reproj, robot_xyz)
-            self._reset_current_click_pair()
-
-            if len(self.camera_points_scaled) >= self.required_points:
-                result = self._compute_transform()
-                self._print_transform_summary(result)
-                self._save_transform(result)
             return
 
     def _draw_overlay(self, left_small, right_small) -> None:
@@ -365,22 +526,38 @@ class PointsBasedTransformFinder:
                 2,
             )
 
-        # Draw current clicked points
+        # Draw placed click points with prominent visuals (same style as triangulation_verify)
         panels = [left_small, right_small]
+        labels = ["L", "R"]
         for i, pt in enumerate(self.click_points[:2]):
             img = panels[i]
             px = int(pt[0] * scale_x)
             py = int(pt[1] * scale_y)
-            cv2.circle(img, (px, py), 16, (255, 255, 0), 2)
-            cv2.drawMarker(img, (px, py), (0, 255, 0), cv2.MARKER_CROSS, 24, 2)
+            cv2.circle(img, (px, py), 25, (255, 255, 0), 2)
+            cv2.drawMarker(img, (px, py), (0, 255, 0), cv2.MARKER_CROSS, 30, 2)
+            cv2.circle(img, (px, py), 3, (0, 0, 255), -1)
+            cv2.putText(img, labels[i], (px + 28, py - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+
+        # Averaging mode indicator
+        if self.averaging_mode:
+            cv2.putText(
+                left_small,
+                f"[AVG MODE: {len(self.avg_samples)} samples]",
+                (10, h - 38),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.50,
+                (0, 180, 255),
+                2,
+            )
 
         # Controls footer
         cv2.putText(
             right_small,
-            "SPACE freeze | r reset pair | d delete last | q quit",
+            "SPACE freeze | a avg | f finalize | r reset | d del | q quit",
             (10, self.display_height - 12),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.38,
+            0.35,
             (190, 190, 190),
             1,
         )
@@ -393,7 +570,7 @@ class PointsBasedTransformFinder:
         _print(f"Required pairs: {self.required_points}")
         _print(f"Camera scale to robot units: {self.camera_scale_to_robot_units}")
         _print(f"Output transform file: {self.output_file}")
-        _print("Controls: SPACE freeze/unfreeze, r reset pair, d delete last pair, q quit")
+        _print("Controls: SPACE freeze/unfreeze, a avg mode, f finalize avg, r reset, d delete last, q quit")
         _print("=" * 74)
 
         if not self.check_calibration():
@@ -431,6 +608,11 @@ class PointsBasedTransformFinder:
                 self._draw_overlay(left_small, right_small)
                 cv2.imshow(self.window_name, cv2.hconcat([left_small, right_small]))
 
+                # Process pending click pair AFTER overlay is drawn (so both markers are visible).
+                if self._pending_pair:
+                    cv2.waitKey(1)  # flush display so user sees both markers
+                    self._process_pending_pair()
+
                 # Throttled status print while collecting.
                 now = time.time()
                 if (
@@ -467,7 +649,27 @@ class PointsBasedTransformFinder:
                         _print("[LIVE]")
                 elif key == ord("r"):
                     self._reset_current_click_pair()
-                    _print("Current click pair reset.")
+                    if self.averaging_mode:
+                        self.averaging_mode = False
+                        self.avg_samples = []
+                        self.avg_reproj_errors = []
+                        _print("Averaging mode cancelled. Click pair reset.")
+                    else:
+                        _print("Current click pair reset.")
+                elif key == ord("a"):
+                    if not self.averaging_mode:
+                        self.averaging_mode = True
+                        self.avg_samples = []
+                        self.avg_reproj_errors = []
+                        self._reset_current_click_pair()
+                        _print("[AVG MODE ON] Click left+right multiple times on same marker, then press 'f' to finalize.")
+                    else:
+                        _print("Already in averaging mode. Press 'f' to finalize or 'r' to cancel.")
+                elif key == ord("f"):
+                    if self.averaging_mode:
+                        self._finalize_average()
+                    else:
+                        _print("Not in averaging mode. Press 'a' first.")
                 elif key == ord("d"):
                     if self.camera_points_scaled:
                         self.camera_points_scaled.pop()
@@ -513,8 +715,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--required-points",
         type=int,
-        default=8,
-        help="Number of matched pairs to collect before solving (recommended 8-15).",
+        default=19,
+        help="Number of matched pairs to collect before solving (recommended 8-17).",
     )
     parser.add_argument(
         "--camera-scale-to-robot-units",
