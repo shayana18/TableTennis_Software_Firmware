@@ -44,10 +44,10 @@ def _print(*args, **kwargs):
 
 
 # Workspace -- firmware ellipse with 5% safety margin to avoid IK rejections
-ELLIPSE_A    = 790.0 * 0.95   # mm X semi-axis (750.5)
-ELLIPSE_B    = 540.0 * 0.95   # mm Y semi-axis (513.0)
-Z_MIN        = -1050.0 + 25   # mm (-1025, 25mm margin from robot.h limit)
-Z_MAX        = -721.0  - 10   # mm (-731, 10mm margin)
+ELLIPSE_A    = 790.0 *0.9   # mm X semi-axis (750.5)
+ELLIPSE_B    = 540.0 * 0.9   # mm Y semi-axis (513.0)
+Z_MIN        = -1050.0   # mm (-1025, 25mm margin from robot.h limit)
+Z_MAX        = -720.0   # mm (-731, 10mm margin)
 MAX_CLAMP_DIST = 350.0        # mm -- max distance to clamp to workspace
 ROBOT_HOME   = (0.0, 0.0, -900.0)
 MAX_CART_VEL = 4000.0   # mm/s
@@ -593,6 +593,9 @@ class SimpleIntegration:
         try:
             self.uart.send_intercept(
                 x_mm=x, y_mm=y, z_mm=z,
+                vx_mm_s=intercept.get('vx', 0.0),
+                vy_mm_s=intercept.get('vy', 0.0),
+                vz_mm_s=intercept.get('vz', 0.0),
                 intercept_time_s=t_adjusted,
                 time_sent_s=time_sent,
                 timestamp_s=frame_ts,
@@ -704,7 +707,7 @@ class SimpleIntegration:
                 self.process_uart_rx()
 
                 result = self.triangulator.update()
-                frame_ts = time.perf_counter()
+                frame_ts = result.get("capture_time", time.perf_counter())
                 if result["left_frame"] is None:
                     continue
 

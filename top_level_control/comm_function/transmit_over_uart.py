@@ -2,9 +2,10 @@
 UART helpers for sending robot targets from laptop to STM32.
 
 This module packs messages exactly how `mailbox_parse_target()` expects them on the
-STM32 side: a raw little-endian array of 7 floats:
+STM32 side: a raw little-endian array of 10 floats:
 
-    [type, x_mm, y_mm, z_mm, intercept_time_s, time_sent_s, timestamp_s]
+    [type, x_mm, y_mm, z_mm, vx_mm_s, vy_mm_s, vz_mm_s,
+     intercept_time_s, time_sent_s, timestamp_s]
 
 It also provides a simple line-based status reader for ASCII debug/status messages
 coming back from the STM32 (for example home completion confirmation).
@@ -25,11 +26,11 @@ else:
     _SERIAL_IMPORT_ERROR = None
 
 
-TARGET_MSG_FLOAT_COUNT = 7
+TARGET_MSG_FLOAT_COUNT = 10
 TARGET_INTERCEPT = 1
 TARGET_HOME = 3
 
-_PACKET_STRUCT = struct.Struct("<7f")
+_PACKET_STRUCT = struct.Struct("<10f")
 _PLANNER_TERMINAL_PREFIX = "from planner in terminal"
 _HOME_ACK_TOKENS = (
     "STATE: PLAN",  # User-defined startup gate: start game once FSM enters PLAN after HOME command.
@@ -86,6 +87,8 @@ class UartComm:
             port=self.port,
             baudrate=self.baud_rate,
             timeout=self.timeout_s,
+            dsrdtr=False,
+            rtscts=False,
         )
 
         if self.verbose:
@@ -130,6 +133,9 @@ class UartComm:
         x_mm: float = 0.0,
         y_mm: float = 0.0,
         z_mm: float = 0.0,
+        vx_mm_s: float = 0.0,
+        vy_mm_s: float = 0.0,
+        vz_mm_s: float = 0.0,
         intercept_time_s: float = 0.0,
         time_sent_s: Optional[float] = None,
         timestamp_s: Optional[float] = None,
@@ -140,6 +146,7 @@ class UartComm:
         Args:
             target_type: Numeric target enum (`TARGET_INTERCEPT` or `TARGET_HOME`)
             x_mm, y_mm, z_mm: Target position in millimeters
+            vx_mm_s, vy_mm_s, vz_mm_s: Ball velocity at intercept in mm/s
             intercept_time_s: Arrival time horizon in seconds
             time_sent_s: Laptop monotonic timestamp when packet is sent
             timestamp_s: Laptop monotonic timestamp of source frame/measurement
@@ -152,6 +159,9 @@ class UartComm:
             float(x_mm),
             float(y_mm),
             float(z_mm),
+            float(vx_mm_s),
+            float(vy_mm_s),
+            float(vz_mm_s),
             float(intercept_time_s),
             float(now),
             float(timestamp),
@@ -175,16 +185,22 @@ class UartComm:
         x_mm: float,
         y_mm: float,
         z_mm: float,
-        intercept_time_s: float,
-        time_sent_s: float,
-        timestamp_s: float,
+        vx_mm_s: float = 0.0,
+        vy_mm_s: float = 0.0,
+        vz_mm_s: float = 0.0,
+        intercept_time_s: float = 0.0,
+        time_sent_s: float = 0.0,
+        timestamp_s: float = 0.0,
     ) -> List[float]:
-        """Send a `TARGET_INTERCEPT` command with position/time metadata."""
+        """Send a `TARGET_INTERCEPT` command with position, velocity, and time metadata."""
         values = self.send_target(
             target_type=TARGET_INTERCEPT,
             x_mm=x_mm,
             y_mm=y_mm,
             z_mm=z_mm,
+            vx_mm_s=vx_mm_s,
+            vy_mm_s=vy_mm_s,
+            vz_mm_s=vz_mm_s,
             intercept_time_s=intercept_time_s,
             time_sent_s=time_sent_s,
             timestamp_s=timestamp_s,
@@ -193,6 +209,7 @@ class UartComm:
             self._local_print(
                 "[UART][TX] TARGET_INTERCEPT "
                 f"x={x_mm:.1f} y={y_mm:.1f} z={z_mm:.1f} mm "
+                f"v=({vx_mm_s:.0f},{vy_mm_s:.0f},{vz_mm_s:.0f}) mm/s "
                 f"t={intercept_time_s*1000:.1f} ms "
                 f"sent={time_sent_s:.6f} frame_ts={timestamp_s:.6f}"
             )

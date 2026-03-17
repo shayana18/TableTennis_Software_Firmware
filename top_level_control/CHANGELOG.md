@@ -1,5 +1,96 @@
 # Stereo Pipeline — Change Log & Debug Report
 
+## Session: 2026-03-15 (Points-Based Transform Robustness)
+
+### Status: All 4 robustness features implemented. Ready for testing.
+
+---
+
+### Change #19: Reproj Error Gate in Points-Based Transform Script
+
+**File:** `scripts/test_find_points_based_transform.py`
+
+**What:** Added automatic quality gate after each stereo click pair is triangulated.
+
+**Behavior:**
+- Reproj < 1px → auto-accepted (good click)
+- Reproj 1-3px → warning printed, user prompted y/n to accept
+- Reproj > 3px → auto-rejected with "Re-click" message
+
+**Why:** Without a gate, bad clicks (wrong spot, mismatched left/right) silently enter the Kabsch fit and corrupt the transform. A single garbage point with 10px reproj can shift the solved rotation by several degrees.
+
+---
+
+### Change #20: Multi-Frame Averaging Mode
+
+**File:** `scripts/test_find_points_based_transform.py`
+
+**What:** Press `a` to enter averaging mode. Click left+right on the same marker multiple times (3-5 recommended). Each click pair is triangulated independently. Press `f` to finalize: averages all samples into one point, reports std dev in robot units.
+
+**Key details:**
+- Std dev threshold: 5mm (warns if exceeded — indicates inconsistent clicks)
+- After finalizing, prompts for robot XYZ as normal
+- Press `r` to cancel averaging mode and discard samples
+- On-screen overlay shows `[AVG MODE: N samples]` in orange
+
+**Why:** Single-click noise is ~5mm at typical depths. Averaging 3-5 clicks reduces to ~2-3mm without needing ArUco markers. Especially helpful for manual marker clicks where sub-pixel precision is hard.
+
+---
+
+### Change #21: Leave-One-Out Outlier Detection After Solving
+
+**File:** `scripts/test_find_points_based_transform.py`
+
+**What:** After Kabsch SVD solve, computes per-point residuals and flags outliers.
+
+**Algorithm:**
+- Outlier threshold = max(2× median residual, 5.0 robot-units)
+- Points exceeding threshold are flagged
+- If outliers found AND removing them leaves ≥3 points: prompts user to re-solve excluding outliers
+- On confirmation: removes outlier points from stored lists, re-runs Kabsch, prints improved RMSE
+
+**Why:** One bad point pair (e.g., wrong robot coordinate entered, or a click on a different marker) can dominate the fit. Outlier detection catches this automatically after the initial solve and offers a clean re-solve.
+
+---
+
+### Change #22: Summary Table in Transform Output
+
+**File:** `scripts/test_find_points_based_transform.py`
+
+**What:** After solving, prints a numbered table of all point pairs with columns:
+- `#` — point index
+- `Camera Scaled (X,Y,Z)` — triangulated point in robot units
+- `Robot (X,Y,Z)` — user-entered robot coordinates
+- `Residual` — Euclidean distance between fitted and actual robot point
+- `Flag` — `OUTLIER` if above threshold, blank otherwise
+
+Also prints outlier threshold value when outliers exist.
+
+**Why:** Makes it immediately obvious which pose was bad. Previously only showed a flat array of per-point errors with no context.
+
+---
+
+### Updated Controls
+
+Old: `SPACE freeze | r reset pair | d delete last | q quit`
+New: `SPACE freeze | a avg | f finalize | r reset | d del | q quit`
+
+- `a` — enter averaging mode (multi-click same marker)
+- `f` — finalize average (compute mean, prompt robot XYZ)
+- `r` — reset click pair; also cancels averaging mode if active
+
+---
+
+### Next Steps
+
+1. Recalibrate cameras (still pending from 2026-03-10)
+2. Run `python scripts/test_find_points_based_transform.py --required-points 4` to test new features
+3. Verify reproj gate rejects intentionally bad clicks
+4. Verify outlier detection flags worst point after solving
+5. Verify multi-click averaging reports std dev correctly
+
+---
+
 ## Session: 2026-03-10 (Integration Script — Robot-Frame Prediction + UART)
 
 ### Status: test_integration_simple.py v4 complete. Air drag model + rectangle workspace. Ready for testing.
@@ -848,11 +939,57 @@ MAX_CART_ACC  = 20000 mm/s²
 
 ---
 
-## Next Steps (updated 2026-03-08)
+---
 
-All verification tests COMPLETE with old stand. New 20° fixed-pitch stand built. Full recalibration needed. Axis convention fix DONE.
+## Session: 2026-03-15 (Integration Pipeline v2 + Velocity in UART)
 
-1. **Recalibrate with 20° fixed pitch stand** — Full mono intrinsics (30+ images per camera) + stereo extrinsics with new rigid mount geometry
-2. **Re-run verification tests (Modes 1-4)** — Confirm improvement over current 3% lateral scale error (α=0.972)
-3. **Run velocity validation** — `test_velocity_validation.py` with new calibration
-4. **End-to-end trajectory prediction testing** — Full pipeline test with real throws, drag enabled
+### Integration Pipeline v2 Snapshot
+
+**File:** `scripts/test_integration_simple.py`
+
+**Status:** Working end-to-end. Predicts ball trajectory, sends intercept point to STM32. Direction is correct, accuracy sufficient for further testing. Labeled as **v2** for future reference.
+
+**Key characteristics of v2:**
+- Stereo triangulation → points-based Kabsch transform (R, t, scale=10.0) → robot frame
+- RobotPredictor: regression velocity with gravity correction, Euler integration with air drag
+- Workspace: elliptic cylinder (790x540mm, Z=-1050 to -720mm)
+- Auto-homing after intercept completion, state machine UART flow
+- Capture-time fix applied (timestamp from grab() not after processing)
+
+---
+
+### Change #23: Timestamp Bias Fix
+
+**File:** `tracking/stereo_triangulator.py`, `scripts/test_integration_simple.py`
+
+**What:** Moved `time.perf_counter()` call from after `update()` returns to right after the two `grab()` calls inside `update()`. Frame timestamp is now stored as `result['capture_time']`.
+
+**Why:** The old placement timestamped ~10-20ms late (after detect + rectify + triangulate), causing the intercept `time` field to overestimate latency.
+
+---
+
+### Change #24: Ball Velocity in UART Message
+
+**Files:**
+- `motor_control/datatypes/shared_types.h` — `TARGET_MSG_FLOAT_COUNT` 7→10, added `TARGET_MSG_VX/VY/VZ` enum fields, added `vec3 ball_velocity` to `target_t`
+- `motor_control/datatypes/mailbox.c` — parse velocity from float array
+- `motor_control/app/robot.h` — added `vec3 ball_vel` to `robot_target_t`
+- `motor_control/app/robot.c` — copy velocity in `robot_set_target_from_mail()`
+- `top_level_control/comm_function/transmit_over_uart.py` — 10-float struct, velocity params
+- `top_level_control/scripts/test_integration_simple.py` — pass `vx/vy/vz` from intercept dict
+
+**Message format (10 floats, little-endian):**
+```
+[type, x_mm, y_mm, z_mm, vx_mm_s, vy_mm_s, vz_mm_s, intercept_time_s, time_sent_s, timestamp_s]
+```
+
+**Velocity source:** Ball velocity at the predicted intercept point, from Euler integration (includes gravity + air drag). Already in robot frame (mm/s) since prediction runs entirely in robot frame.
+
+---
+
+## Next Steps (updated 2026-03-15)
+
+1. **Flash updated firmware** — TARGET_MSG_FLOAT_COUNT changed from 7→10, must flash both sides together
+2. **Test velocity data** — Verify STM32 receives correct velocity values (print `ball_vel` on STM32 side)
+3. **Use velocity for strike planning** — Ball velocity enables paddle angle/speed computation for return shots
+4. **Continue accuracy testing** — Refine prediction with real throw data

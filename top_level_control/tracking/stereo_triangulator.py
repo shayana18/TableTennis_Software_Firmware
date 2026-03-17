@@ -32,6 +32,7 @@ CRITICAL: Uses grab()/retrieve() pattern for synchronized stereo capture.
 
 import cv2
 import sys
+import time
 import numpy as np
 from pathlib import Path
 from .ball_detector import BallDetector
@@ -457,9 +458,12 @@ class StereoTriangulator:
         # --- CRITICAL: grab both before retrieving ---
         grabbed_l = self.cap_left.grab()
         grabbed_r = self.cap_right.grab()
+        capture_time = time.perf_counter()
 
         if not grabbed_l or not grabbed_r:
             return result
+
+        result['capture_time'] = capture_time
 
         ret_left, frame_left = self.cap_left.retrieve()
         ret_right, frame_right = self.cap_right.retrieve()
