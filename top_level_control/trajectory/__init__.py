@@ -1,65 +1,53 @@
 """
 Trajectory Prediction Module
 
-Predicts ball trajectory using physics-based model with gravity.
-
 COMPONENTS:
-    PositionBuffer      - Stores timestamped 3D positions (circular buffer)
-    VelocityEstimator   - Calculates velocity from position history
-    PhysicsModel        - Kinematic equations with gravity
-    TrajectoryPredictor - Main class that combines all components
+    RobotPredictor  - Robot-frame predictor (single source of truth for real-time)
+    workspace       - Workspace constants and boundary checks
+    PhysicsModel    - Camera-frame kinematic equations (for analysis scripts)
 
-USAGE:
-    from trajectory import TrajectoryPredictor
-    
-    # Create predictor
-    predictor = TrajectoryPredictor(
-        buffer_size=10,      # Store last 10 positions
-        min_points=3,        # Need 3+ points to predict
-        gravity=981.0,       # cm/s² (use 9810 for mm/s²)
-        y_down=True          # +Y is downward in camera coords
-    )
-    
+USAGE (real-time robot control):
+    from trajectory.robot_predictor import RobotPredictor
+    from trajectory.workspace import ROBOT_HOME, in_workspace
+    from comm_function.points_based_transform import cam_to_robot
+
+    predictor = RobotPredictor()
+
     # In your tracking loop:
     while tracking:
         result = triangulator.update()
-        
         if result['found_3d']:
-            x, y, z = result['position_3d']
-            predictor.add_position(x, y, z)
-        
-        # Predict where ball will be at X = robot_endline
-        prediction = predictor.predict(target_x=50)
-        
-        if prediction['valid']:
-            robot_x = prediction['intercept_x']
-            robot_y = prediction['intercept_y']
-            time_ms = prediction['time_to_intercept'] * 1000
-            
-            # Send to robot!
-            robot.move_to(robot_x, robot_y, time_ms)
+            cx, cy, cz = result['position_3d']
+            rx, ry, rz = cam_to_robot(R, t, scale, cx, cy, cz)
+            predictor.add_position(rx, ry, rz, timestamp)
 
-PHYSICS:
-    The predictor uses basic kinematics with gravity:
-        X(t) = X₀ + Vx × t           (constant horizontal velocity)
-        Y(t) = Y₀ + Vy × t + ½g×t²   (gravity accelerates downward)
-        Z(t) = Z₀ + Vz × t           (constant depth velocity)
-    
-    Gravity = 981 cm/s² = 9.81 m/s²
+        intercept = predictor.predict_intercept()
+        if intercept is not None:
+            send_to_robot(intercept['x'], intercept['y'], intercept['z'],
+                          intercept['time'])
+
+USAGE (post-hoc analysis in camera frame):
+    from trajectory.physics_model import PhysicsModel
+    model = PhysicsModel(gravity=981, y_down=True, enable_drag=True)
 """
 
-from .position_buffer import PositionBuffer
-from .velocity_estimator import VelocityEstimator, estimate_velocity
+from .robot_predictor import RobotPredictor
+from .workspace import (
+    ELLIPSE_A, ELLIPSE_B, Z_MIN, Z_MAX, MAX_CLAMP_DIST,
+    ROBOT_HOME, MAX_CART_VEL, MAX_CART_ACC,
+    CM_TO_MM, GRAVITY_Z, DRAG_K,
+    in_workspace, clamp_to_workspace,
+)
 from .physics_model import PhysicsModel, predict_ball_position
-from .trajectory_predictor import TrajectoryPredictor
 
 __all__ = [
-    'PositionBuffer',
-    'VelocityEstimator',
-    'estimate_velocity',
+    'RobotPredictor',
     'PhysicsModel',
     'predict_ball_position',
-    'TrajectoryPredictor'
+    'ELLIPSE_A', 'ELLIPSE_B', 'Z_MIN', 'Z_MAX', 'MAX_CLAMP_DIST',
+    'ROBOT_HOME', 'MAX_CART_VEL', 'MAX_CART_ACC',
+    'CM_TO_MM', 'GRAVITY_Z', 'DRAG_K',
+    'in_workspace', 'clamp_to_workspace',
 ]
 
-__version__ = '1.0.0'
+__version__ = '2.0.0'

@@ -1,5 +1,5 @@
 """
-Live stereo integration test: updated triangulation + updated trajectory planner + UART.
+Live stereo integration test: updated triangulation + robot-frame prediction + UART.
 
 This script is the test-day integration entrypoint and keeps the same core behavior:
 1) Send TARGET_HOME on startup.
@@ -7,6 +7,8 @@ This script is the test-day integration entrypoint and keeps the same core behav
 3) Keep top-level pipeline gated OFF until user opens it.
 4) When gate is ON, run tracking/prediction and send one intercept at a time.
 5) On quit, stop intercept TX and send one TARGET_HOME.
+
+Uses RobotPredictor (robot-frame, mm) for all prediction logic.
 """
 
 from __future__ import annotations
@@ -19,16 +21,27 @@ import time
 from typing import Optional
 
 import cv2
+import numpy as np
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PARENT_DIR = os.path.dirname(SCRIPT_DIR)
 if PARENT_DIR not in sys.path:
     sys.path.insert(0, PARENT_DIR)
 
+from comm_function.points_based_transform import (
+    load_points_based_transform,
+    cam_to_robot,
+    robot_to_cam,
+)
 from comm_function.transmit_over_uart import UartComm
 from config.camera_config import load_camera_settings
 from tracking.stereo_triangulator import StereoTriangulator
-from trajectory.trajectory_predictor import TrajectoryPredictor
+from trajectory.robot_predictor import RobotPredictor
+from trajectory.workspace import (
+    ELLIPSE_A, ELLIPSE_B, Z_MIN, Z_MAX,
+    ROBOT_HOME, DRAG_K,
+    in_workspace,
+)
 
 
 def _planner_print(*args, **kwargs) -> None:
@@ -40,7 +53,6 @@ class IntegrationTestDay:
         self,
         uart_port: str,
         baud_rate: int = 115200,
-        robot_x_cm: float = 50.0,
         home_ack_timeout_s: Optional[float] = 30.0,
         uart_verbose: bool = True,
         tx_interval_s: float = 0.03,
@@ -58,12 +70,15 @@ class IntegrationTestDay:
         self.cam_left_id = cam_settings["camera0"]
         self.cam_right_id = cam_settings["camera1"]
 
-        # Updated planner intercepts on camera-X plane (cm).
-        self.robot_x_cm = float(robot_x_cm)
-
         self.triangulator: Optional[StereoTriangulator] = None
-        self.predictor: Optional[TrajectoryPredictor] = None
+        self.predictor = RobotPredictor()
         self.uart = UartComm(port=uart_port, baud_rate=baud_rate, verbose=uart_verbose)
+
+        # Points-based transform for camera -> robot conversion
+        tf = load_points_based_transform()
+        self.R = tf["rotation"]
+        self.t_vec = tf["translation"]
+        self.cam_scale = tf["camera_scale_to_robot_units"]
 
         self.show_velocity = True
         self.show_trajectory = True
@@ -81,6 +96,9 @@ class IntegrationTestDay:
         self.last_tx_time = 0.0
         self.last_cmd = None
         self.last_reject_log_t = 0.0
+
+        # Track robot position
+        self.robot_current_pos = ROBOT_HOME
 
     def check_calibration(self) -> bool:
         required = [
@@ -111,18 +129,6 @@ class IntegrationTestDay:
             _planner_print(f"ERROR initializing triangulator: {exc}")
             _planner_print(f"Calibration path: {self.calibration_dir}")
             return False
-
-    def initialize_predictor(self) -> None:
-        self.predictor = TrajectoryPredictor(
-            buffer_size=15,
-            min_points=6,
-            velocity_method="regression",
-            gravity=981.0,
-            y_down=True,
-            enable_drag=True,
-            camera_pitch_deg=20.0,
-            robot_x_cam=self.robot_x_cm,
-        )
 
     def send_home_and_wait_for_confirmation(self) -> bool:
         try:
@@ -172,19 +178,16 @@ class IntegrationTestDay:
             return
 
         self.run_top_level = enabled
-        if self.predictor is not None:
-            self.predictor.reset()
+        self.predictor.reset()
 
         if enabled:
-            # Opening gate: allow one fresh intercept send.
             self.intercept_target_sent = False
             _planner_print(f"[GATE] run_top_level=ON ({reason})")
         else:
-            # Closing gate: hard-stop downstream TX until re-open.
             self.intercept_target_sent = True
             _planner_print(f"[GATE] run_top_level=OFF ({reason})")
 
-    def maybe_send_intercept_target(self, cmd: dict, frame_timestamp_s: float) -> None:
+    def maybe_send_intercept_target(self, intercept: dict, frame_timestamp_s: float) -> None:
         if (
             not self.robot_homed
             or not self.accept_intercept_targets
@@ -192,16 +195,19 @@ class IntegrationTestDay:
             or self.shutdown_requested
         ):
             return
-        if not cmd.get("valid"):
+        if intercept is None:
             return
         if self.intercept_target_sent:
             return
-        if not cmd.get("in_workspace", False):
+
+        rx, ry, rz = intercept['x'], intercept['y'], intercept['z']
+
+        if not in_workspace(rx, ry, rz):
             now = time.perf_counter()
             if now - self.last_reject_log_t > 0.5:
                 _planner_print(
                     f"[UART] Not sending out-of-workspace target: "
-                    f"({cmd['robot_x']:+.0f}, {cmd['robot_y']:+.0f}, {cmd['robot_z']:+.0f})"
+                    f"({rx:+.0f}, {ry:+.0f}, {rz:+.0f})"
                 )
                 self.last_reject_log_t = now
             return
@@ -212,23 +218,29 @@ class IntegrationTestDay:
 
         time_sent = time.perf_counter()
         latency = max(0.0, time_sent - float(frame_timestamp_s))
-        adjusted_intercept_time = max(0.0, float(cmd["t"]) - latency)
+        adjusted_intercept_time = max(0.0, float(intercept['time']) - latency)
 
         try:
             self.uart.send_intercept(
-                x_mm=float(cmd["robot_x"]),
-                y_mm=float(cmd["robot_y"]),
-                z_mm=float(cmd["robot_z"]),
+                x_mm=rx,
+                y_mm=ry,
+                z_mm=rz,
+                vx_mm_s=intercept.get('vx', 0.0),
+                vy_mm_s=intercept.get('vy', 0.0),
+                vz_mm_s=intercept.get('vz', 0.0),
                 intercept_time_s=adjusted_intercept_time,
                 time_sent_s=time_sent,
                 timestamp_s=float(frame_timestamp_s),
             )
             self.last_tx_time = time_sent
-            self.last_cmd = cmd
+            self.last_cmd = intercept
+            self.robot_current_pos = (rx, ry, rz)
             self.intercept_target_sent = True
+            clamped = intercept.get('clamped', False)
+            tag = " [CLAMPED]" if clamped else ""
             _planner_print(
-                "[UART] Intercept sent "
-                f"(robot mm: x={cmd['robot_x']:+.1f}, y={cmd['robot_y']:+.1f}, z={cmd['robot_z']:+.1f}; "
+                f"[UART]{tag} Intercept sent "
+                f"(robot mm: x={rx:+.1f}, y={ry:+.1f}, z={rz:+.1f}; "
                 f"t={adjusted_intercept_time*1000.0:.0f} ms)"
             )
             _planner_print("[UART] Waiting for manual clear before next send")
@@ -277,37 +289,15 @@ class IntegrationTestDay:
         _planner_print("Background warmup ready.")
         return True
 
-    def draw_trajectory(self, frame, trajectory, color=(220, 160, 50)) -> None:
-        if len(trajectory) < 2:
+    def draw_intercept_marker(self, frame, intercept: dict) -> None:
+        """Draw X marker at intercept point on camera image."""
+        if intercept is None:
             return
-
-        points = []
-        for x, y, z, _ in trajectory:
-            uv = self.triangulator.project_to_image((x, y, z), camera="left")
-            if uv is None:
-                continue
-            u, v = float(uv[0]), float(uv[1])
-            if not math.isfinite(u) or not math.isfinite(v):
-                continue
-            px = int(round(u))
-            py = int(round(v))
-            # Skip wildly out-of-frame points to avoid OpenCV parse/overflow issues.
-            if px < -5000 or py < -5000 or px > frame.shape[1] + 5000 or py > frame.shape[0] + 5000:
-                continue
-            points.append((px, py))
-
-        for i in range(len(points) - 1):
-            cv2.line(frame, points[i], points[i + 1], color, 2, cv2.LINE_AA)
-        for i in range(0, len(points), max(1, len(points) // 15)):
-            cv2.circle(frame, points[i], 3, color, -1)
-
-    def draw_intercept(self, frame, cmd: dict, label: str = "SENT") -> None:
-        if not cmd.get("valid"):
-            return
-
-        uv = self.triangulator.project_to_image(
-            (cmd["cam_x"], cmd["cam_y"], cmd["cam_z"]), camera="left"
-        )
+        # Convert robot coords back to camera coords for projection
+        cx, cy, cz = robot_to_cam(
+            self.R, self.t_vec, self.cam_scale,
+            intercept['x'], intercept['y'], intercept['z'])
+        uv = self.triangulator.project_to_image((cx, cy, cz), camera="left")
         if uv is None:
             return
         u, v = float(uv[0]), float(uv[1])
@@ -318,13 +308,14 @@ class IntegrationTestDay:
         if px < -5000 or py < -5000 or px > frame.shape[1] + 5000 or py > frame.shape[0] + 5000:
             return
 
-        color = (0, 255, 255) if label.upper() == "SENT" else ((0, 255, 0) if cmd.get("in_workspace") else (0, 0, 255))
+        clamped = intercept.get('clamped', False)
+        color = (0, 200, 255) if clamped else (0, 255, 255)
         cv2.line(frame, (px - 12, py - 12), (px + 12, py + 12), color, 2)
         cv2.line(frame, (px - 12, py + 12), (px + 12, py - 12), color, 2)
         cv2.circle(frame, (px, py), 16, color, 2)
         cv2.putText(
             frame,
-            f"{label} t={cmd['t']*1000:.0f}ms {cmd.get('strategy','?')}",
+            f"t={intercept['time']*1000:.0f}ms",
             (px + 20, py - 6),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.45,
@@ -338,38 +329,30 @@ class IntegrationTestDay:
         right_vis,
         fps: float,
         result: dict,
-        cmd: dict,
+        intercept: Optional[dict],
         tri_robot_pos: Optional[tuple[float, float, float]],
     ) -> None:
         stats = self.predictor.get_stats()
-        vel = self.predictor.get_velocity()
 
         cv2.putText(
             left_vis,
-            f"FPS:{fps:.1f}  Buf:{stats['buffer_size']}  Rej:{stats['rejected']}",
+            f"FPS:{fps:.1f}  Buf:{stats['buffer']}  Rej:{stats['rejected']}",
             (10, 20),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.45,
             (180, 180, 180),
             1,
         )
-        cv2.putText(
-            left_vis,
-            f"Robot X plane: {self.robot_x_cm:.1f} cm",
-            (10, 40),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.45,
-            (200, 220, 255),
-            1,
-        )
 
-        if self.show_velocity and vel["valid"]:
+        if self.show_velocity and self.predictor.velocity is not None:
+            vx, vy, vz = self.predictor.velocity
+            speed = math.sqrt(vx*vx + vy*vy + vz*vz)
             cv2.putText(
                 left_vis,
-                f"Vx={vel['vx']:+.0f} Vy={vel['vy']:+.0f} Vz={vel['vz']:+.0f}  Spd={vel['speed']:.0f}",
-                (10, 60),
+                f"Vel(mm/s): X={vx:+.0f} Y={vy:+.0f} Z={vz:+.0f}  Spd={speed:.0f}",
+                (10, 40),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.45,
+                0.42,
                 (255, 255, 0),
                 1,
             )
@@ -408,7 +391,7 @@ class IntegrationTestDay:
             cv2.putText(
                 right_vis,
                 (
-                    f"Tri robot(mm): X={tri_robot_pos[0]:+.0f} "
+                    f"Robot(mm): X={tri_robot_pos[0]:+.0f} "
                     f"Y={tri_robot_pos[1]:+.0f} Z={tri_robot_pos[2]:+.0f}"
                 ),
                 (10, 42),
@@ -418,17 +401,14 @@ class IntegrationTestDay:
                 1,
             )
             cmd_row = 62
-            meta_row = 82
         else:
             cmd_row = 42
-            meta_row = 62
 
-        if cmd.get("valid"):
-            ws = "IN" if cmd.get("in_workspace") else "OUT"
-            reach = "Y" if cmd.get("reachable") else "N"
+        if intercept is not None:
+            ws = "IN" if in_workspace(intercept['x'], intercept['y'], intercept['z']) else "OUT"
             cv2.putText(
                 right_vis,
-                f"Robot(mm): X={cmd['robot_x']:+.0f} Y={cmd['robot_y']:+.0f} Z={cmd['robot_z']:+.0f}",
+                f"Int(mm): X={intercept['x']:+.0f} Y={intercept['y']:+.0f} Z={intercept['z']:+.0f}",
                 (10, cmd_row),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.42,
@@ -437,8 +417,8 @@ class IntegrationTestDay:
             )
             cv2.putText(
                 right_vis,
-                f"t={cmd['t']*1000:.0f}ms  {cmd.get('strategy','?')}  WS:{ws}  Reach:{reach}",
-                (10, meta_row),
+                f"t={intercept['time']*1000:.0f}ms  WS:{ws}",
+                (10, cmd_row + 18),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.42,
                 (220, 220, 220),
@@ -447,7 +427,7 @@ class IntegrationTestDay:
 
         cv2.putText(
             right_vis,
-            "q quit(home) | g gate | c clearTX | r reset | v vel | t traj | z/x | b bg",
+            "q quit(home) | g gate | c clearTX | r reset | v vel | b bg",
             (10, right_vis.shape[0] - 12),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.33,
@@ -457,11 +437,13 @@ class IntegrationTestDay:
 
     def run(self) -> None:
         _planner_print("\n" + "=" * 72)
-        _planner_print(" TEST INTEGRATION DAY: Updated Stereo + Updated Planner + UART ")
+        _planner_print(" TEST INTEGRATION DAY: Stereo + RobotPredictor + UART ")
         _planner_print("=" * 72)
         _planner_print(f"Cameras: L={self.cam_left_id} R={self.cam_right_id}")
-        _planner_print(f"Interception plane (camera X): {self.robot_x_cm:.1f} cm")
-        _planner_print("Controls: q g c r v t p z x b")
+        _planner_print(f"Workspace: ellipse {ELLIPSE_A:.0f}x{ELLIPSE_B:.0f}mm, "
+                       f"Z=[{Z_MIN:.0f}, {Z_MAX:.0f}]  Drag={DRAG_K:.6f}")
+        _planner_print(f"Transform scale={self.cam_scale:.4f}")
+        _planner_print("Controls: q g c r v b")
         _planner_print("=" * 72)
 
         if not self.send_home_and_wait_for_confirmation():
@@ -486,8 +468,6 @@ class IntegrationTestDay:
             self.uart.close()
             return
 
-        self.initialize_predictor()
-
         if not self.warmup_background():
             self.request_shutdown_home()
             self.triangulator.stop_cameras()
@@ -507,7 +487,7 @@ class IntegrationTestDay:
                 self.uart.print_pending_status()
 
                 result = self.triangulator.update()
-                frame_timestamp = time.perf_counter()
+                frame_timestamp = result.get("capture_time", time.perf_counter())
                 if result["left_frame"] is None:
                     continue
 
@@ -517,28 +497,27 @@ class IntegrationTestDay:
                     fps = 30.0 / max(1e-6, (time.time() - fps_time))
                     fps_time = time.time()
 
-                cmd = {"valid": False}
+                intercept = None
                 if self.run_top_level:
                     if result["found_3d"]:
-                        self.predictor.add_position(*result["position_3d"], timestamp=frame_timestamp)
-                        tri_robot_pos = self.predictor.cam_to_robot(*result["position_3d"])
+                        cx, cy, cz = result["position_3d"]
+                        rx, ry, rz = cam_to_robot(
+                            self.R, self.t_vec, self.cam_scale, cx, cy, cz)
+                        tri_robot_pos = (rx, ry, rz)
+                        self.predictor.add_position(rx, ry, rz, frame_timestamp)
 
-                    cmd = self.predictor.get_robot_command(target_x=self.robot_x_cm)
-                    if result["found_3d"] and cmd.get("valid"):
-                        self.maybe_send_intercept_target(cmd, frame_timestamp)
+                    if self.predictor.is_ready():
+                        intercept = self.predictor.predict_intercept(
+                            robot_pos=self.robot_current_pos)
+                        if intercept is not None and result["found_3d"]:
+                            self.maybe_send_intercept_target(intercept, frame_timestamp)
 
                 left_vis, right_vis = self.triangulator.draw_results(result)
 
-                # Visualization uses a shorter horizon than interception planning
-                # so the on-screen arc stays near-term and easier to trust.
-                if (self.run_top_level and self.show_trajectory and
-                        result["found_3d"] and self.predictor.is_ready()):
-                    traj = self.predictor.predict_trajectory(duration=0.35, dt=0.005)
-                    self.draw_trajectory(left_vis, traj)
                 if self.run_top_level and self.last_cmd and self.intercept_target_sent:
-                    self.draw_intercept(left_vis, self.last_cmd, label="SENT")
+                    self.draw_intercept_marker(left_vis, self.last_cmd)
 
-                self.draw_overlay(left_vis, right_vis, fps, result, cmd, tri_robot_pos)
+                self.draw_overlay(left_vis, right_vis, fps, result, intercept, tri_robot_pos)
 
                 dw = 640
                 dh = int(dw * self.frame_height / self.frame_width)
@@ -546,17 +525,15 @@ class IntegrationTestDay:
                 right_small = cv2.resize(right_vis, (dw, dh))
                 cv2.imshow("Integration Test Day", cv2.hconcat([left_small, right_small]))
 
-                if self.run_top_level and result["found_3d"] and self.predictor.get_velocity()["valid"]:
-                    x, y, z = result["position_3d"]
-                    v = self.predictor.get_velocity()
+                if self.run_top_level and tri_robot_pos is not None:
                     line = (
-                        f"\rfrom planner in terminal Pos:({x:6.1f},{y:6.1f},{z:6.1f}) "
-                        f"Vel:({v['vx']:6.1f},{v['vy']:6.1f},{v['vz']:6.1f})"
+                        f"\rfrom planner in terminal Robot(mm):({tri_robot_pos[0]:+6.0f},"
+                        f"{tri_robot_pos[1]:+6.0f},{tri_robot_pos[2]:+7.0f})"
                     )
-                    if cmd.get("valid"):
+                    if intercept is not None:
                         line += (
-                            f" Cmd(mm):({cmd['robot_x']:+6.0f},{cmd['robot_y']:+6.0f},"
-                            f"{cmd['robot_z']:+7.0f}) t={cmd['t']*1000:5.0f}ms"
+                            f" Int:({intercept['x']:+6.0f},{intercept['y']:+6.0f},"
+                            f"{intercept['z']:+7.0f}) t={intercept['time']*1000:5.0f}ms"
                         )
                     print(line + "   ", end="")
 
@@ -575,18 +552,6 @@ class IntegrationTestDay:
                     _planner_print("[RESET]")
                 elif key == ord("v"):
                     self.show_velocity = not self.show_velocity
-                elif key == ord("t"):
-                    self.show_trajectory = not self.show_trajectory
-                elif key == ord("p"):
-                    _planner_print(f"[STATS] {self.predictor.get_stats()}")
-                elif key == ord("z"):
-                    self.robot_x_cm += 5.0
-                    self.predictor.set_robot_endline(self.robot_x_cm)
-                    _planner_print(f"[Robot X plane = {self.robot_x_cm:.1f} cm]")
-                elif key == ord("x"):
-                    self.robot_x_cm -= 5.0
-                    self.predictor.set_robot_endline(self.robot_x_cm)
-                    _planner_print(f"[Robot X plane = {self.robot_x_cm:.1f} cm]")
                 elif key == ord("b"):
                     self.triangulator.reset_background()
                     self.predictor.reset()
@@ -624,7 +589,7 @@ class IntegrationTestDay:
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Updated integration test: stereo triangulation + trajectory + UART"
+        description="Integration test: stereo triangulation + RobotPredictor + UART"
     )
     parser.add_argument(
         "--port",
@@ -632,12 +597,6 @@ def _parse_args() -> argparse.Namespace:
         help="UART port for STM32 (or set STM32_UART_PORT env var)",
     )
     parser.add_argument("--baud", type=int, default=115200, help="UART baud (default: 115200)")
-    parser.add_argument(
-        "--robot-x-cm",
-        type=float,
-        default=50.0,
-        help="Interception plane in camera X (cm). Default: 50",
-    )
     parser.add_argument(
         "--home-ack-timeout",
         type=float,
@@ -671,7 +630,6 @@ def main() -> int:
     app = IntegrationTestDay(
         uart_port=args.port,
         baud_rate=args.baud,
-        robot_x_cm=args.robot_x_cm,
         home_ack_timeout_s=home_ack_timeout,
         uart_verbose=(not args.quiet_uart),
         tx_interval_s=max(0.0, float(args.tx_interval_ms) / 1000.0),

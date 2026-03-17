@@ -1,11 +1,11 @@
 """
+DEPRECATED — used only by trajectory_predictor.py (deprecated camera-frame predictor).
+For new code, use trajectory.robot_predictor.RobotPredictor which manages its own buffer.
+
 Position Buffer - Timestamped 3D Position History
 
 Stores recent ball positions with timestamps for velocity calculation.
 Uses a circular buffer to maintain fixed memory usage.
-
-Part of trajectory prediction pipeline:
-  position_buffer.py  →  velocity_estimator.py  →  trajectory_predictor.py
 """
 
 import time

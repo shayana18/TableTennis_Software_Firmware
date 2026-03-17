@@ -16,10 +16,9 @@ Coordinate system (camera frame, cameras on SIDE of table looking ACROSS width):
         g_y = g * cos(pitch)   (dominant, along camera Y)
         g_z = -g * sin(pitch)  (toward camera, along camera Z)
 
-Part of trajectory prediction pipeline:
-  position_buffer.py  →  velocity_estimator.py  →  trajectory_predictor.py
-                                                          ↓
-                                                   physics_model.py
+NOTE: For real-time robot control, use trajectory.robot_predictor.RobotPredictor
+instead. This module is kept for post-hoc analysis in camera frame (e.g.
+test_velocity_validation.py ThrowAnalyzer).
 """
 
 import math

@@ -1,5 +1,13 @@
 """
-Trajectory Predictor - Main Prediction Class
+DEPRECATED — use trajectory.robot_predictor.RobotPredictor for real-time robot control.
+
+This module is kept for backward compatibility with camera-frame analysis scripts
+(test_velocity_validation.py, test_trajectory_prediction.py). For new code, use:
+    from trajectory.robot_predictor import RobotPredictor
+    from trajectory.workspace import in_workspace, ROBOT_HOME, ...
+    from comm_function.points_based_transform import cam_to_robot
+
+Trajectory Predictor - Camera-Frame Prediction Class (DEPRECATED)
 
 Predicts where and when the ball will arrive at the robot's end of the table.
 

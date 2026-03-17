@@ -41,7 +41,7 @@ if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 
 from tracking.stereo_triangulator import StereoTriangulator
-from trajectory.trajectory_predictor import TrajectoryPredictor
+from trajectory.trajectory_predictor import TrajectoryPredictor  # deprecated, camera-frame analysis
 from trajectory.physics_model import PhysicsModel
 from config.camera_config import load_camera_settings
 

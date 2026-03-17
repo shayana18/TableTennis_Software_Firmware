@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "Bash(python3 -m py_compile top_level_control/scripts/test_find_points_based_transform.py && echo \"OK\")",
-      "Bash(python3 -m py_compile top_level_control/scripts/test_integration_simple.py && echo \"OK\")"
+      "Bash(python3 -m py_compile top_level_control/scripts/test_integration_simple.py && echo \"OK\")",
+      "Bash(cd:*)",
+      "Bash(python3:*)"
     ]
   }
 }

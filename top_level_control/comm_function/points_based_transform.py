@@ -206,3 +206,35 @@ def load_points_based_transform(
         "camera_scale_to_robot_units": scale,
         "raw": data,
     }
+
+
+def cam_to_robot(
+    R: np.ndarray,
+    t: np.ndarray,
+    scale: float,
+    cam_x: float,
+    cam_y: float,
+    cam_z: float,
+) -> tuple[float, float, float]:
+    """Camera coords -> robot coords using points-based transform.
+
+    p_robot = R @ (p_camera * scale) + t
+    """
+    p = R @ (np.array([cam_x, cam_y, cam_z]) * scale) + t
+    return float(p[0]), float(p[1]), float(p[2])
+
+
+def robot_to_cam(
+    R: np.ndarray,
+    t: np.ndarray,
+    scale: float,
+    robot_x: float,
+    robot_y: float,
+    robot_z: float,
+) -> tuple[float, float, float]:
+    """Robot coords -> camera coords (inverse of cam_to_robot).
+
+    p_camera = R^T @ (p_robot - t) / scale
+    """
+    p_cam = R.T @ (np.array([robot_x, robot_y, robot_z]) - t) / scale
+    return float(p_cam[0]), float(p_cam[1]), float(p_cam[2])
