@@ -36,6 +36,7 @@ from .workspace import (
     ELLIPSE_A, ELLIPSE_B, Z_MIN, Z_MAX, MAX_CLAMP_DIST,
     ROBOT_HOME, MAX_CART_VEL, MAX_CART_ACC,
     CM_TO_MM, GRAVITY_Z, DRAG_K,
+    Z_TABLE_SURFACE, RESTITUTION_COEFF, FRICTION_COEFF, MAX_BOUNCES,
     in_workspace, clamp_to_workspace,
 )
 from .physics_model import PhysicsModel, predict_ball_position
@@ -47,6 +48,7 @@ __all__ = [
     'ELLIPSE_A', 'ELLIPSE_B', 'Z_MIN', 'Z_MAX', 'MAX_CLAMP_DIST',
     'ROBOT_HOME', 'MAX_CART_VEL', 'MAX_CART_ACC',
     'CM_TO_MM', 'GRAVITY_Z', 'DRAG_K',
+    'Z_TABLE_SURFACE', 'RESTITUTION_COEFF', 'FRICTION_COEFF', 'MAX_BOUNCES',
     'in_workspace', 'clamp_to_workspace',
 ]
 

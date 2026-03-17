@@ -30,6 +30,11 @@ GRAVITY_Z      = -9810.0        # mm/s^2, robot Z is vertical, negative = down
 #   = 0.5 * 0.40 * 1.2e-9 * pi*20^2 / 0.0027 = 1.12e-4
 DRAG_K         = 0.000112       # mm^-1 -- drag deceleration: a = -DRAG_K * |v| * v
 
+Z_TABLE_SURFACE   = -1150.0    # mm, table top in robot frame
+RESTITUTION_COEFF = 0.85       # vz damping on bounce (ping pong on MDF)
+FRICTION_COEFF    = 0.95       # vx/vy damping on bounce (tangential friction)
+MAX_BOUNCES       = 2          # max bounces in prediction scan
+
 
 def in_workspace(x, y, z):
     """Firmware-matching ellipse check."""
