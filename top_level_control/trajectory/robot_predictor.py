@@ -1,13 +1,10 @@
 """
 Robot-frame trajectory predictor — single source of truth.
 
-Extracted verbatim from test_integration_simple.py (v5), which is proven
-in real robot testing. All prediction operates in robot frame (mm).
-
 Pipeline:
   1. Add robot-frame positions via add_position(x, y, z, t)
-  2. Velocity estimated via least-squares regression with gravity correction
-  3. Trajectory forward-simulated with gravity + air drag (Euler integration)
+  2. State estimated with BallStateEstimator3D
+  3. Trajectory forward-simulated with gravity + air drag
   4. Interception found via workspace scan + clamp fallback
 """
 
@@ -20,22 +17,22 @@ from collections import deque
 import numpy as np
 
 from .workspace import (
-    ELLIPSE_A, ELLIPSE_B, Z_MIN, Z_MAX, MAX_CLAMP_DIST,
-    ROBOT_HOME, GRAVITY_Z, DRAG_K,
+    MAX_CLAMP_DIST, GRAVITY_Z, DRAG_K,
     Z_TABLE_SURFACE, RESTITUTION_COEFF, FRICTION_COEFF, MAX_BOUNCES,
     in_workspace, clamp_to_workspace,
 )
+from .ball_state_estimation import BallStateEstimator3D
 
 
 class RobotPredictor:
     """
     Trajectory predictor in robot frame (mm).
-    Uses Euler integration with gravity + air drag.
+    Uses BallStateEstimator3D when available, else falls back to legacy fitting.
     """
 
     BUFFER_SIZE    = 15
-    MIN_POINTS     = 6      # minimum for regression
-    MIN_TIME_SPAN  = 0.08   # seconds -- require 80ms of data (~8 frames)
+    MIN_POINTS     = 6      # minimum updates before ready
+    MIN_TIME_SPAN  = 0.08   # seconds of measurement history before ready
     MAX_SPEED      = 15000.0 # mm/s
     MAX_JUMP       = 400.0   # mm
     GAP_RESET      = 0.12   # seconds
@@ -60,6 +57,18 @@ class RobotPredictor:
     def __init__(self):
         self.positions = deque(maxlen=self.BUFFER_SIZE)
         self.velocity = None
+        self.state_estimator = None
+        self._using_state_estimator = False
+        try:
+            self.state_estimator = BallStateEstimator3D(
+                gravity_z=GRAVITY_Z,
+                max_gap_s=self.GAP_RESET,
+                min_updates=self.MIN_POINTS,
+            )
+            self._using_state_estimator = True
+        except ImportError:
+            # Keep the proven legacy estimator alive until FilterPy is installed.
+            self.state_estimator = None
         self._rejected = 0
         self._accepted = 0
         self._last_reject_reason = None
@@ -70,6 +79,8 @@ class RobotPredictor:
     def reset(self):
         self.positions.clear()
         self.velocity = None
+        if self.state_estimator is not None:
+            self.state_estimator.reset()
         self._z_min_since_reset = None
         self._rising_count = 0
         self._bounce_count = 0
@@ -108,10 +119,25 @@ class RobotPredictor:
             self._handle_observed_bounce()
             return True
 
-        if len(self.positions) >= self.MIN_POINTS:
+        if self.state_estimator is not None:
+            # Replaces regression-based velocity estimation with KF state updates.
+            accepted, _state = self.state_estimator.estimate(x, y, z, t)
+            if not accepted:
+                self.positions.pop()
+                self._accepted -= 1
+                self._rejected += 1
+                self._last_reject_reason = "kf_dt"
+                return False
+
+            self.velocity = (
+                self.state_estimator.get_velocity()
+                if self.state_estimator.is_ready()
+                else None
+            )
+        elif len(self.positions) >= self.MIN_POINTS:
             span = self.positions[-1][3] - self.positions[0][3]
             if span >= self.MIN_TIME_SPAN:
-                self._estimate_velocity()
+                self._estimate_velocity_legacy()
 
         return True
 
@@ -151,13 +177,21 @@ class RobotPredictor:
         self.positions.clear()
         for p in keep:
             self.positions.append(p)
+
+        if self.state_estimator is not None:
+            # Bounce is a state jump, so restart the KF on the new arc.
+            self.state_estimator.reset()
+            if self.positions:
+                last = self.positions[-1]
+                self.state_estimator.initialize_from_measurement(*last)
+
         self.velocity = None
         self._z_min_since_reset = None
         self._rising_count = 0
         self._bounce_count += 1
 
-    def _estimate_velocity(self):
-        """Estimate velocity via least-squares regression with drag correction."""
+    def _estimate_velocity_legacy(self):
+        """Fallback regression estimator used when FilterPy is unavailable."""
         n = len(self.positions)
         pts = list(self.positions)
 
@@ -169,14 +203,12 @@ class RobotPredictor:
 
         A = np.column_stack([dt, np.ones(n)])
 
-        # Pass 1: standard fit (gravity-only on Z)
         vx = float(np.linalg.lstsq(A, xs, rcond=None)[0][0])
         vy = float(np.linalg.lstsq(A, ys, rcond=None)[0][0])
 
         zs_grav = zs - 0.5 * GRAVITY_Z * dt * dt
         vz = float(np.linalg.lstsq(A, zs_grav, rcond=None)[0][0])
 
-        # Pass 2: subtract drag-induced position offsets, re-fit
         speed0 = math.sqrt(vx*vx + vy*vy + vz*vz)
         if speed0 > 1e-3:
             drag_factor = 0.5 * DRAG_K * speed0
@@ -196,19 +228,37 @@ class RobotPredictor:
         self.velocity = (vx, vy, vz)
 
     def is_ready(self):
-        if self.velocity is None:
+        if self.state_estimator is not None and not self.state_estimator.is_ready():
             return False
         if not self.positions:
+            return False
+        if self.velocity is None:
+            return False
+        span = self.positions[-1][3] - self.positions[0][3]
+        if span < self.MIN_TIME_SPAN:
             return False
         age = time.perf_counter() - self.positions[-1][3]
         return age < self.STALE_TIMEOUT
 
+    def _get_prediction_state(self):
+        """Return the current state used to seed future prediction."""
+        if self.state_estimator is not None:
+            state = self.state_estimator.get_state()
+            if state is not None:
+                return state
+        if not self.positions or self.velocity is None:
+            return None
+        x, y, z, _ = self.positions[-1]
+        vx, vy, vz = self.velocity
+        return x, y, z, vx, vy, vz
+
     def _ball_approaching(self):
         """Check if ball is moving toward the workspace."""
-        if not self.positions or self.velocity is None:
+        # Replaces split raw/KF reads with one prediction state source.
+        state = self._get_prediction_state()
+        if state is None:
             return False
-        y_now = self.positions[-1][1]
-        vy = self.velocity[1]
+        _, y_now, _, _, vy, _ = state
         if abs(y_now) < self.APPROACH_Y_THRESHOLD:
             return True
         return vy < self.MIN_APPROACH_VY
@@ -279,15 +329,17 @@ class RobotPredictor:
         if not self._ball_approaching():
             return None
 
+        state = self._get_prediction_state()
+        if state is None:
+            return None
+
         # Proximity filter
-        y_now = self.positions[-1][1]
+        y_now = state[1]
         if y_now > self.MAX_PREDICT_Y:
             return None
 
-        x, y, z, _ = self.positions[-1]
-        vx, vy, vz = self.velocity
-
-        rp = robot_pos if robot_pos is not None else ROBOT_HOME
+        # Replaces raw last-sample start with the current prediction state.
+        x, y, z, vx, vy, vz = state
 
         # Track closest-to-workspace point for fallback
         best_clamp = None
@@ -339,13 +391,18 @@ class RobotPredictor:
         return None
 
     def get_current_position(self):
-        if not self.positions:
-            return None
-        p = self.positions[-1]
-        return (p[0], p[1], p[2])
+        if self.state_estimator is not None:
+            pos = self.state_estimator.get_position()
+            if pos is not None:
+                return pos
+        if self.positions:
+            p = self.positions[-1]
+            return (p[0], p[1], p[2])
+        return None
 
     def get_stats(self):
-        y_now = self.positions[-1][1] if self.positions else 9999
+        pos = self.state_estimator.get_position() if self.state_estimator is not None else None
+        y_now = pos[1] if pos is not None else (self.positions[-1][1] if self.positions else 9999)
         return {
             'buffer': len(self.positions),
             'accepted': self._accepted,
@@ -354,4 +411,7 @@ class RobotPredictor:
             'approaching': self._ball_approaching() if self.velocity else False,
             'close_enough': y_now <= self.MAX_PREDICT_Y,
             'bounces': self._bounce_count,
+            'kf_ready': self.state_estimator.is_ready() if self.state_estimator is not None else False,
+            'kf_updates': self.state_estimator.update_count if self.state_estimator is not None else 0,
+            'kf_enabled': self._using_state_estimator,
         }

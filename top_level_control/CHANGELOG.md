@@ -993,3 +993,83 @@ MAX_CART_ACC  = 20000 mm/s²
 2. **Test velocity data** — Verify STM32 receives correct velocity values (print `ball_vel` on STM32 side)
 3. **Use velocity for strike planning** — Ball velocity enables paddle angle/speed computation for return shots
 4. **Continue accuracy testing** — Refine prediction with real throw data
+
+
+## Session: 2026-03-18 (3D Kalman Filter State Estimation)
+
+### Status: Implemented. Legacy fallback preserved. Needs FilterPy install + R/Q tuning before live use.
+
+---
+
+### Change #23: Added 3D Ball State Estimator
+
+**File:** `trajectory/ball_state_estimation.py` — **NEW**
+
+**What:** Added `BallStateEstimator3D`, a robot-frame linear Kalman filter for ball state estimation.
+
+**Model:**
+- State: `(px, py, pz, vx, vy, vz)`
+- Measurement: `(px, py, pz)`
+- `dt = t_k - t_(k-1)` from consecutive timestamped robot-frame measurements
+- Gravity handled as known input on `z`
+
+**Behavior:**
+- First valid point initializes the filter
+- Large time gaps reinitialize the filter
+- `is_ready()` requires multiple fused updates before the estimate is trusted
+
+**Why:** Replaces raw-point velocity fitting with a proper current-state estimate, giving smoother position/velocity for downstream trajectory prediction.
+
+---
+
+### Change #24: Integrated KF Into RobotPredictor With Safe Fallback
+
+**File:** `trajectory/robot_predictor.py`
+
+**What:** `RobotPredictor` now uses `BallStateEstimator3D` for current state estimation when available, while keeping the existing forward physics and workspace scan intact.
+
+**Logic changes:**
+- `add_position()` still does the same raw timestamp / jump / speed gating
+- Accepted robot-frame points now update the KF instead of directly driving regression velocity
+- `predict_intercept()` now seeds from the current estimated state, not the last raw point
+- Observed bounces reset the estimator because bounce is a state discontinuity
+- If `filterpy` is unavailable, predictor falls back to the previous regression-based estimator
+
+**Why:** This is the least intrusive upgrade path. Measurement intake, bounce detection, and forward prediction stay familiar, while only the current-state estimate changes.
+
+**Note:** `R` and `Q` are conservative starter values. If the KF looks noisy or laggy, tune them from replayed throws before trusting live hits.
+
+---
+
+### Change #25: Added Live KF vs Legacy Trajectory Comparison Tool
+
+**File:** `scripts/test_trajectory.py` — **NEW**
+
+**What:** Added a simple live comparison script using the same main modules as `test_integration_simple.py`:
+- `StereoTriangulator`
+- `cam_to_robot()`
+- `RobotPredictor`
+- `BallStateEstimator3D`
+
+**Behavior:**
+- Blue line: trajectory from KF-estimated current state
+- Red line: trajectory from legacy regression + raw-position start state
+- White points: measured robot-frame positions
+
+**Why:** Gives a direct visual check that the KF path is actually improving trajectory stability before using it in the hit pipeline.
+
+---
+
+### Support Updates
+
+**Files:**
+- `trajectory/__init__.py`
+- `requirements.txt`
+
+**What:**
+- Exported `BallStateEstimator3D` from `trajectory`
+- Added `scipy` and `filterpy` to requirements
+
+**Why:** Keeps the estimator importable from the shared trajectory package and makes the dependency explicit.
+
+---

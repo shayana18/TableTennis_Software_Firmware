@@ -3,6 +3,7 @@ Trajectory Prediction Module
 
 COMPONENTS:
     RobotPredictor  - Robot-frame predictor (single source of truth for real-time)
+    BallStateEstimator3D - 3D robot-frame state estimator
     workspace       - Workspace constants and boundary checks
     PhysicsModel    - Camera-frame kinematic equations (for analysis scripts)
 
@@ -32,6 +33,7 @@ USAGE (post-hoc analysis in camera frame):
 """
 
 from .robot_predictor import RobotPredictor
+from .ball_state_estimation import BallStateEstimator3D
 from .workspace import (
     ELLIPSE_A, ELLIPSE_B, Z_MIN, Z_MAX, MAX_CLAMP_DIST,
     ROBOT_HOME, MAX_CART_VEL, MAX_CART_ACC,
@@ -43,6 +45,7 @@ from .physics_model import PhysicsModel, predict_ball_position
 
 __all__ = [
     'RobotPredictor',
+    'BallStateEstimator3D',
     'PhysicsModel',
     'predict_ball_position',
     'ELLIPSE_A', 'ELLIPSE_B', 'Z_MIN', 'Z_MAX', 'MAX_CLAMP_DIST',
