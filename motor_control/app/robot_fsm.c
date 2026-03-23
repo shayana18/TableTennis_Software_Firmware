@@ -51,11 +51,15 @@ void delta_fsm(robot_t *robot)
 
   switch (robot->state) {
     case STATE_OFF:
-
-    // TO Implement: Limit switch logic
+    
       robot_runtime_send_status("STATE: OFF\r\n");
-      robot->state = STATE_IDLE;
-      robot_runtime_send_status("STATE: IDLE\r\n");
+      if(robot_runtime_pop_target(&robot->current_target) && robot->current_target.type == TARGET_HOME)
+      {
+          robot_runtime_send_status("HOMING...\r\n");
+          motion_execute_make_home_target(robot);
+          robot->state = STATE_PLAN;
+          robot_runtime_send_status("STATE: PLAN\r\n");
+      }
       break;
       
     case STATE_IDLE:
