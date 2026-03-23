@@ -30,9 +30,9 @@ class RobotPredictor:
     Uses BallStateEstimator3D when available, else falls back to legacy fitting.
     """
 
-    BUFFER_SIZE    = 15
-    MIN_POINTS     = 6      # minimum updates before ready
-    MIN_TIME_SPAN  = 0.08   # seconds of measurement history before ready
+    BUFFER_SIZE    = 10
+    MIN_POINTS     = 8      # minimum updates before ready
+    MIN_TIME_SPAN  = 0.06   # seconds of measurement history before ready (was 0.08)
     MAX_SPEED      = 15000.0 # mm/s
     MAX_JUMP       = 400.0   # mm
     GAP_RESET      = 0.12   # seconds
@@ -47,12 +47,15 @@ class RobotPredictor:
     MAX_PREDICT_Y  = 1400.0  # mm -- ball must be closer than this
 
     # Direction filter
-    MIN_APPROACH_VY = -200.0
+    MIN_APPROACH_VY = 0
     APPROACH_Y_THRESHOLD = 600.0
 
     # Observed bounce detection
-    MIN_BOUNCE_FALL_Z  = 50.0   # mm minimum Z descent before accepting bounce
-    BOUNCE_RISE_FRAMES = 2      # consecutive rising frames to confirm
+    MIN_BOUNCE_FALL_Z  = 150.0  # mm minimum Z descent before accepting bounce (was 50; stereo noise is ±30-50mm)
+    BOUNCE_RISE_FRAMES = 3      # consecutive rising frames to confirm (was 2)
+
+    # Post-bounce KF needs more updates before ready (VZ is very noisy after bounce)
+    POST_BOUNCE_MIN_UPDATES = 6
 
     def __init__(self):
         self.positions = deque(maxlen=self.BUFFER_SIZE)
@@ -63,7 +66,7 @@ class RobotPredictor:
             self.state_estimator = BallStateEstimator3D(
                 gravity_z=GRAVITY_Z,
                 max_gap_s=self.GAP_RESET,
-                min_updates=self.MIN_POINTS,
+                min_updates=4,  # fewer updates needed with smoother KF (was MIN_POINTS=6)
             )
             self._using_state_estimator = True
         except ImportError:
@@ -87,6 +90,12 @@ class RobotPredictor:
 
     def add_position(self, x, y, z, t):
         """Add a robot-frame position (mm). Returns True if accepted."""
+        # Reject positions clearly outside playing volume
+        if y > 3000.0 or y < -500.0 or abs(x) > 2000.0 or z > 0.0 or z < -2000.0:
+            self._rejected += 1
+            self._last_reject_reason = f"out_of_bounds(y={y:.0f})"
+            return False
+
         if self.positions:
             last = self.positions[-1]
             dt = t - last[3]
@@ -184,6 +193,8 @@ class RobotPredictor:
             if self.positions:
                 last = self.positions[-1]
                 self.state_estimator.initialize_from_measurement(*last)
+            # Require more updates post-bounce for VZ to stabilize
+            self.state_estimator.min_updates = self.POST_BOUNCE_MIN_UPDATES
 
         self.velocity = None
         self._z_min_since_reset = None

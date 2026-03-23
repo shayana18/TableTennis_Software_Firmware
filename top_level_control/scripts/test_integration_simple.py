@@ -81,12 +81,13 @@ class SimpleIntegration:
         self.predictor = RobotPredictor()
         self.uart = UartComm(port=uart_port, baud_rate=baud_rate, verbose=uart_verbose)
 
-        # Camera->robot transform (points-based)
-        tf = load_points_based_transform()
+        # Camera->robot transform (combined: XY from points-based, Z from measurement-based)
+        combined_path = os.path.join(self.base_dir, "comm_function", "combined_transform.json")
+        tf = load_points_based_transform(combined_path)
         self.R = tf["rotation"]
         self.t_vec = tf["translation"]
         self.cam_scale = tf["camera_scale_to_robot_units"]
-        _print(f"Loaded points-based transform (scale={self.cam_scale})")
+        _print(f"Loaded combined transform (scale={self.cam_scale})")
 
         self.robot_homed = False
         self.run_gate = False
@@ -399,24 +400,23 @@ class SimpleIntegration:
 
             if "COMPLETED Q" in upper:
                 if self._pending_action == 'intercept':
-                    _print("[AUTO] Intercept done. Sending HOME...")
-                    self._pending_action = 'homing'
+                    _print("[AUTO] Intercept done. Press 'h' to home.")
+                    self._pending_action = None
                     self._stm32_moving = False
-                    try:
-                        if self.uart.is_open and not self.shutdown_requested:
-                            self.uart.send_home()
-                    except Exception:
-                        pass
+                    self._end_throw_log("intercept_done")
+                    self.predictor.reset()
+                    self.intercept_sent = False
+                    self._update_count = 0
 
                 elif self._pending_action == 'homing':
                     self._pending_action = None
                     self._stm32_moving = False
                     self.robot_current_pos = ROBOT_HOME
-                    self._end_throw_log("auto_home_done")
+                    self._end_throw_log("manual_home_done")
                     self.predictor.reset()
                     self.intercept_sent = False
                     self._update_count = 0
-                    _print("[AUTO] Home done. Ready for next throw.")
+                    _print("[HOME] Home done. Ready for next throw.")
 
             elif "TARGET OUT OF WORKSPACE" in upper:
                 _print("[WARN] STM32 rejected target (IK workspace). Auto-clearing.")
@@ -750,7 +750,7 @@ class SimpleIntegration:
                 appr = "Y" if stats.get('approaching') else "N"
                 cv2.putText(left_vis,
                     f"FPS:{fps:.0f}  Buf:{stats['buffer']}  Gate:{gate_str}  TX:{tx_str}  Appr:{appr}",
-                    (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (180, 180, 180), 1)
+                    (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 1)
 
                 if robot_pos is not None:
                     cv2.putText(left_vis,

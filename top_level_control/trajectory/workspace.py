@@ -11,11 +11,11 @@ These constants match the firmware (robot.h) with safety margins applied.
 import math
 
 # Workspace -- firmware ellipse with safety margin to avoid IK rejections
-ELLIPSE_A      = 790.0 * 0.9   # mm X semi-axis (711.0 after 10% margin)
-ELLIPSE_B      = 540.0 * 0.9   # mm Y semi-axis (486.0 after 10% margin)
-Z_MIN          = -1050.0        # mm (-1025, 25mm margin from robot.h limit)
-Z_MAX          = -720.0         # mm (-731, 10mm margin)
-MAX_CLAMP_DIST = 350.0          # mm -- max distance to clamp to workspace
+ELLIPSE_A      = 790.0    # mm X semi-axis (711.0 after 10% margin)
+ELLIPSE_B      = 540.0    # mm Y semi-axis (486.0 after 10% margin)
+Z_MIN          = -950.0        # mm (-1025, 25mm margin from robot.h limit)
+Z_MAX          = -760.0         # mm (-731, 10mm margin)
+MAX_CLAMP_DIST = 300.0          # mm -- max distance to clamp to workspace
 
 ROBOT_HOME     = (0.0, 0.0, -900.0)
 MAX_CART_VEL   = 4000.0         # mm/s
@@ -25,10 +25,10 @@ CM_TO_MM       = 10.0
 
 GRAVITY_Z      = -9810.0        # mm/s^2, robot Z is vertical, negative = down
 
-# Air drag for ping pong ball (mass=2.7g, diameter=40mm, Cd=0.40)
+# Air drag for ping pong ball (mass=2.7g, diameter=40mm, Cd=0.445)
 # k = 0.5 * Cd * rho_air * A / m  (in mm^-1)
-#   = 0.5 * 0.40 * 1.2e-9 * pi*20^2 / 0.0027 = 1.12e-4
-DRAG_K         = 0.000112       # mm^-1 -- drag deceleration: a = -DRAG_K * |v| * v
+#   = 0.5 * 0.445 * 1.2e-9 * pi*20^2 / 0.0027 = 1.243e-4
+DRAG_K         = 0.000124       # mm^-1 -- drag deceleration: a = -DRAG_K * |v| * v
 
 Z_TABLE_SURFACE   = -1150.0    # mm, table top in robot frame
 RESTITUTION_COEFF = 0.85       # vz damping on bounce (ping pong on MDF)

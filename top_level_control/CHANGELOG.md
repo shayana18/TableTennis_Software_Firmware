@@ -1,5 +1,100 @@
 # Stereo Pipeline — Change Log & Debug Report
 
+## Session: 2026-03-18 (Throw Data Logging + Velocity Validation Rewrite)
+
+### Status: Logging instrumented. Velocity validation rewritten for robot-frame KF. Ready for data collection.
+
+---
+
+### Change #26: Velocity Validation Script Rewrite (Robot Frame + KF)
+
+**File:** `scripts/test_velocity_validation.py` — FULL REWRITE
+
+**What:** Replaced deprecated `TrajectoryPredictor` (camera-frame cm, linear regression) with production `RobotPredictor` (robot-frame mm, Kalman filter).
+
+**Key changes:**
+- Imports: `RobotPredictor`, `load_points_based_transform`, `cam_to_robot`, `GRAVITY_Z`
+- ThrowAnalyzer: X linear, Y linear, Z quadratic (was X linear, Y quad, Z quad)
+- Gravity: only in Z axis, `GRAVITY_EXPECTED = 9810 mm/s^2` (no camera pitch decomposition)
+- Bounce detection: Z reversal (robot frame: Z negative = down, rising = dz > 0)
+- Forward prediction: inline kinematics `z0 + vz*t + 0.5*GRAVITY_Z*t^2` (no PhysicsModel)
+- VelocityChart: Row 1 = X/Y/Z position fits, Row 2 = Vx/Vy constant + Vz linear (gravity slope)
+- VelocityValidator: loads points-based transform, feeds `cam_to_robot()` output to `RobotPredictor`
+- All units: mm and mm/s throughout
+
+---
+
+### Change #27: Throw Data Logger in Integration Script
+
+**File:** `scripts/test_integration_simple.py`
+
+**What:** Added comprehensive per-throw, per-frame data logging to JSON for offline analysis.
+
+**Output file:** `scripts/throw_data_log.json`
+
+**JSON structure:**
+```
+{
+  "session_start": "...",
+  "config": { all predictor params, gravity, drag, workspace bounds },
+  "throws": [
+    {
+      "id": 1,
+      "start_wall": "...",
+      "end_reason": "auto_home_done|lost_detection|manual_clear|...",
+      "summary": { n_frames, n_accepted, n_rejected, duration_s, n_sends },
+      "frames": [
+        {
+          "t": abs_timestamp,
+          "dt": ms_since_last_accepted,
+          "cam": [cx, cy, cz],        // camera cm
+          "rob": [rx, ry, rz],        // robot mm
+          "ok": true/false,            // predictor accepted?
+          "rej": "reason",             // if rejected
+          "vel": [vx, vy, vz],        // KF velocity mm/s
+          "kf_pos": [px, py, pz],     // KF estimated position
+          "buf": N,                    // buffer size
+          "kf_rdy": bool,
+          "rdy": bool,                // predictor is_ready()
+          "disp": px, "rep": px,      // stereo quality
+          "bnc": N,                   // bounce count (if >0)
+          "pred": { x, y, z, t, vx, vy, vz, clamp }  // intercept prediction
+        }, ...
+      ],
+      "sends": [
+        { "t": ts, "target": {x,y,z}, "t_intercept": s, "vel": [vx,vy,vz],
+          "latency_ms": ms, "buf_pts": N, "is_update": bool, "clamped": bool }
+      ]
+    }, ...
+  ]
+}
+```
+
+**Throw lifecycle:**
+- Start: first accepted 3D detection when gate is ON
+- End: 30 frames with no 3D detection, OR predictor reset (auto-clear, manual, gate toggle)
+- End reasons tracked: `auto_home_done`, `lost_detection`, `target_out_of_workspace`, `planning_failed`, `gate_on/off`, `manual_clear`, `manual_reset`, `bg_reset`, `shutdown`
+
+**What to analyze from the data:**
+1. KF velocity convergence: per-frame `vel` vs post-hoc trajectory fit
+2. Intercept accuracy: `pred` target vs actual ball trajectory continuation
+3. Stereo quality: `disp` and `rep` correlations with position noise
+4. Transform correctness: `cam` vs `rob` consistency
+5. Timing: `dt` inter-frame intervals, `latency_ms` in sends
+6. Rejection patterns: `rej` reasons and their frequency
+
+---
+
+### Next Steps
+
+1. Run `python scripts/test_integration_simple.py --port COM6`
+2. Collect 10-20 throws with gate ON
+3. Copy `scripts/throw_data_log.json` for analysis
+4. Analyze: velocity convergence, prediction accuracy, gravity from Z fits, systematic biases
+5. Tune R/Q matrices, drag coefficient, workspace bounds based on findings
+
+---
+
 ## Session: 2026-03-15 (Points-Based Transform Robustness)
 
 ### Status: All 4 robustness features implemented. Ready for testing.

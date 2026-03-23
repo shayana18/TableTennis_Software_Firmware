@@ -28,6 +28,7 @@ else:
 
 TARGET_MSG_FLOAT_COUNT = 10
 TARGET_INTERCEPT = 1
+TARGET_TEST = 4
 TARGET_HOME = 3
 
 _PACKET_STRUCT = struct.Struct("<10f")
@@ -194,7 +195,7 @@ class UartComm:
     ) -> List[float]:
         """Send a `TARGET_INTERCEPT` command with position, velocity, and time metadata."""
         values = self.send_target(
-            target_type=TARGET_INTERCEPT,
+            target_type=TARGET_TEST,
             x_mm=x_mm,
             y_mm=y_mm,
             z_mm=z_mm,

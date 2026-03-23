@@ -31,11 +31,12 @@ class BallStateEstimator3D:
     def __init__(
         self,
         gravity_z: float,
-        accel_std: float = 4000.0,
-        meas_std_xy: float = 15.0,
-        meas_std_z: float = 20.0,
+        accel_std: float = 1500.0,
+        meas_std_xy: float = 40.0,
+        meas_std_z: float = 80.0,
         max_gap_s: float = 0.12,
-        min_updates: int = 6,
+        min_updates: int = 8,
+        fading_factor: float = 1.03,
     ) -> None:
         """
         Create the estimator.
@@ -47,6 +48,9 @@ class BallStateEstimator3D:
             meas_std_z: Measurement std for z, mm.
             max_gap_s: Reinitialize after larger time gaps.
             min_updates: Updates required before is_ready() is true.
+            fading_factor: P covariance inflation per step (>1 = recent points
+                           weighted more). 1.0 = standard KF. 1.02 = old data
+                           loses ~2% influence per step.
         """
         if KalmanFilter is None:  # pragma: no cover - depends on local env
             raise ImportError(
@@ -60,6 +64,7 @@ class BallStateEstimator3D:
         self.meas_std_z = float(meas_std_z)
         self.max_gap_s = float(max_gap_s)
         self.min_updates = int(min_updates)
+        self.fading_factor = float(fading_factor)
 
         self.kf = KalmanFilter(dim_x=6, dim_z=3, dim_u=1)
         self.kf.x = np.zeros((6, 1), dtype=float)
@@ -241,6 +246,12 @@ class BallStateEstimator3D:
         self.kf.Q = self._build_Q(dt, self.accel_std)
 
         self._predict_step(self.kf, self.gravity_z)
+
+        # Fading memory: inflate covariance so older measurements lose influence
+        # and newer (closer, more accurate) measurements dominate the estimate.
+        if self.fading_factor > 1.0:
+            self.kf.P *= self.fading_factor
+
         self._update_step(self.kf, px, py, pz)
 
         self.last_timestamp_s = float(timestamp_s)
