@@ -1,0 +1,48 @@
+{
+  "timestamp": "20260322_144451",
+  "calibration_dir": "C:\\Users\\styag\\OneDrive\\Desktop\\TableTennis_Software_Firmware\\top_level_control\\camera_calibration\\camera_parameters",
+  "resolution": "800x600",
+  "trigger_sync_verified": true,
+  "distance_results": [],
+  "length_results": [],
+  "gravity_results": [
+    {
+      "valid": true,
+      "n_points": 47,
+      "duration": 1.0487,
+      "measured_g": 1445.6,
+      "expected_g": 9810.0,
+      "error_pct": -85.26,
+      "r_squared": 0.1504,
+      "mean_y_mm": 1272.9,
+      "y_range_mm": [
+        -81.6,
+        2526.7
+      ],
+      "z_residuals_rms_mm": 156.81
+    },
+    {
+      "valid": true,
+      "n_points": 56,
+      "duration": 1.2643,
+      "measured_g": 357.2,
+      "expected_g": 9810.0,
+      "error_pct": -96.36,
+      "r_squared": 0.3041,
+      "mean_y_mm": 1334.7,
+      "y_range_mm": [
+        577.0,
+        2293.5
+      ],
+      "z_residuals_rms_mm": 182.87
+    }
+  ],
+  "diameter_passes": [],
+  "gravity_summary": {
+    "n": 2,
+    "mean_g": 901.4,
+    "std_g": 544.2,
+    "mean_error_pct": -90.81,
+    "implied_alpha": 1.088
+  }
+}

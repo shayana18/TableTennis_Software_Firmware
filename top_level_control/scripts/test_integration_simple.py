@@ -120,6 +120,16 @@ class SimpleIntegration:
             SCRIPT_DIR, "intercept_log.json"
         )
 
+        # === Throw data logger (detailed per-frame diagnostics) ===
+        self._throw_log_path = os.path.join(SCRIPT_DIR, "throw_data_log.json")
+        self._throw_log: list[dict] = []      # completed throws
+        self._active_throw: Optional[dict] = None
+        self._throw_lost_count = 0
+        self._THROW_LOST_FRAMES = 30          # ~300ms at 100fps
+        self._session_start = datetime.now().isoformat(timespec="milliseconds")
+        self._prev_throw_frame_ts: Optional[float] = None
+
+
     def _log_intercept(self, intercept: dict, t_adjusted: float, n_pts: int, latency: float) -> None:
         """Append intercept to log and save to JSON file."""
         pos = self.predictor.get_current_position()
@@ -147,6 +157,225 @@ class SimpleIntegration:
                 json.dump(self._intercept_log, f, indent=2)
         except Exception as e:
             _print(f"[WARN] Failed to save intercept log: {e}")
+
+    # --- Throw data logger ---
+
+    def _start_throw_log(self, frame_ts: float) -> None:
+        """Begin recording a new throw."""
+        throw_id = len(self._throw_log) + 1
+        self._active_throw = {
+            "id": throw_id,
+            "start_wall": datetime.now().isoformat(timespec="milliseconds"),
+            "start_ts": round(frame_ts, 6),
+            "frames": [],
+            "sends": [],
+            "end_reason": None,
+        }
+        self._throw_lost_count = 0
+        self._prev_throw_frame_ts = None
+
+
+    def _end_throw_log(self, reason: str) -> None:
+        """Finalize the active throw and save."""
+        if self._active_throw is None:
+            return
+        throw = self._active_throw
+        frames = throw["frames"]
+        throw["end_reason"] = reason
+
+        if len(frames) < 2:
+            self._active_throw = None
+            return
+
+        accepted = [f for f in frames if f.get("ok")]
+        throw["summary"] = {
+            "n_frames": len(frames),
+            "n_accepted": len(accepted),
+            "n_rejected": sum(1 for f in frames if f.get("ok") is False),
+            "n_no3d": sum(1 for f in frames if f.get("cam") is None),
+            "duration_s": round(frames[-1]["t"] - frames[0]["t"], 4),
+            "n_sends": len(throw["sends"]),
+            "kf_enabled": self.predictor.get_stats().get("kf_enabled", False),
+        }
+
+        self._throw_log.append(throw)
+        self._active_throw = None
+        self._save_throw_log()
+
+    def _log_throw_frame(
+        self,
+        frame_ts: float,
+        result: dict,
+        robot_pos: Optional[tuple],
+        accepted: Optional[bool],
+        intercept: Optional[dict],
+    ) -> None:
+        """Record one frame in the active throw."""
+        if not self.run_gate:
+            return
+
+        found_3d = result["found_3d"]
+        has_det = (result.get("left_detection") is not None or
+                   result.get("right_detection") is not None)
+
+        # Start throw on first accepted 3D detection
+        if found_3d and accepted and self._active_throw is None:
+            self._start_throw_log(frame_ts)
+
+        if self._active_throw is None:
+            return
+
+        # Lost counter
+        if not found_3d:
+            self._throw_lost_count += 1
+            if self._throw_lost_count >= self._THROW_LOST_FRAMES:
+                self._end_throw_log("lost_detection")
+                return
+            # Only log no-3D frames that had at least a 2D detection
+            if not has_det:
+                return
+
+        else:
+            self._throw_lost_count = 0
+
+        # dt from previous accepted frame
+        dt_ms = None
+        if found_3d and accepted and self._prev_throw_frame_ts is not None:
+            dt_ms = round((frame_ts - self._prev_throw_frame_ts) * 1000, 2)
+        if found_3d and accepted:
+            self._prev_throw_frame_ts = frame_ts
+
+        # Gather KF state
+        vel = self.predictor.velocity
+        stats = self.predictor.get_stats()
+        kf_pos = None
+        if self.predictor.state_estimator is not None:
+            p = self.predictor.state_estimator.get_position()
+            if p is not None:
+                kf_pos = [round(p[0], 1), round(p[1], 1), round(p[2], 1)]
+
+        # Build frame entry
+        entry: dict = {"t": round(frame_ts, 6)}
+        if dt_ms is not None:
+            entry["dt"] = dt_ms
+
+        if found_3d:
+            cx, cy, cz = result["position_3d"]
+            entry["cam"] = [round(cx, 2), round(cy, 2), round(cz, 2)]
+        if robot_pos is not None:
+            entry["rob"] = [round(robot_pos[0], 1), round(robot_pos[1], 1),
+                            round(robot_pos[2], 1)]
+        if accepted is not None:
+            entry["ok"] = accepted
+        if accepted is False:
+            entry["rej"] = self.predictor._last_reject_reason
+
+        if not found_3d and has_det:
+            entry["stereo_fail"] = result.get("reject_reason", "no_match")
+
+        if vel is not None:
+            entry["vel"] = [round(vel[0], 1), round(vel[1], 1),
+                            round(vel[2], 1)]
+        if kf_pos is not None:
+            entry["kf_pos"] = kf_pos
+
+        entry["buf"] = stats["buffer"]
+        entry["kf_rdy"] = stats["kf_ready"]
+        entry["rdy"] = self.predictor.is_ready()
+
+        disp = result.get("disparity")
+        reproj = result.get("reproj_err")
+        if disp is not None:
+            entry["disp"] = round(disp, 1)
+        if reproj is not None:
+            entry["rep"] = round(reproj, 1)
+
+        if stats.get("bounces", 0) > 0:
+            entry["bnc"] = stats["bounces"]
+
+        if intercept is not None:
+            entry["pred"] = {
+                "x": round(intercept["x"], 1),
+                "y": round(intercept["y"], 1),
+                "z": round(intercept["z"], 1),
+                "t": round(intercept["time"], 4),
+                "vx": round(intercept.get("vx", 0), 1),
+                "vy": round(intercept.get("vy", 0), 1),
+                "vz": round(intercept.get("vz", 0), 1),
+                "clamp": intercept.get("clamped", False),
+            }
+            if intercept.get("clamped"):
+                entry["pred"]["clamp_d"] = round(
+                    intercept.get("clamp_dist", 0), 1)
+
+        self._active_throw["frames"].append(entry)
+
+    def _log_throw_send(
+        self, intercept: dict, t_adjusted: float,
+        n_pts: int, latency: float, is_update: bool, frame_ts: float,
+    ) -> None:
+        """Record a UART send event in the active throw."""
+        if self._active_throw is None:
+            return
+        # Snapshot the predictor positions used for this send
+        positions_used = [
+            [round(p[0], 1), round(p[1], 1), round(p[2], 1), round(p[3], 6)]
+            for p in self.predictor.positions
+        ]
+
+        self._active_throw["sends"].append({
+            "t": round(frame_ts, 6),
+            "target": {
+                "x": round(intercept["x"], 1),
+                "y": round(intercept["y"], 1),
+                "z": round(intercept["z"], 1),
+            },
+            "t_intercept": round(t_adjusted, 4),
+            "vel": [
+                round(intercept.get("vx", 0), 1),
+                round(intercept.get("vy", 0), 1),
+                round(intercept.get("vz", 0), 1),
+            ],
+            "latency_ms": round(latency * 1000, 2),
+            "buf_pts": n_pts,
+            "is_update": is_update,
+            "clamped": intercept.get("clamped", False),
+            "positions_used": positions_used,
+        })
+
+    def _save_throw_log(self) -> None:
+        """Write all completed throws to JSON."""
+        from trajectory.workspace import GRAVITY_Z as _GZ, DRAG_K as _DK
+        payload = {
+            "session_start": self._session_start,
+            "config": {
+                "cam_scale": self.cam_scale,
+                "kf_enabled": self.predictor._using_state_estimator,
+                "min_points": RobotPredictor.MIN_POINTS,
+                "min_time_span_s": RobotPredictor.MIN_TIME_SPAN,
+                "max_speed_mm_s": RobotPredictor.MAX_SPEED,
+                "max_jump_mm": RobotPredictor.MAX_JUMP,
+                "gap_reset_s": RobotPredictor.GAP_RESET,
+                "stale_timeout_s": RobotPredictor.STALE_TIMEOUT,
+                "drag_k": _DK,
+                "gravity_z_mm_s2": _GZ,
+                "max_predict_y_mm": RobotPredictor.MAX_PREDICT_Y,
+                "scan_duration_s": RobotPredictor.SCAN_DURATION,
+                "scan_dt_s": RobotPredictor.SCAN_DT,
+                "min_time_hit_s": RobotPredictor.MIN_TIME_HIT,
+                "bounce_fall_z_mm": RobotPredictor.MIN_BOUNCE_FALL_Z,
+                "bounce_rise_frames": RobotPredictor.BOUNCE_RISE_FRAMES,
+                "post_bounce_min_updates": RobotPredictor.POST_BOUNCE_MIN_UPDATES,
+                "min_send_buffer": self.MIN_SEND_BUFFER,
+            },
+            "throws": self._throw_log,
+        }
+        try:
+            with open(self._throw_log_path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=1)
+            _print(f"[LOG] Saved {len(self._throw_log)} throws -> {self._throw_log_path}")
+        except Exception as e:
+            _print(f"[WARN] Failed to save throw log: {e}")
 
     # --- UART RX processing ---
 
@@ -183,6 +412,7 @@ class SimpleIntegration:
                     self._pending_action = None
                     self._stm32_moving = False
                     self.robot_current_pos = ROBOT_HOME
+                    self._end_throw_log("auto_home_done")
                     self.predictor.reset()
                     self.intercept_sent = False
                     self._update_count = 0
@@ -192,6 +422,7 @@ class SimpleIntegration:
                 _print("[WARN] STM32 rejected target (IK workspace). Auto-clearing.")
                 self._pending_action = None
                 self._stm32_moving = False
+                self._end_throw_log("target_out_of_workspace")
                 self.intercept_sent = False
                 self.predictor.reset()
                 self.robot_current_pos = ROBOT_HOME
@@ -204,6 +435,7 @@ class SimpleIntegration:
                 _print("[WARN] STM32 planning failed. Auto-clearing.")
                 self._pending_action = None
                 self._stm32_moving = False
+                self._end_throw_log("planning_failed")
                 self.intercept_sent = False
                 self.predictor.reset()
                 self._update_count = 0
@@ -297,12 +529,26 @@ class SimpleIntegration:
 
     # --- UART send ---
 
+    MIN_SEND_BUFFER = 10  # don't send until KF has enough points for stable velocity
+
     def maybe_send(self, intercept, frame_ts):
         if (not self.robot_homed or not self.run_gate or
                 self.shutdown_requested):
             return
         if intercept is None:
             return
+
+        # Wait for enough buffer points before first send (velocity too noisy early on)
+        if not self.intercept_sent and len(self.predictor.positions) < self.MIN_SEND_BUFFER:
+            return
+
+        # Don't send while ball is rising post-bounce (VZ > 0).
+        # Predicting through the peak amplifies VZ noise into large position errors.
+        # Wait until VZ turns negative (ball descending toward workspace).
+        if self.predictor.velocity is not None and self.predictor._bounce_count > 0:
+            vz = self.predictor.velocity[2]
+            if vz > 0:
+                return
 
         # Allow updates: first send OR update while robot still in PLAN phase
         is_update = False
@@ -360,6 +606,8 @@ class SimpleIntegration:
                 tag = " [CLAMPED]" if clamped else ""
                 _print(f"[THROW #{self.throw_count}]{tag}  Target(mm): x={x:+.0f} y={y:+.0f} z={z:+.0f}  t={t_adjusted*1000:.0f}ms")
                 self._log_intercept(intercept, t_adjusted, n_pts, latency)
+
+            self._log_throw_send(intercept, t_adjusted, n_pts, latency, is_update, frame_ts)
         except Exception as e:
             _print(f"[UART] Send failed: {e}")
 
@@ -459,18 +707,28 @@ class SimpleIntegration:
 
                 robot_pos = None
                 intercept = None
+                pos_accepted = None
 
                 if self.run_gate and result["found_3d"]:
-                    cx, cy, cz = result["position_3d"]
-                    rx, ry, rz = cam_to_robot(self.R, self.t_vec, self.cam_scale, cx, cy, cz)
-                    robot_pos = (rx, ry, rz)
-                    self.predictor.add_position(rx, ry, rz, frame_ts)
+                    reproj = result.get("reproj_err", 0)
+                    if reproj > 100:
+                        result["found_3d"] = False
+                        result["reject_reason"] = f"reproj({reproj:.1f}px)"
+                    else:
+                        cx, cy, cz = result["position_3d"]
+                        rx, ry, rz = cam_to_robot(self.R, self.t_vec, self.cam_scale, cx, cy, cz)
+                        robot_pos = (rx, ry, rz)
+                        pos_accepted = self.predictor.add_position(rx, ry, rz, frame_ts)
 
                 if self.run_gate and self.predictor.is_ready():
                     intercept = self.predictor.predict_intercept(
                         robot_pos=self.robot_current_pos)
                     if intercept is not None and result["found_3d"]:
                         self.maybe_send(intercept, frame_ts)
+
+                # --- Throw data logging ---
+                self._log_throw_frame(
+                    frame_ts, result, robot_pos, pos_accepted, intercept)
 
                 # --- Visualization ---
                 left_vis, right_vis = self.triangulator.draw_results(result)
@@ -529,21 +787,26 @@ class SimpleIntegration:
                 elif key == ord("g"):
                     self.run_gate = not self.run_gate
                     if self.run_gate:
+                        self._end_throw_log("gate_on")
                         self.predictor.reset()
                         self.intercept_sent = False
                         _print("[GATE] ON -- tracking active, ready to send")
                     else:
+                        self._end_throw_log("gate_off")
                         self.intercept_sent = True
                         _print("[GATE] OFF")
                 elif key == ord("c"):
+                    self._end_throw_log("manual_clear")
                     self.intercept_sent = False
                     self.predictor.reset()
                     _print("[CLEAR] Manual clear -- ready for next intercept")
                 elif key == ord("r"):
+                    self._end_throw_log("manual_reset")
                     self.predictor.reset()
                     self.intercept_sent = False
                     _print("[RESET] Predictor reset")
                 elif key == ord("b"):
+                    self._end_throw_log("bg_reset")
                     self.predictor.reset()
                     self.intercept_sent = False
                     _print("[BG RESET] Re-learning...")
@@ -561,6 +824,11 @@ class SimpleIntegration:
             _print("[CTRL-C] Sending home...")
             self.request_shutdown_home()
         finally:
+            # Save any active throw before exit
+            self._end_throw_log("shutdown")
+            if self._throw_log:
+                self._save_throw_log()
+
             self.request_shutdown_home()
             if self.triangulator is not None:
                 try:
@@ -573,7 +841,8 @@ class SimpleIntegration:
                 pass
             self.uart.close()
 
-        _print(f"Done! Total throws sent: {self.throw_count}")
+        _print(f"Done! Total throws sent: {self.throw_count}  "
+               f"Logged throws: {len(self._throw_log)}")
 
 
 def main():

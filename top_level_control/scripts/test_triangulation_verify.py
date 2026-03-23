@@ -57,6 +57,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from tracking.stereo_triangulator import StereoTriangulator
 from config.camera_config import load_camera_settings
+from comm_function.points_based_transform import load_points_based_transform, cam_to_robot
 
 
 # ================================================================
@@ -94,13 +95,13 @@ class LengthResult:
 
 
 class GravityResult:
-    """Single gravity measurement from a tossed ball."""
-    GRAVITY_EXPECTED = 981.0  # cm/s^2
+    """Single gravity measurement from a tossed ball in robot frame (mm)."""
+    GRAVITY_EXPECTED = 9810.0  # mm/s^2 (robot frame units)
 
     def __init__(self, positions):
         """
         Args:
-            positions: list of (x, y, z, t) tuples
+            positions: list of (rob_x, rob_y, rob_z, t) tuples in robot frame (mm)
         """
         self.n_points = len(positions)
         self.valid = False
@@ -108,6 +109,9 @@ class GravityResult:
         self.error_pct = 0.0
         self.r_squared = 0.0
         self.duration = 0.0
+        self.mean_y = 0.0
+        self.y_range = (0.0, 0.0)
+        self.z_residuals_rms = 0.0
 
         if self.n_points < 4:
             return
@@ -119,19 +123,27 @@ class GravityResult:
         if self.duration < 0.05:
             return
 
-        y = arr[:, 1]
-        coeffs = np.polyfit(t, y, 2)
+        # In robot frame, gravity acts on Z (negative = downward toward table)
+        # Z(t) = 0.5*g*t^2 + Vz0*t + Z0 where g is negative (downward)
+        z = arr[:, 2]
+        coeffs = np.polyfit(t, z, 2)
         a = coeffs[0]
         fitted = np.polyval(coeffs, t)
-        ss_res = np.sum((y - fitted) ** 2)
-        ss_tot = np.sum((y - np.mean(y)) ** 2)
+        ss_res = np.sum((z - fitted) ** 2)
+        ss_tot = np.sum((z - np.mean(z)) ** 2)
         self.r_squared = float(1.0 - ss_res / ss_tot if ss_tot > 1e-12 else 0.0)
 
-        # Y(t) = 0.5*g*t^2 + Vy0*t + Y0  =>  a = 0.5*g  =>  g = 2*a
-        self.measured_g = float(2.0 * a)
+        # Z(t) = 0.5*g*t^2 + Vz0*t + Z0  =>  a = 0.5*g  =>  g = 2*a
+        # g should be negative (gravity pulls Z more negative)
+        self.measured_g = float(abs(2.0 * a))  # report as positive magnitude
         self.error_pct = float(
             (self.measured_g - self.GRAVITY_EXPECTED) / self.GRAVITY_EXPECTED * 100)
         self.valid = True
+
+        # Extra diagnostics
+        self.mean_y = float(np.mean(arr[:, 1]))
+        self.y_range = (float(np.min(arr[:, 1])), float(np.max(arr[:, 1])))
+        self.z_residuals_rms = float(np.sqrt(np.mean((z - fitted) ** 2)))
 
     def to_dict(self):
         return {
@@ -142,6 +154,9 @@ class GravityResult:
             'expected_g': self.GRAVITY_EXPECTED,
             'error_pct': round(self.error_pct, 2),
             'r_squared': round(self.r_squared, 4),
+            'mean_y_mm': round(self.mean_y, 1),
+            'y_range_mm': (round(self.y_range[0], 1), round(self.y_range[1], 1)),
+            'z_residuals_rms_mm': round(self.z_residuals_rms, 2),
         }
 
 
@@ -171,6 +186,12 @@ class TriangulationVerifier:
             self.display_width * self.frame_height / self.frame_width)
 
         self.triangulator = None
+
+        # Camera→robot transform (points-based)
+        tf = load_points_based_transform()
+        self._tf_R = tf["rotation"]
+        self._tf_t = tf["translation"]
+        self._tf_scale = tf["camera_scale_to_robot_units"]
 
         # State
         self.mode = 1  # 1=DISTANCE, 2=LENGTH, 3=GRAVITY
@@ -377,10 +398,11 @@ class TriangulationVerifier:
         self.gravity_results.append(result)
         g_color = "" if abs(result.error_pct) < 5 else " (!)"
         print(f"  [THROW #{self._throw_count}] "
-              f"g={result.measured_g:.0f} cm/s^2 "
+              f"g={result.measured_g:.0f} mm/s^2 "
               f"({result.error_pct:+.1f}%){g_color}  "
               f"R^2={result.r_squared:.4f}  "
-              f"{result.n_points} pts  {result.duration*1000:.0f}ms")
+              f"{result.n_points} pts  {result.duration*1000:.0f}ms  "
+              f"Y_mean={result.mean_y:+.0f}mm  Z_rms={result.z_residuals_rms:.1f}mm")
 
     def _warmup_background(self):
         """Learn background for gravity mode."""
@@ -908,27 +930,33 @@ class TriangulationVerifier:
                       f"{r.delta_y:+8.2f}  {r.delta_z:+8.2f}  "
                       f"{r.depth_z:6.0f}  {r.reproj_err:7.1f}px")
 
-        # --- GRAVITY ---
+        # --- GRAVITY (robot frame, mm) ---
         if self.gravity_results:
-            print(f"\n  GRAVITY (dynamic) — {len(self.gravity_results)} throws")
-            print(f"  {'#':>4}  {'g(cm/s2)':>9}  {'Err(%)':>7}  "
-                  f"{'R^2':>7}  {'Pts':>4}  {'Dur(ms)':>8}")
-            print(f"  {'─'*4}  {'─'*9}  {'─'*7}  {'─'*7}  {'─'*4}  {'─'*8}")
+            print(f"\n  GRAVITY (robot frame, dynamic) — {len(self.gravity_results)} throws")
+            print(f"  {'#':>4}  {'g(mm/s2)':>9}  {'Err(%)':>7}  "
+                  f"{'R^2':>7}  {'Pts':>4}  {'Dur(ms)':>8}  "
+                  f"{'Y_mean':>7}  {'Z_rms':>6}")
+            print(f"  {'─'*4}  {'─'*9}  {'─'*7}  {'─'*7}  {'─'*4}  {'─'*8}  "
+                  f"{'─'*7}  {'─'*6}")
             for i, r in enumerate(self.gravity_results, 1):
                 print(f"  {i:4d}  {r.measured_g:9.0f}  {r.error_pct:+7.1f}  "
                       f"{r.r_squared:7.4f}  {r.n_points:4d}  "
-                      f"{r.duration*1000:8.0f}")
+                      f"{r.duration*1000:8.0f}  "
+                      f"{r.mean_y:+7.0f}  {r.z_residuals_rms:6.1f}")
 
             g_vals = [r.measured_g for r in self.gravity_results]
             g_errs = [r.error_pct for r in self.gravity_results]
-            print(f"\n  Gravity: mean={np.mean(g_vals):.0f} cm/s^2  "
-                  f"std={np.std(g_vals):.0f}  expected=981")
+            z_rms_vals = [r.z_residuals_rms for r in self.gravity_results]
+            print(f"\n  Gravity: mean={np.mean(g_vals):.0f} mm/s^2  "
+                  f"std={np.std(g_vals):.0f}  expected=9810")
             print(f"  Error: mean={np.mean(g_errs):+.1f}%  "
                   f"std={np.std(g_errs):.1f}%")
+            print(f"  Z fit residual RMS: mean={np.mean(z_rms_vals):.1f}mm  "
+                  f"(= dynamic triangulation noise)")
 
-            # Implied lateral scale factor
-            alpha = 981.0 / np.mean(g_vals) if np.mean(g_vals) > 0 else 0
-            print(f"  Implied lateral scale (alpha): {alpha:.3f}  "
+            # Implied scale factor
+            alpha = 9810.0 / np.mean(g_vals) if np.mean(g_vals) > 0 else 0
+            print(f"  Implied scale (alpha): {alpha:.3f}  "
                   f"(1.000 = perfect)")
 
         # --- OVERALL VERDICT ---
@@ -1144,15 +1172,17 @@ class TriangulationVerifier:
                         'reject_reason': None,
                     }
 
-                # --- Gravity mode throw tracking ---
+                # --- Gravity mode throw tracking (robot frame) ---
                 if self.mode == 3:
                     if result['found_3d']:
                         if not self._throw_active:
                             self._start_gravity_throw()
-                        x, y, z = result['position_3d']
+                        cx, cy, cz = result['position_3d']
+                        rx, ry, rz = cam_to_robot(
+                            self._tf_R, self._tf_t, self._tf_scale, cx, cy, cz)
                         t_stamp = time.perf_counter()
                         self._throw_positions.append(
-                            (float(x), float(y), float(z), t_stamp))
+                            (float(rx), float(ry), float(rz), t_stamp))
                         self._lost_count = 0
                     elif self._throw_active:
                         self._lost_count += 1
