@@ -195,7 +195,7 @@ class UartComm:
     ) -> List[float]:
         """Send a `TARGET_INTERCEPT` command with position, velocity, and time metadata."""
         values = self.send_target(
-            target_type=TARGET_TEST,
+            target_type=TARGET_INTERCEPT,
             x_mm=x_mm,
             y_mm=y_mm,
             z_mm=z_mm,

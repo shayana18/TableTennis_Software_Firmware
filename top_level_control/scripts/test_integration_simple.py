@@ -81,13 +81,12 @@ class SimpleIntegration:
         self.predictor = RobotPredictor()
         self.uart = UartComm(port=uart_port, baud_rate=baud_rate, verbose=uart_verbose)
 
-        # Camera->robot transform (combined: XY from points-based, Z from measurement-based)
-        combined_path = os.path.join(self.base_dir, "comm_function", "combined_transform.json")
-        tf = load_points_based_transform(combined_path)
+        # Camera->robot transform (points-based)
+        tf = load_points_based_transform()
         self.R = tf["rotation"]
         self.t_vec = tf["translation"]
         self.cam_scale = tf["camera_scale_to_robot_units"]
-        _print(f"Loaded combined transform (scale={self.cam_scale})")
+        _print(f"Loaded points-based transform (scale={self.cam_scale})")
 
         self.robot_homed = False
         self.run_gate = False
@@ -711,7 +710,7 @@ class SimpleIntegration:
 
                 if self.run_gate and result["found_3d"]:
                     reproj = result.get("reproj_err", 0)
-                    if reproj > 100:
+                    if reproj > 1.5:
                         result["found_3d"] = False
                         result["reject_reason"] = f"reproj({reproj:.1f}px)"
                     else:
@@ -768,8 +767,6 @@ class SimpleIntegration:
                     f"Throws:{self.throw_count}  g=gate c=clear r=reset b=bg q=quit",
                     (10, left_vis.shape[0] - 12),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.33, (120, 120, 120), 1)
-
-                # Terminal output — minimal, only intercept is printed in maybe_send()
 
                 # Show
                 dw = 640

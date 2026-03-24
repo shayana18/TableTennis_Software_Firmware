@@ -480,14 +480,8 @@ class StereoTriangulator:
         self._frame_count += 1
 
         # --- Detect ball in both frames ---
-        # Sequential (uncomment to test without threads):
         best_l, cands_l, rej_l, mask_l = self.detector_left.detect(frame_left)
         best_r, cands_r, rej_r, mask_r = self.detector_right.detect(frame_right)
-        # Parallel (uncomment to enable threads):
-        # future_l = self._detect_pool.submit(self.detector_left.detect, frame_left)
-        # future_r = self._detect_pool.submit(self.detector_right.detect, frame_right)
-        # best_l, cands_l, rej_l, mask_l = future_l.result()
-        # best_r, cands_r, rej_r, mask_r = future_r.result()
 
         result['left_detection'] = best_l
         result['right_detection'] = best_r

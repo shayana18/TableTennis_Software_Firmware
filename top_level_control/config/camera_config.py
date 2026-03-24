@@ -12,13 +12,13 @@ import time
 # ====================================================================
 #  CAMERA SETTINGS — MAINNNNN
 # ====================================================================
-CAMERA_LEFT_ID  = 0  # USB device index for left camera  (camera0)
+CAMERA_LEFT_ID  = 1  # USB device index for left camera  (camera0)
 CAMERA_RIGHT_ID = 2       # USB device index for right camera (camera1)
 FRAME_WIDTH     = 800    # Horizontal resolution
 FRAME_HEIGHT    = 600  # Vertical resolution
 FPS             = 100     # Target framerate
 FOURCC          = 'MJPG'  # Video codec (MJPG required for full fps)
-TRIGGER_MODE    = True    # Hardware sync via external trigger signal
+TRIGGER_MODE    = False   # Trigger mode set manually via ArduCam app, not software
 # ====================================================================
 
 
