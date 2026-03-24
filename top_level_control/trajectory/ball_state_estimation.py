@@ -31,9 +31,9 @@ class BallStateEstimator3D:
     def __init__(
         self,
         gravity_z: float,
-        accel_std: float = 1500.0,
-        meas_std_xy: float = 40.0,
-        meas_std_z: float = 80.0,
+        accel_std: float = 2500.0,
+        meas_std_xy: float = 25.0,
+        meas_std_z: float = 45.0,
         max_gap_s: float = 0.12,
         min_updates: int = 8,
         fading_factor: float = 1.03,

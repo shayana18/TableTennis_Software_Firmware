@@ -710,9 +710,10 @@ class SimpleIntegration:
 
                 if self.run_gate and result["found_3d"]:
                     reproj = result.get("reproj_err", 0)
-                    if reproj > 1.5:
+                    if reproj > 10.0:
                         result["found_3d"] = False
                         result["reject_reason"] = f"reproj({reproj:.1f}px)"
+                        print("point rejected as reproj = freproj({reproj:.1f}px)\n")
                     else:
                         cx, cy, cz = result["position_3d"]
                         rx, ry, rz = cam_to_robot(self.R, self.t_vec, self.cam_scale, cx, cy, cz)

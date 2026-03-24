@@ -50,6 +50,9 @@ class RobotPredictor:
     MIN_APPROACH_VY = 0
     APPROACH_Y_THRESHOLD = 600.0
 
+    # Y offset applied to every predicted intercept (mm)
+    INTERCEPT_Y_OFFSET = 80.0
+
     # Observed bounce detection
     MIN_BOUNCE_FALL_Z  = 150.0  # mm minimum Z descent before accepting bounce (was 50; stereo noise is ±30-50mm)
     BOUNCE_RISE_FRAMES = 3      # consecutive rising frames to confirm (was 2)
@@ -363,7 +366,7 @@ class RobotPredictor:
             if t >= self.MIN_TIME_HIT:
                 if in_workspace(x, y, z):
                     return {
-                        'x': x, 'y': y, 'z': z,
+                        'x': x, 'y': y + self.INTERCEPT_Y_OFFSET, 'z': z,
                         'time': t,
                         'vx': vx, 'vy': vy, 'vz': vz,
                         'clamped': False,
@@ -375,7 +378,7 @@ class RobotPredictor:
                 if cdist < best_clamp_dist:
                     best_clamp_dist = cdist
                     best_clamp = {
-                        'x': xc, 'y': yc, 'z': zc,
+                        'x': xc, 'y': yc + self.INTERCEPT_Y_OFFSET, 'z': zc,
                         'time': t,
                         'vx': vx, 'vy': vy, 'vz': vz,
                         'clamped': True,

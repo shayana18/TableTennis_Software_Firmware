@@ -13,9 +13,11 @@ Pipeline:
 from __future__ import annotations
 
 import argparse
+import csv
 import os
 import sys
 import time
+from datetime import datetime
 from typing import Optional
 
 import cv2
@@ -84,6 +86,20 @@ class TrajectoryComparison:
         self.R = tf["rotation"]
         self.t_vec = tf["translation"]
         self.cam_scale = tf["camera_scale_to_robot_units"]
+
+        # CSV logging
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.csv_path = os.path.join(SCRIPT_DIR, f"kf_log_{ts}.csv")
+        self.csv_file = open(self.csv_path, "w", newline="")
+        self.csv_writer = csv.writer(self.csv_file)
+        self.csv_writer.writerow([
+            "time_s",
+            "raw_x", "raw_y", "raw_z",
+            "kf_x", "kf_y", "kf_z",
+            "kf_vx", "kf_vy", "kf_vz",
+        ])
+        self._csv_t0: float | None = None
+        _print(f"Logging KF data to {self.csv_path}")
 
     @staticmethod
     def _make_legacy_predictor() -> RobotPredictor:
@@ -341,6 +357,19 @@ class TrajectoryComparison:
                     self.predictor_kf.add_position(rx, ry, rz, frame_ts)
                     self.predictor_legacy.add_position(rx, ry, rz, frame_ts)
 
+                    # Log raw + KF state to CSV
+                    if self._csv_t0 is None:
+                        self._csv_t0 = frame_ts
+                    kf_state = self.predictor_kf._get_prediction_state()
+                    if kf_state is not None:
+                        self.csv_writer.writerow([
+                            f"{frame_ts - self._csv_t0:.6f}",
+                            f"{rx:.2f}", f"{ry:.2f}", f"{rz:.2f}",
+                            f"{kf_state[0]:.2f}", f"{kf_state[1]:.2f}", f"{kf_state[2]:.2f}",
+                            f"{kf_state[3]:.2f}", f"{kf_state[4]:.2f}", f"{kf_state[5]:.2f}",
+                        ])
+                        self.csv_file.flush()
+
                 traj_kf = self._sample_trajectory(self.predictor_kf)
                 traj_legacy = self._sample_trajectory(self.predictor_legacy)
 
@@ -409,6 +438,9 @@ class TrajectoryComparison:
         except KeyboardInterrupt:
             pass
         finally:
+            if self.csv_file is not None:
+                self.csv_file.close()
+                _print(f"KF log saved: {self.csv_path}")
             if self.triangulator is not None:
                 try:
                     self.triangulator.stop_cameras()
@@ -420,12 +452,93 @@ class TrajectoryComparison:
                 pass
 
 
+def plot_csv(csv_path: str) -> None:
+    """Plot a KF log CSV with raw vs filtered position and KF velocity."""
+    import csv as _csv
+    import matplotlib.pyplot as plt
+    from matplotlib.gridspec import GridSpec
+
+    rows: list[dict[str, float]] = []
+    with open(csv_path) as f:
+        for r in _csv.DictReader(f):
+            rows.append({k: float(v) for k, v in r.items()})
+
+    if not rows:
+        _print("CSV is empty.")
+        return
+
+    t = np.array([r["time_s"] for r in rows])
+    raw_x = np.array([r["raw_x"] for r in rows])
+    raw_y = np.array([r["raw_y"] for r in rows])
+    raw_z = np.array([r["raw_z"] for r in rows])
+    kf_x = np.array([r["kf_x"] for r in rows])
+    kf_y = np.array([r["kf_y"] for r in rows])
+    kf_z = np.array([r["kf_z"] for r in rows])
+    kf_vx = np.array([r["kf_vx"] for r in rows])
+    kf_vy = np.array([r["kf_vy"] for r in rows])
+    kf_vz = np.array([r["kf_vz"] for r in rows])
+
+    # Detect KF resets (velocity goes to zero) to draw segment separators
+    resets = [i for i in range(1, len(rows))
+              if kf_vx[i] == 0 and kf_vy[i] == 0 and kf_vz[i] == 0]
+
+    fig = plt.figure(figsize=(14, 10), facecolor="white")
+    fig.suptitle(os.path.basename(csv_path), fontsize=13, fontweight="bold", y=0.98)
+    gs = GridSpec(3, 2, hspace=0.35, wspace=0.28,
+                  left=0.07, right=0.97, top=0.93, bottom=0.06)
+
+    axes_pos = [
+        (gs[0, 0], "X Position (mm)", raw_x, kf_x),
+        (gs[1, 0], "Y Position (mm)", raw_y, kf_y),
+        (gs[2, 0], "Z Position (mm)", raw_z, kf_z),
+    ]
+    axes_vel = [
+        (gs[0, 1], "VX (mm/s)", kf_vx),
+        (gs[1, 1], "VY (mm/s)", kf_vy),
+        (gs[2, 1], "VZ (mm/s)", kf_vz),
+    ]
+
+    for spec, label, raw, kf in axes_pos:
+        ax = fig.add_subplot(spec)
+        ax.scatter(t, raw, s=12, color="#aaaaaa", zorder=2, label="Raw", edgecolors="none")
+        ax.plot(t, kf, color="#2196F3", linewidth=1.6, zorder=3, label="KF")
+        ax.fill_between(t, raw, kf, color="#2196F3", alpha=0.12, zorder=1)
+        for ri in resets:
+            ax.axvline(t[ri], color="#FF9800", linewidth=0.8, linestyle="--", alpha=0.6)
+        ax.set_ylabel(label, fontsize=10)
+        ax.legend(fontsize=8, loc="upper right")
+        ax.grid(True, alpha=0.25)
+        ax.tick_params(labelsize=8)
+
+    for spec, label, vel in axes_vel:
+        ax = fig.add_subplot(spec)
+        ax.plot(t, vel, color="#E91E63", linewidth=1.4, zorder=3)
+        ax.axhline(0, color="#666666", linewidth=0.5, linestyle="-")
+        for ri in resets:
+            ax.axvline(t[ri], color="#FF9800", linewidth=0.8, linestyle="--", alpha=0.6)
+        ax.set_ylabel(label, fontsize=10)
+        ax.grid(True, alpha=0.25)
+        ax.tick_params(labelsize=8)
+
+    # Add shared x-label on bottom row only
+    for spec in [gs[2, 0], gs[2, 1]]:
+        fig.add_subplot(spec).set_xlabel("Time (s)", fontsize=10)
+
+    plt.show()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Simple live KF vs legacy trajectory comparison"
     )
     parser.add_argument("--warmup-s", type=float, default=2.0)
+    parser.add_argument("--plot", type=str, default=None,
+                        help="Path to a kf_log CSV to plot (skip live mode)")
     args = parser.parse_args()
+
+    if args.plot:
+        plot_csv(args.plot)
+        return 0
 
     try:
         app = TrajectoryComparison(warmup_s=args.warmup_s)
