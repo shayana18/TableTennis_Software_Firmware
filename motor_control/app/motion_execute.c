@@ -66,6 +66,119 @@ static float motion_profile_distance(const move_plan *plan, float t_s)
   return plan->D;
 }
 
+static float clamp01(float value)
+{
+  if (value < 0.0f) {
+    return 0.0f;
+  }
+  if (value > 1.0f) {
+    return 1.0f;
+  }
+  return value;
+}
+
+static float strike_tau_start(float tau_window_s)
+{
+  return tau_window_s * STRIKE_TAU_POS_SCALE;
+}
+
+static float strike_tau_end(float tau_window_s)
+{
+  return -tau_window_s * STRIKE_TAU_NEG_SCALE;
+}
+
+static float strike_tau_from_progress(float tau_window_s, float progress)
+{
+  const float tau_start = strike_tau_start(tau_window_s);
+  const float tau_end = strike_tau_end(tau_window_s);
+  return tau_start + ((tau_end - tau_start) * progress);
+}
+
+static float strike_contact_progress(float tau_window_s)
+{
+  const float tau_start = strike_tau_start(tau_window_s);
+  const float tau_end = strike_tau_end(tau_window_s);
+  const float denom = tau_start - tau_end;
+  if (denom <= 1e-6f) {
+    return 0.5f;
+  }
+  return clamp01(tau_start / denom);
+}
+
+static vec3 strike_ball_pos_at_tau(vec3 intercept_pos, vec3 intercept_vel, float tau_s)
+{
+  vec3 out = {
+      intercept_pos.x + (intercept_vel.x * tau_s),
+      intercept_pos.y + (intercept_vel.y * tau_s),
+      intercept_pos.z + (intercept_vel.z * tau_s) - (0.5f * GRAVITY * tau_s * tau_s),
+  };
+  return out;
+}
+
+static vec3 strike_ee_pos_from_ball(vec3 ball_pos, float paddle_yaw_rad)
+{
+  vec3 ee = {
+      ball_pos.x - (PADDLE_ARM_OFFSET * cosf(paddle_yaw_rad)),
+      ball_pos.y - (PADDLE_ARM_OFFSET * sinf(paddle_yaw_rad)),
+      ball_pos.z - PADDLE_OFFSET_Z,
+  };
+  return ee;
+}
+
+static bool strike_build_ballistic_path(vec3 intercept_pos,
+                                        vec3 intercept_vel,
+                                        float tau_window_s,
+                                        float paddle_yaw_rad,
+                                        vec3 *out_start,
+                                        vec3 *out_end,
+                                        float *out_arc_len)
+{
+  if (!(tau_window_s > 0.0f)) {
+    return false;
+  }
+
+  const int sample_count = 12;
+  const vec3 start = strike_ee_pos_from_ball(
+      strike_ball_pos_at_tau(intercept_pos, intercept_vel, strike_tau_start(tau_window_s)), paddle_yaw_rad);
+
+  if (!robot_EE_in_workspace(start)) {
+    return false;
+  }
+
+  float arc_len = 0.0f;
+  vec3 prev = start;
+
+  for (int i = 1; i <= sample_count; i++) {
+    const float progress = (float)i / (float)sample_count;
+    const float tau = strike_tau_from_progress(tau_window_s, progress);
+    const vec3 sample = strike_ee_pos_from_ball(
+        strike_ball_pos_at_tau(intercept_pos, intercept_vel, tau), paddle_yaw_rad);
+
+    if (!robot_EE_in_workspace(sample)) {
+      return false;
+    }
+
+    arc_len += robot_calc_dist(prev, sample, NULL, NULL, NULL);
+    prev = sample;
+  }
+
+  if (!(arc_len > 1.0f)) {
+    return false;
+  }
+
+  if (out_start != NULL) {
+    *out_start = start;
+  }
+  if (out_end != NULL) {
+    *out_end = prev;
+  }
+  if (out_arc_len != NULL) {
+    *out_arc_len = arc_len;
+  }
+
+  return true;
+}
+
 static void motion_abort(robot_t *robot, const char *reason)
 {
 
@@ -176,8 +289,8 @@ void motion_execute_prepare_strike(robot_t *robot)
 void motion_execute_plan_strike(robot_t *robot) {
   // Return the target offset we want to move to and the 4th axis yaw_norm angle
   vec3 new_interception_target;
-  vec3 interception_target = robot->current_target.pos;
-  vec3 ball_vel = robot->current_target.vel; 
+  const vec3 interception_target = robot->current_target.pos;
+  const vec3 ball_vel = robot->current_target.vel;
   vec3 strike_finish_target;
   move_plan *strike_plan = &robot->strike_move_plan;
 
@@ -226,6 +339,13 @@ void motion_execute_plan_strike(robot_t *robot) {
   } else {
     paddle_yaw = 0.0f;
   }
+  paddle_yaw += (STRIKE_YAW_BIAS_DEG * DTR);
+  while (paddle_yaw >= PI_F) {
+    paddle_yaw -= PI_F;
+  }
+  while (paddle_yaw < 0.0f) {
+    paddle_yaw += PI_F;
+  }
 
   {
     long yaw_norm_cdeg = (long)lroundf(yaw_norm * (18000.0f / PI_F));
@@ -236,14 +356,15 @@ void motion_execute_plan_strike(robot_t *robot) {
   }
 
   // Offset the EE using the commanded paddle yaw frame (mechanical reference).
-  const float x_offset = PADDLE_ARM_OFFSET * cosf(paddle_yaw);
-  const float y_offset = PADDLE_ARM_OFFSET * sinf(paddle_yaw);
+  const float paddle_yaw_rad = paddle_yaw;
+  const float paddle_yaw_deg = paddle_yaw * (180.0f / PI_F);
+  const vec3 ee_interception_target = strike_ee_pos_from_ball(interception_target, paddle_yaw_rad);
 
   // EE pose that places paddle center at interception point (no strike sweep).
-  new_interception_target.x = interception_target.x - x_offset;
-  new_interception_target.y = interception_target.y - y_offset;
-  new_interception_target.z = interception_target.z - PADDLE_OFFSET_Z;
-  
+  new_interception_target = ee_interception_target;
+  strike_plan->yaw_angle_deg = paddle_yaw_deg;
+  robot->current_move_plan.yaw_angle_deg = paddle_yaw_deg;
+
   if (paddle_speed < 1.0f) {
     if (!robot_EE_in_workspace(new_interception_target)) {
       motion_abort(robot, "LOW-SPEED INTERCEPT TARGET OUT OF WORKSPACE\r\n");
@@ -269,12 +390,22 @@ void motion_execute_plan_strike(robot_t *robot) {
     strike_plan->t2 = 0.0f;
     strike_plan->t3 = 0.0f;
     strike_plan->T = 0.0f;
+    strike_plan->yaw_angle_deg = paddle_yaw_deg;
+    strike_plan->ballistic_track = false;
+    strike_plan->ballistic_intercept_pos = interception_target;
+    strike_plan->ballistic_intercept_vel = ball_vel;
+    strike_plan->ballistic_tau_window_s = 0.0f;
+    strike_plan->strike_contact_progress = 0.5f;
     strike_plan->active = true;
-    robot->current_move_plan.yaw_angle_deg = paddle_yaw * (180.0f / PI_F);
 
     return;
   }
 
+
+  paddle_speed *= STRIKE_POWER_GAIN;
+  if (paddle_speed < STRIKE_MIN_COMMAND_SPEED) {
+    paddle_speed = STRIKE_MIN_COMMAND_SPEED;
+  }
 
   if (paddle_speed > MAX_STRIKE_VEL) {
     paddle_speed = MAX_STRIKE_VEL;
@@ -282,50 +413,154 @@ void motion_execute_plan_strike(robot_t *robot) {
   }
 
   float dir_sign = (vp_n >= 0.0f) ? 1.0f : -1.0f;
-  float dir_x = dir_sign * nx;
-  float dir_y = dir_sign * ny;
+  const vec3 fallback_strike_dir = {dir_sign * nx, dir_sign * ny, 0.0f};
+  vec3 strike_dir = fallback_strike_dir;
+
+  const float ball_speed_sq = (ball_vel.x * ball_vel.x) + (ball_vel.y * ball_vel.y) + (ball_vel.z * ball_vel.z);
+  const float ball_speed = sqrtf(ball_speed_sq);
+  if (ball_speed_sq > 1.0f) {
+    const float inv_ball_speed = 1.0f / ball_speed;
+    strike_dir.x = ball_vel.x * inv_ball_speed;
+    strike_dir.y = ball_vel.y * inv_ball_speed;
+    strike_dir.z = ball_vel.z * inv_ball_speed;
+  } else {
+    robot_runtime_send_status("STRIKE TRAJECTORY FALLBACK: BALL SPEED TOO LOW\r\n");
+  }
 
 
-  float interception_target_offset = paddle_speed * paddle_speed / (2.0f * MAX_CART_ACC) + STRIKE_BUFFER_DIST;
+  const float nominal_stop_dist = (paddle_speed * paddle_speed) / (2.0f * MAX_CART_ACC);
+  const float interception_target_offset =
+      (nominal_stop_dist + STRIKE_BUFFER_DIST + STRIKE_SWEEP_EXTRA_DIST) * STRIKE_SWEEP_DIST_GAIN;
+  bool use_ballistic_path = false;
+  float ballistic_arc_len = 0.0f;
 
-  new_interception_target.x = (interception_target.x - x_offset) - (dir_x * interception_target_offset);
-  new_interception_target.y = (interception_target.y - y_offset) - (dir_y * interception_target_offset); 
-  new_interception_target.z = interception_target.z - PADDLE_OFFSET_Z;
+  float tau_window_s = (interception_target_offset / fmaxf(ball_speed, 300.0f)) * STRIKE_TAU_WINDOW_GAIN;
+  if (tau_window_s < STRIKE_TAU_WINDOW_MIN) {
+    tau_window_s = STRIKE_TAU_WINDOW_MIN;
+  } else if (tau_window_s > STRIKE_TAU_WINDOW_MAX) {
+    tau_window_s = STRIKE_TAU_WINDOW_MAX;
+  }
 
-  strike_finish_target.x = interception_target.x - x_offset + (dir_x * interception_target_offset);
-  strike_finish_target.y = interception_target.y - y_offset + (dir_y * interception_target_offset); 
-  strike_finish_target.z = interception_target.z - PADDLE_OFFSET_Z;
+  float tau_candidate = tau_window_s;
+  for (int attempt = 0; attempt < 4; attempt++) {
+    vec3 candidate_start;
+    vec3 candidate_end;
+    float candidate_arc_len = 0.0f;
 
-  if (!robot_EE_in_workspace(strike_finish_target)) {
-    motion_abort(robot, "STRIKE TARGET OUT OF WORKSPACE\r\n");
+    if (strike_build_ballistic_path(interception_target,
+                                    ball_vel,
+                                    tau_candidate,
+                                    paddle_yaw_rad,
+                                    &candidate_start,
+                                    &candidate_end,
+                                    &candidate_arc_len)) {
+      new_interception_target = candidate_start;
+      strike_finish_target = candidate_end;
+      ballistic_arc_len = candidate_arc_len;
+      tau_window_s = tau_candidate;
+      use_ballistic_path = true;
+      break;
+    }
+
+    tau_candidate *= 0.65f;
+  }
+
+  if (!use_ballistic_path) {
+    // Fallback to straight-line sweep if counter-tracking parabola cannot fit workspace.
+    bool strike_targets_valid = false;
+    float sweep_scale = 1.0f;
+    bool used_planar_sweep = false;
+
+    for (int attempt = 0; attempt < 5 && !strike_targets_valid; attempt++) {
+      const float trial_offset = interception_target_offset * sweep_scale;
+
+      new_interception_target.x = ee_interception_target.x - (strike_dir.x * trial_offset);
+      new_interception_target.y = ee_interception_target.y - (strike_dir.y * trial_offset);
+      new_interception_target.z = ee_interception_target.z - (strike_dir.z * trial_offset);
+
+      strike_finish_target.x = ee_interception_target.x + (strike_dir.x * trial_offset);
+      strike_finish_target.y = ee_interception_target.y + (strike_dir.y * trial_offset);
+      strike_finish_target.z = ee_interception_target.z + (strike_dir.z * trial_offset);
+
+      strike_targets_valid = robot_EE_in_workspace(new_interception_target) && robot_EE_in_workspace(strike_finish_target);
+      if (!strike_targets_valid && ball_speed_sq > 1.0f) {
+        // Last-resort fallback: planar strike with z held at intercept height.
+        strike_dir = fallback_strike_dir;
+        used_planar_sweep = true;
+        new_interception_target.x = ee_interception_target.x - (strike_dir.x * trial_offset);
+        new_interception_target.y = ee_interception_target.y - (strike_dir.y * trial_offset);
+        new_interception_target.z = ee_interception_target.z;
+
+        strike_finish_target.x = ee_interception_target.x + (strike_dir.x * trial_offset);
+        strike_finish_target.y = ee_interception_target.y + (strike_dir.y * trial_offset);
+        strike_finish_target.z = ee_interception_target.z;
+        strike_targets_valid = robot_EE_in_workspace(new_interception_target) && robot_EE_in_workspace(strike_finish_target);
+      }
+
+      sweep_scale *= 0.75f;
+    }
+
+    if (!strike_targets_valid) {
+      motion_abort(robot, "STRIKE SWEEP OUT OF WORKSPACE\r\n");
+      robot->state = STATE_IDLE;
+      set_idle(robot);
+      robot_runtime_send_status("STATE: IDLE\r\n");
+      return;
+    }
+    if (used_planar_sweep) {
+      robot_runtime_send_status("STRIKE TRAJECTORY FALLBACK: PLANAR SWEEP\r\n");
+    } else {
+      robot_runtime_send_status("STRIKE TRAJECTORY FALLBACK: LINEAR SWEEP\r\n");
+    }
+  } else {
+    robot_runtime_send_status("STRIKE MODE: BALLISTIC COUNTER-TRACK\r\n");
+  }
+
+  float line_dx;
+  float line_dy;
+  float line_dz;
+  const float line_dist = robot_calc_dist(new_interception_target, strike_finish_target, &line_dx, &line_dy, &line_dz);
+  const float D = use_ballistic_path ? ballistic_arc_len : line_dist;
+
+  if (!(D > 1.0f) || !(line_dist > 1.0f)) {
+    motion_abort(robot, "STRIKE SWEEP TOO SHORT\r\n");
     robot->state = STATE_IDLE;
     set_idle(robot);
     robot_runtime_send_status("STATE: IDLE\r\n");
     return;
   }
 
-  float dx, dy, dz;
-  const float D = robot_calc_dist(new_interception_target, strike_finish_target, &dx, &dy, &dz);
-
   // Update the interception target
   robot->current_target.pos = new_interception_target;
-  robot->current_move_plan.yaw_angle_deg = paddle_yaw * (180.0f / PI_F);
 
   // Update the strike target
   strike_plan->start_pos = new_interception_target;
   strike_plan->target_pos = strike_finish_target;
   strike_plan->D = D;
-
+  strike_plan->yaw_angle_deg = paddle_yaw_deg;
   strike_plan->max_cart_vel = paddle_speed;
+  strike_plan->ballistic_track = use_ballistic_path;
+  strike_plan->ballistic_intercept_pos = interception_target;
+  strike_plan->ballistic_intercept_vel = ball_vel;
+  strike_plan->ballistic_tau_window_s = use_ballistic_path ? tau_window_s : 0.0f;
+  strike_plan->strike_contact_progress = use_ballistic_path ? strike_contact_progress(tau_window_s) : 0.5f;
 
-  strike_plan->dir.x = dir_x;
-  strike_plan->dir.y = dir_y;
-  strike_plan->dir.z = 0.0f;
+  strike_plan->dir.x = line_dx / line_dist;
+  strike_plan->dir.y = line_dy / line_dist;
+  strike_plan->dir.z = line_dz / line_dist;
 
   // Strike Planning
-  float t_acc = strike_plan->max_cart_vel / MAX_CART_ACC;
-  float ramp_dist = 0.5f * MAX_CART_ACC * (t_acc * t_acc);
-  float t_cruise = (strike_plan->D - 2.0f * ramp_dist) / strike_plan->max_cart_vel;
+  float t_acc;
+  float t_cruise;
+  const float ramp_dist_max_v = (strike_plan->max_cart_vel * strike_plan->max_cart_vel) / (2.0f * MAX_CART_ACC);
+  if (strike_plan->D <= 2.0f * ramp_dist_max_v) {
+    t_acc = sqrtf(strike_plan->D / MAX_CART_ACC);
+    t_cruise = 0.0f;
+    strike_plan->max_cart_vel = MAX_CART_ACC * t_acc;
+  } else {
+    t_acc = strike_plan->max_cart_vel / MAX_CART_ACC;
+    t_cruise = (strike_plan->D - 2.0f * ramp_dist_max_v) / strike_plan->max_cart_vel;
+  }
 
   strike_plan->t1 = 0.0f;
   strike_plan->t2 = strike_plan->t1 + t_acc;
@@ -353,7 +588,10 @@ void motion_execute_plan(robot_t *robot)
       return;
     }
     motion_execute_plan_strike(robot);
-    strike_time_buffer = robot->strike_move_plan.T / 2.0f;
+    strike_time_buffer = robot->strike_move_plan.T * robot->strike_move_plan.strike_contact_progress;
+    if (robot->strike_move_plan.T > 0.0f) {
+      strike_time_buffer += STRIKE_CONTACT_LEAD_TIME;
+    }
 
     if (!robot->strike_move_plan.active) {
       robot_runtime_send_status("STRIKE PLAN FAILED\r\n");
@@ -498,11 +736,19 @@ void motion_execute_tick(robot_t *robot)
     s = plan->D;
   }
 
-  vec3 setpoint = {
-      plan->start_pos.x + plan->dir.x * s,
-      plan->start_pos.y + plan->dir.y * s,
-      plan->start_pos.z + plan->dir.z * s,
-  };
+  vec3 setpoint;
+  if (robot->current_target.type == TARGET_STRIKE && plan->ballistic_track) {
+    const float progress = clamp01((plan->D > 1e-6f) ? (s / plan->D) : 1.0f);
+    const float tau = strike_tau_from_progress(plan->ballistic_tau_window_s, progress);
+    const vec3 ball_pos = strike_ball_pos_at_tau(plan->ballistic_intercept_pos, plan->ballistic_intercept_vel, tau);
+    setpoint = strike_ee_pos_from_ball(ball_pos, plan->yaw_angle_deg * DTR);
+  } else {
+    setpoint = (vec3){
+        plan->start_pos.x + plan->dir.x * s,
+        plan->start_pos.y + plan->dir.y * s,
+        plan->start_pos.z + plan->dir.z * s,
+    };
+  }
 
   float q1_ik;
   float q2_ik;

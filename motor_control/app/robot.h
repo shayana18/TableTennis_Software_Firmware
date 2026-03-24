@@ -25,7 +25,7 @@
 #define MAX_CART_VEL 4000.0f     // mm/s Default: 4000
 #define MAX_CART_ACC 20000.0f    // mm/s^2  default: 20000
 
-#define MAX_STRIKE_VEL 2000.0f    // mm/s
+#define MAX_STRIKE_VEL 4000.0f    // mm/s
 
 // Home position (mm)
 #define HOME_X 0.0f
@@ -37,9 +37,20 @@
 #define STRIKE_TARGET_X 0.0f
 #define STRIKE_TARGET_Y 2055.0f
 #define STRIKE_TARGET_Z -1150.0f
-#define STRIKE_BUFFER_DIST 10.0f //mm Additional distance to account for strike execution delay and ball contact
+#define STRIKE_BUFFER_DIST 50.0f //mm Additional distance to account for strike execution delay and ball contact
 #define STRIKE_Z_APEX_CLEARANCE 100.0f 
-#define RESTITUTION 1.0f
+#define RESTITUTION 0.90f
+#define STRIKE_POWER_GAIN 2.0f
+#define STRIKE_MIN_COMMAND_SPEED 1500.0f // (mm/s) minimum commanded paddle speed when striking
+#define STRIKE_SWEEP_DIST_GAIN 1.5f
+#define STRIKE_SWEEP_EXTRA_DIST 30.0f // (mm) adds extra counter-sweep coverage on top of stopping distance
+#define STRIKE_TAU_WINDOW_GAIN 1.35f
+#define STRIKE_TAU_WINDOW_MIN 0.015f // (s)
+#define STRIKE_TAU_WINDOW_MAX 0.180f // (s)
+#define STRIKE_TAU_POS_SCALE 1.60f
+#define STRIKE_TAU_NEG_SCALE 0.70f
+#define STRIKE_CONTACT_LEAD_TIME 0.040f // (s) schedule impact this much earlier to compensate latency
+#define STRIKE_YAW_BIAS_DEG 5.0f // (deg) positive bias to steer returns more toward opponent center
 
 // Delta geometry (mm)
 #define BASE_RADIUS 165.0f
@@ -89,7 +100,7 @@
 #define ROBOT_JOINT_SIGN -1.0f
 #define Q_TOLERANCE 0.5 // degrees
 
-#define BUFFER_TIME 0.15f // seconds, Time buffer to account for communication and execution delays when planning to target arrival time.
+#define BUFFER_TIME 0.2f // seconds, Time buffer to account for communication and execution delays when planning to target arrival time.
 
 
 // Motor IDs on the daisy-chain
@@ -128,6 +139,11 @@ typedef struct {
   vec3 dir;
   float max_cart_vel;
   float yaw_angle_deg;
+  bool ballistic_track;
+  vec3 ballistic_intercept_pos;
+  vec3 ballistic_intercept_vel;
+  float ballistic_tau_window_s;
+  float strike_contact_progress;
 
   float D;
   float t1;
