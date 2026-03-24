@@ -18,7 +18,7 @@
 
 // Robot motion limits
 #define MAX_JOINT_ANGLE_LIMIT ENCODER_ZERO_TO_IK_OFFSET // degrees
-#define MIN_JOINT_ANGLE_LIMIT -78.0f  // Low stop limit is 80 deg
+#define MIN_JOINT_ANGLE_LIMIT -79.0f  // Low stop limit is 80 deg
 #define MAX_JOINT_VEL 3000.0L      // RPM, Conservative values
 #define MAX_JOINT_ACC 1000.0L     // RPM/s, Conservative Values
 
@@ -50,10 +50,10 @@
 #define PADDLE_OFFSET_Z -50.0f   // mm
 
 // PADDLE Workspace bounds (mm) - (Paddle)  Elliptic Cylinder
-#define PADDLE_ELLIPSE_RADIUS_X 790.0f
+#define PADDLE_ELLIPSE_RADIUS_X 780.0f
 #define PADDLE_ELLIPSE_RADIUS_Y 540.0f
-#define PADDLE_LIMIT_POS_Z -721.0f
-#define PADDLE_LIMIT_NEG_Z -1050.0f
+#define PADDLE_LIMIT_POS_Z -760.0f
+#define PADDLE_LIMIT_NEG_Z -1020.0f
 #define NET_Z_TOP -1000.0f
 
 // ROBOT EE Workspace bounds (mm) - (Robot EE)  Elliptic Cylinder
@@ -73,7 +73,7 @@
 #define ELLIPSE_RADIUS_Y_PADDLE 550.0f
 
 // Motion execution configuration
-#define MOTION_EXECUTE_PERIOD_MS 10U
+#define MOTION_EXECUTE_PERIOD_MS 4U
 #define JOINT_GEAR_RATIO 10.0f        // 10:1 gear box
 #define PULSES_PER_REV 65536.0f
 #define MAX_MOTOR_SPEED_CMD MAX_JOINT_VEL
@@ -89,7 +89,7 @@
 #define ROBOT_JOINT_SIGN -1.0f
 #define Q_TOLERANCE 0.5 // degrees
 
-#define BUFFER_TIME 0.01f // seconds, Time buffer to account for communication and execution delays when planning to target arrival time.
+#define BUFFER_TIME 0.15f // seconds, Time buffer to account for communication and execution delays when planning to target arrival time.
 
 
 // Motor IDs on the daisy-chain

@@ -71,7 +71,7 @@ def send_message(
         z_vel,
         arrival_time,
         now_s,
-        now_s,
+        0.0,
     )
     ser.write(msg)
     ser.flush()
@@ -100,16 +100,24 @@ def send_intercept(
     send_message(1.0, x, y, z, t_s, x_vel, y_vel, z_vel)
 
 
+def send_test(
+    x: float,
+    y: float,
+    z: float,
+    t_s: float,
+) -> None:
+    send_message(4.0, x, y, z, t_s, 0.0, 0.0, 0.0)
+
+
 def show_menu() -> None:
     safe_print("\n" + "=" * 54)
     safe_print("ROBOT TARGET SENDER + SERIAL MONITOR")
     safe_print("=" * 54)
     safe_print("1) Send HOME")
-    safe_print("2) Send INTERCEPT (custom position)")
-    safe_print("3) Send INTERCEPT (quick default)")
-    safe_print("4) Send INTERCEPT (x=680 y=0 z=-700 t=2.0s)")
-    safe_print("5) Send INTERCEPT (x=-680 y=0 z=-1000 t=2.0s)")
-    safe_print("6) Exit")
+    safe_print("2) Send TEST (custom position)")
+    safe_print("3) Send TEST (quick default)")
+    safe_print("4) Send INTERCEPT (custom position + velocity)")
+    safe_print("5) Exit")
     safe_print("=" * 54)
 
 
@@ -132,11 +140,22 @@ def main() -> int:
     try:
         while True:
             show_menu()
-            choice = input("Enter choice (1-6): ").strip()
+            choice = input("Enter choice (1-5): ").strip()
 
             if choice == "1":
                 send_home(DEFAULT_HOME)
             elif choice == "2":
+                try:
+                    x = float(input("  X position (mm) [default 50.0]: ") or "50.0")
+                    y = float(input("  Y position (mm) [default -25.0]: ") or "-25.0")
+                    z = float(input("  Z position (mm) [default -800.0]: ") or "-800.0")
+                    t = float(input("  Arrival time (s) [default 0.5]: ") or "0.5")
+                    send_test(x, y, z, t)
+                except ValueError:
+                    safe_print("[WARN] Invalid input: numbers only.")
+            elif choice == "3":
+                send_test(50.0, -25.0, -800.0, 0.5)
+            elif choice == "4":
                 try:
                     x = float(input("  X position (mm) [default 50.0]: ") or "50.0")
                     y = float(input("  Y position (mm) [default -25.0]: ") or "-25.0")
@@ -148,17 +167,11 @@ def main() -> int:
                     send_intercept(x, y, z, t, vx, vy, vz)
                 except ValueError:
                     safe_print("[WARN] Invalid input: numbers only.")
-            elif choice == "3":
-                send_intercept(50.0, -25.0, -800.0, 0.5)
-            elif choice == "4":
-                send_intercept(200.0, 200.0, -800.0, 2.0)
             elif choice == "5":
-                send_intercept(-200.0, -200.0, -800.0, 2.0)
-            elif choice == "6":
                 safe_print("[INFO] Exiting.")
                 break
             else:
-                safe_print("[WARN] Invalid choice. Enter 1-6.")
+                safe_print("[WARN] Invalid choice. Enter 1-5.")
 
             time.sleep(0.15)
     except KeyboardInterrupt:

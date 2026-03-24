@@ -32,16 +32,20 @@ static float unwrap_deg_near(float angle_deg, float ref_deg)
 
 static float motion_profile_distance(const move_plan *plan, float t_s)
 {
-  const float t_acc = plan->t2 - plan->t1;
+  // Phase timings are referenced from motion start (t=0):
+  // [0, t2): accel, [t2, t3): cruise, [t3, t3+t_acc): decel.
+  // Any additional wait is represented by plan->t1 and applied after arrival.
+  const float t_acc = plan->t2;
   const float t_cruise = plan->t3 - plan->t2;
   const float a = MAX_CART_ACC;
+  const float t_move_end = plan->t3 + t_acc;
 
-  if (t_s <= plan->t1) {
+  if (t_s <= 0.0f) {
     return 0.0f;
   }
 
   if (t_s < plan->t2) {
-    const float dt = t_s - plan->t1;
+    const float dt = t_s;
     return 0.5f * a * dt * dt;
   }
 
@@ -53,7 +57,7 @@ static float motion_profile_distance(const move_plan *plan, float t_s)
     return d_acc + v_peak * dt;
   }
 
-  if (t_s < plan->T) { 
+  if (t_s < t_move_end) {
   const float dt = t_s - plan->t3;
   const float d_cruise = v_peak * t_cruise;
   return d_acc + d_cruise + v_peak * dt - 0.5f * a * dt * dt;
@@ -205,12 +209,56 @@ void motion_execute_plan_strike(robot_t *robot) {
   float vp_n   = (vout_n + RESTITUTION * vin_n) / (1.0f + RESTITUTION);
 
   float paddle_speed = fabsf(vp_n);
+
+  if (yaw_norm < 0.0f) {
+    motion_abort(robot, "Paddle yaw is negative?? \r\n");
+    robot->state = STATE_IDLE;
+    set_idle(robot);
+    robot_runtime_send_status("STATE: IDLE\r\n");
+    return;
+  }
+  float paddle_yaw = yaw_norm;
+
+  if (yaw_norm < (HALF_PI_F)) {
+    paddle_yaw += HALF_PI_F;
+  } else if (yaw_norm > (HALF_PI_F)) {
+    paddle_yaw -= HALF_PI_F;
+  } else {
+    paddle_yaw = 0.0f;
+  }
+
+  {
+    long yaw_norm_cdeg = (long)lroundf(yaw_norm * (18000.0f / PI_F));
+    long paddle_yaw_cdeg = (long)lroundf(paddle_yaw * (18000.0f / PI_F));
+    char msg[96];
+    snprintf(msg, sizeof(msg), "PADDLE YAW: norm=%ld cmd=%ld cdeg\r\n", yaw_norm_cdeg, paddle_yaw_cdeg);
+    robot_runtime_send_status(msg);
+  }
+
+  // Offset the EE using the commanded paddle yaw frame (mechanical reference).
+  const float x_offset = PADDLE_ARM_OFFSET * cosf(paddle_yaw);
+  const float y_offset = PADDLE_ARM_OFFSET * sinf(paddle_yaw);
+
+  // EE pose that places paddle center at interception point (no strike sweep).
+  new_interception_target.x = interception_target.x - x_offset;
+  new_interception_target.y = interception_target.y - y_offset;
+  new_interception_target.z = interception_target.z - PADDLE_OFFSET_Z;
   
   if (paddle_speed < 1.0f) {
+    if (!robot_EE_in_workspace(new_interception_target)) {
+      motion_abort(robot, "LOW-SPEED INTERCEPT TARGET OUT OF WORKSPACE\r\n");
+      robot->state = STATE_IDLE;
+      set_idle(robot);
+      robot_runtime_send_status("STATE: IDLE\r\n");
+      return;
+    }
+
+    // Even without a strike sweep, keep EE offset so paddle can meet the ball.
+    robot->current_target.pos = new_interception_target;
 
     // Update the strike target
-    strike_plan->start_pos = interception_target;
-    strike_plan->target_pos = interception_target;
+    strike_plan->start_pos = new_interception_target;
+    strike_plan->target_pos = new_interception_target;
     strike_plan->D = 0.0f;
 
     strike_plan->dir.x = 0.0;
@@ -222,7 +270,7 @@ void motion_execute_plan_strike(robot_t *robot) {
     strike_plan->t3 = 0.0f;
     strike_plan->T = 0.0f;
     strike_plan->active = true;
-    robot->current_move_plan.yaw_angle_deg = 0.0;
+    robot->current_move_plan.yaw_angle_deg = paddle_yaw * (180.0f / PI_F);
 
     return;
   }
@@ -239,34 +287,6 @@ void motion_execute_plan_strike(robot_t *robot) {
 
 
   float interception_target_offset = paddle_speed * paddle_speed / (2.0f * MAX_CART_ACC) + STRIKE_BUFFER_DIST;
-
-  if (yaw_norm < 0.0f) {
-    motion_abort(robot, "Paddle yaw is negative?? \r\n");
-    robot->state = STATE_IDLE;
-    set_idle(robot);
-    robot_runtime_send_status("STATE: IDLE\r\n");
-    return;
-  }
-  float paddle_yaw = yaw_norm; 
-
-  if (yaw_norm < (HALF_PI_F)) {
-    paddle_yaw += HALF_PI_F;  
-  } else if (yaw_norm > (HALF_PI_F)) {
-    paddle_yaw -= HALF_PI_F;
-  } else {
-    paddle_yaw = 0.0f; 
-  }
-
-  {
-    long yaw_norm_cdeg = (long)lroundf(yaw_norm * (18000.0f / PI_F));
-    long paddle_yaw_cdeg = (long)lroundf(paddle_yaw * (18000.0f / PI_F));
-    char msg[96];
-    snprintf(msg, sizeof(msg), "PADDLE YAW: norm=%ld cmd=%ld cdeg\r\n", yaw_norm_cdeg, paddle_yaw_cdeg);
-    robot_runtime_send_status(msg);
-  }
-
-  float x_offset = PADDLE_ARM_OFFSET * nx;
-  float y_offset = PADDLE_ARM_OFFSET * ny;
 
   new_interception_target.x = (interception_target.x - x_offset) - (dir_x * interception_target_offset);
   new_interception_target.y = (interception_target.y - y_offset) - (dir_y * interception_target_offset); 
@@ -419,10 +439,11 @@ void motion_execute_plan(robot_t *robot)
     robot_runtime_send_status("WARN: Robot will be late\r\n");
   }
 
-  plan->t1 = t_extra;
-  plan->t2 = plan->t1 + t_acc;
+  // Move immediately, then hold at target for t_extra.
+  plan->t1 = t_extra;  // post-arrival hold duration
+  plan->t2 = t_acc;
   plan->t3 = plan->t2 + t_cruise;
-  plan->T = plan->t3 + t_acc;
+  plan->T = plan->t3 + t_acc + plan->t1;
   plan->t_start_ms = now_ms;
   plan->active = true;
 }
@@ -441,6 +462,7 @@ void motion_execute_start(robot_t *robot)
   if (!plan->active || !plan->prev_joint_valid) {
     robot->flag_ready_to_move = false;
     robot_runtime_send_status("PLAN_ABORT: PLANNING FAILED\r\n");
+    set_idle(robot);
     return;
   }
 
@@ -467,12 +489,6 @@ void motion_execute_tick(robot_t *robot)
   const uint32_t now_ms = HAL_GetTick();
   // I 
   const float t_s = ((float)(now_ms - plan->t_start_ms)) * 0.001f;
-
-  // During intentional wait (t1), hold the last commanded point instead of
-  // re-commanding sampled start_pos, which can cause visible backtracking.
-  if (t_s < plan->t1) {
-    return;
-  }
 
   float s = motion_profile_distance(plan, t_s);
   if (s < 0.0f) {
@@ -506,6 +522,7 @@ void motion_execute_tick(robot_t *robot)
   const bool joints_ok = motion_execute_safety_check_joint_limits(q1_ik, q2_ik, q3_ik);
   if (!joints_ok && !(robot->current_target.type == TARGET_HOME)) {
     motion_abort(robot, "PATH_ABORT: ROBOT JOINT LIMITS EXCEEDED\r\n");
+    set_idle(robot);
     return;
   }
 

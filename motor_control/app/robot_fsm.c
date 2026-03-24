@@ -4,6 +4,8 @@
 #include "robot.h"
 #include "robot_runtime.h"
 #include "shared_types.h"
+#include <math.h>
+#include <stdio.h>
 
 
 
@@ -65,7 +67,20 @@ void delta_fsm(robot_t *robot)
     case STATE_IDLE:
       if (!robot_runtime_pop_target(&robot->current_target)) {
         break;
-      } else if(robot->current_target.type == TARGET_INTERCEPT || robot->current_target.type == TARGET_TEST)
+      }
+
+      {
+        char msg[128];
+        snprintf(msg, sizeof(msg),
+                 "RX TARGET: type=%d x=%ld y=%ld z=%ld\r\n",
+                 (int)robot->current_target.type,
+                 (long)lroundf(robot->current_target.pos.x),
+                 (long)lroundf(robot->current_target.pos.y),
+                 (long)lroundf(robot->current_target.pos.z));
+        robot_runtime_send_status(msg);
+      }
+
+      if(robot->current_target.type == TARGET_INTERCEPT || robot->current_target.type == TARGET_TEST)
       {
         robot->state = STATE_PLAN;
         robot_runtime_send_status("STATE: PLAN\r\n");
@@ -83,6 +98,25 @@ void delta_fsm(robot_t *robot)
     case STATE_PLAN:
 
       motion_execute_plan(robot);
+
+      // Planning may intentionally conclude with no motion needed
+      // (e.g., target is already within 1 mm of current pose).
+      // Treat that as success, not a planning error.
+      if (robot->flag_path_done) {
+        robot->state = STATE_IDLE;
+        set_idle(robot);
+        robot_runtime_send_status("STATE: IDLE\r\n");
+        break;
+      }
+
+      // If planning already aborted itself (workspace/IK/etc), do not run start.
+      if (robot->flag_path_abort) {
+        robot->state = STATE_IDLE;
+        set_idle(robot);
+        robot_runtime_send_status("STATE: IDLE\r\n");
+        break;
+      }
+
       motion_execute_start(robot);
       if (!robot->flag_ready_to_move) {
         robot_runtime_send_status("Planning Failed\r\n");
