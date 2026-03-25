@@ -20,10 +20,10 @@
 #define MAX_JOINT_ANGLE_LIMIT ENCODER_ZERO_TO_IK_OFFSET // degrees
 #define MIN_JOINT_ANGLE_LIMIT -79.0f  // Low stop limit is 80 deg
 #define MAX_JOINT_VEL 3000.0L      // RPM, Conservative values
-#define MAX_JOINT_ACC 1000.0L     // RPM/s, Conservative Values
+#define MAX_JOINT_ACC 10000.0L     // RPM/s, Conservative Values
 
 #define MAX_CART_VEL 4000.0f     // mm/s Default: 4000
-#define MAX_CART_ACC 20000.0f    // mm/s^2  default: 20000
+#define MAX_CART_ACC 22000.0f    // mm/s^2  default: 20000
 
 #define MAX_STRIKE_VEL 4000.0f    // mm/s
 

@@ -9,7 +9,7 @@ static volatile uint8_t s_motion_tick_pending = 0U;
 static uint32_t s_tick_ms_accum = 0U;
 
 
-// Pre-computed motion profile constants (independent of targets)
+// Pre-computed motion profile constants (independent of targets)OKa
 static const float s_ramp_time = MAX_CART_VEL / MAX_CART_ACC;
 static const float s_ramp_dist = 0.5f * MAX_CART_ACC * (MAX_CART_VEL / MAX_CART_ACC) * (MAX_CART_VEL / MAX_CART_ACC);
 
