@@ -16,6 +16,7 @@ v5: firmware-matching ellipse workspace, clamp-to-workspace fallback,
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import math
 import os
@@ -122,6 +123,7 @@ class SimpleIntegration:
 
         # === Throw data logger (detailed per-frame diagnostics) ===
         self._throw_log_path = os.path.join(SCRIPT_DIR, "throw_data_log.json")
+        self._throw_csv_path = os.path.join(SCRIPT_DIR, "throw_data.csv")
         self._throw_log: list[dict] = []      # completed throws
         self._active_throw: Optional[dict] = None
         self._throw_lost_count = 0
@@ -201,6 +203,7 @@ class SimpleIntegration:
         self._throw_log.append(throw)
         self._active_throw = None
         self._save_throw_log()
+        self._save_throw_csv(throw)
 
     def _log_throw_frame(
         self,
@@ -307,6 +310,10 @@ class SimpleIntegration:
             if intercept.get("clamped"):
                 entry["pred"]["clamp_d"] = round(
                     intercept.get("clamp_dist", 0), 1)
+            if "confidence" in intercept:
+                entry["pred"]["conf"] = intercept["confidence"]
+                entry["pred"]["spread"] = intercept.get("spread_mm", 0)
+                entry["pred"]["hit_r"] = intercept.get("hit_ratio", 1.0)
 
         self._active_throw["frames"].append(entry)
 
@@ -336,6 +343,8 @@ class SimpleIntegration:
                 round(intercept.get("vy", 0), 1),
                 round(intercept.get("vz", 0), 1),
             ],
+            "confidence": intercept.get("confidence", 1.0),
+            "spread_mm": intercept.get("spread_mm", 0),
             "latency_ms": round(latency * 1000, 2),
             "buf_pts": n_pts,
             "is_update": is_update,
@@ -366,6 +375,9 @@ class SimpleIntegration:
                 "bounce_fall_z_mm": RobotPredictor.MIN_BOUNCE_FALL_Z,
                 "bounce_rise_frames": RobotPredictor.BOUNCE_RISE_FRAMES,
                 "post_bounce_min_updates": RobotPredictor.POST_BOUNCE_MIN_UPDATES,
+                "confidence_samples": RobotPredictor.CONFIDENCE_SAMPLES,
+                "max_intercept_spread_mm": RobotPredictor.MAX_INTERCEPT_SPREAD,
+                "min_hit_ratio": RobotPredictor.MIN_HIT_RATIO,
                 "min_send_buffer": self.MIN_SEND_BUFFER,
             },
             "throws": self._throw_log,
@@ -376,6 +388,99 @@ class SimpleIntegration:
             _print(f"[LOG] Saved {len(self._throw_log)} throws -> {self._throw_log_path}")
         except Exception as e:
             _print(f"[WARN] Failed to save throw log: {e}")
+
+    # --- CSV export (one row per frame, appended after each throw) ---
+
+    _CSV_COLUMNS = [
+        "throw_id", "frame_idx", "timestamp_s", "dt_ms",
+        # Camera-frame 3D (cm)
+        "cam_x", "cam_y", "cam_z",
+        # Robot-frame 3D (mm)
+        "rob_x", "rob_y", "rob_z",
+        # Stereo quality
+        "accepted", "reject_reason", "disparity", "reproj_err",
+        # KF state
+        "kf_pos_x", "kf_pos_y", "kf_pos_z",
+        "vel_x", "vel_y", "vel_z",
+        "kf_ready", "kf_updates", "buf_size",
+        # Prediction
+        "pred_x", "pred_y", "pred_z", "pred_t_ms",
+        "pred_vx", "pred_vy", "pred_vz",
+        "confidence", "spread_mm", "hit_ratio",
+        "clamped", "clamp_dist",
+        # Bounce
+        "bounces",
+    ]
+
+    def _save_throw_csv(self, throw: dict) -> None:
+        """Append one completed throw's frames to the CSV file."""
+        throw_id = throw.get("id", 0)
+        frames = throw.get("frames", [])
+        if not frames:
+            return
+
+        try:
+            with open(self._throw_csv_path, "w", newline="", encoding="utf-8") as f:
+                writer = csv.DictWriter(f, fieldnames=self._CSV_COLUMNS,
+                                        extrasaction="ignore")
+                writer.writeheader()
+
+                for i, fr in enumerate(frames):
+                    cam = fr.get("cam")
+                    rob = fr.get("rob")
+                    kfp = fr.get("kf_pos")
+                    vel = fr.get("vel")
+                    pred = fr.get("pred")
+
+                    row = {
+                        "throw_id":     throw_id,
+                        "frame_idx":    i,
+                        "timestamp_s":  fr.get("t"),
+                        "dt_ms":        fr.get("dt"),
+                        # Camera 3D
+                        "cam_x":        cam[0] if cam else None,
+                        "cam_y":        cam[1] if cam else None,
+                        "cam_z":        cam[2] if cam else None,
+                        # Robot 3D
+                        "rob_x":        rob[0] if rob else None,
+                        "rob_y":        rob[1] if rob else None,
+                        "rob_z":        rob[2] if rob else None,
+                        # Stereo
+                        "accepted":     fr.get("ok"),
+                        "reject_reason": fr.get("rej") or fr.get("stereo_fail"),
+                        "disparity":    fr.get("disp"),
+                        "reproj_err":   fr.get("rep"),
+                        # KF
+                        "kf_pos_x":     kfp[0] if kfp else None,
+                        "kf_pos_y":     kfp[1] if kfp else None,
+                        "kf_pos_z":     kfp[2] if kfp else None,
+                        "vel_x":        vel[0] if vel else None,
+                        "vel_y":        vel[1] if vel else None,
+                        "vel_z":        vel[2] if vel else None,
+                        "kf_ready":     fr.get("kf_rdy"),
+                        "kf_updates":   fr.get("buf"),
+                        "buf_size":     fr.get("buf"),
+                        # Prediction
+                        "pred_x":       pred["x"] if pred else None,
+                        "pred_y":       pred["y"] if pred else None,
+                        "pred_z":       pred["z"] if pred else None,
+                        "pred_t_ms":    round(pred["t"] * 1000, 1) if pred else None,
+                        "pred_vx":      pred.get("vx") if pred else None,
+                        "pred_vy":      pred.get("vy") if pred else None,
+                        "pred_vz":      pred.get("vz") if pred else None,
+                        "confidence":   pred.get("conf") if pred else None,
+                        "spread_mm":    pred.get("spread") if pred else None,
+                        "hit_ratio":    pred.get("hit_r") if pred else None,
+                        "clamped":      pred.get("clamp") if pred else None,
+                        "clamp_dist":   pred.get("clamp_d") if pred else None,
+                        # Bounce
+                        "bounces":      fr.get("bnc", 0),
+                    }
+                    writer.writerow(row)
+
+            _print(f"[CSV] Throw #{throw_id} ({len(frames)} frames) -> {self._throw_csv_path}")
+        except Exception as e:
+            _print(f"[WARN] Failed to save CSV: {e}")
 
     # --- UART RX processing ---
 
@@ -602,8 +707,9 @@ class SimpleIntegration:
                 self.throw_count += 1
 
                 clamped = intercept.get('clamped', False)
+                conf = intercept.get('confidence', 1.0)
                 tag = " [CLAMPED]" if clamped else ""
-                _print(f"[THROW #{self.throw_count}]{tag}  Target(mm): x={x:+.0f} y={y:+.0f} z={z:+.0f}  t={t_adjusted*1000:.0f}ms")
+                _print(f"[THROW #{self.throw_count}]{tag}  Target(mm): x={x:+.0f} y={y:+.0f} z={z:+.0f}  t={t_adjusted*1000:.0f}ms  conf={conf:.0%}")
                 self._log_intercept(intercept, t_adjusted, n_pts, latency)
 
             self._log_throw_send(intercept, t_adjusted, n_pts, latency, is_update, frame_ts)
@@ -710,7 +816,7 @@ class SimpleIntegration:
 
                 if self.run_gate and result["found_3d"]:
                     reproj = result.get("reproj_err", 0)
-                    if reproj > 10.0:
+                    if reproj > 7.5:
                         result["found_3d"] = False
                         result["reject_reason"] = f"reproj({reproj:.1f}px)"
                         print("point rejected as reproj = freproj({reproj:.1f}px)\n")
@@ -759,10 +865,14 @@ class SimpleIntegration:
 
                 if intercept is not None:
                     ws = "IN" if in_workspace(intercept['x'], intercept['y'], intercept['z']) else "OUT"
+                    conf = intercept.get('confidence', 1.0)
+                    spread = intercept.get('spread_mm', 0)
+                    conf_color = (0, 220, 220) if conf >= 0.5 else (0, 140, 255)
                     cv2.putText(left_vis,
                         f"Int(mm): X={intercept['x']:+.0f} Y={intercept['y']:+.0f} "
-                        f"Z={intercept['z']:+.0f}  t={intercept['time']*1000:.0f}ms  WS:{ws}",
-                        (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 220, 220), 1)
+                        f"Z={intercept['z']:+.0f}  t={intercept['time']*1000:.0f}ms  "
+                        f"WS:{ws}  C:{conf:.0%}({spread:.0f}mm)",
+                        (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.42, conf_color, 1)
 
                 cv2.putText(left_vis,
                     f"Throws:{self.throw_count}  g=gate c=clear r=reset b=bg q=quit",

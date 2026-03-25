@@ -53,6 +53,11 @@ class RobotPredictor:
     # Y offset applied to every predicted intercept (mm)
     INTERCEPT_Y_OFFSET = 80.0
 
+    # Confidence scoring via KF covariance sampling (inspired by UZH BallTrajectory)
+    CONFIDENCE_SAMPLES    = 8      # number of initial-state samples
+    MAX_INTERCEPT_SPREAD  = 250.0  # mm -- reject if intercept spread exceeds this
+    MIN_HIT_RATIO         = 0.5    # at least 50% of samples must find a workspace hit
+
     # Observed bounce detection
     MIN_BOUNCE_FALL_Z  = 150.0  # mm minimum Z descent before accepting bounce (was 50; stereo noise is ±30-50mm)
     BOUNCE_RISE_FRAMES = 3      # consecutive rising frames to confirm (was 2)
@@ -81,6 +86,7 @@ class RobotPredictor:
         self._z_min_since_reset = None
         self._rising_count = 0
         self._bounce_count = 0
+        self._velocity_seeded = False
 
     def reset(self):
         self.positions.clear()
@@ -90,6 +96,7 @@ class RobotPredictor:
         self._z_min_since_reset = None
         self._rising_count = 0
         self._bounce_count = 0
+        self._velocity_seeded = False
 
     def add_position(self, x, y, z, t):
         """Add a robot-frame position (mm). Returns True if accepted."""
@@ -132,7 +139,27 @@ class RobotPredictor:
             return True
 
         if self.state_estimator is not None:
-            # Replaces regression-based velocity estimation with KF state updates.
+            # Velocity seeding: on the 2nd measurement, compute rough velocity
+            # from finite differences and reinitialize KF with it. This helps
+            # the KF converge ~3-4 updates faster than starting from v=0.
+            # (Inspired by UZH's initial-state estimation approach.)
+            if (not self._velocity_seeded
+                    and self.state_estimator.update_count == 1
+                    and len(self.positions) >= 2):
+                p0 = self.positions[-2]
+                dt_seed = t - p0[3]
+                if dt_seed > 1e-6:
+                    vx_seed = (x - p0[0]) / dt_seed
+                    vy_seed = (y - p0[1]) / dt_seed
+                    vz_seed = (z - p0[2]) / dt_seed
+                    speed_seed = math.sqrt(vx_seed**2 + vy_seed**2 + vz_seed**2)
+                    if speed_seed < self.MAX_SPEED:
+                        self.state_estimator.initialize_from_measurement(
+                            x, y, z, t, vx_seed, vy_seed, vz_seed)
+                        self._velocity_seeded = True
+                        self.velocity = None
+                        return True
+
             accepted, _state = self.state_estimator.estimate(x, y, z, t)
             if not accepted:
                 self.positions.pop()
@@ -184,7 +211,12 @@ class RobotPredictor:
         return fall >= self.MIN_BOUNCE_FALL_Z
 
     def _handle_observed_bounce(self):
-        """Reset buffer after observed bounce, keeping last 2 points."""
+        """Reset buffer after observed bounce, keeping last 2 points.
+
+        Post-bounce velocity is seeded from the kept points so the KF
+        starts the new arc with a reasonable velocity estimate instead of
+        (0,0,0). This cuts convergence time by ~3 updates.
+        """
         keep = list(self.positions)[-2:]
         self.positions.clear()
         for p in keep:
@@ -193,9 +225,20 @@ class RobotPredictor:
         if self.state_estimator is not None:
             # Bounce is a state jump, so restart the KF on the new arc.
             self.state_estimator.reset()
-            if self.positions:
-                last = self.positions[-1]
-                self.state_estimator.initialize_from_measurement(*last)
+            if len(keep) >= 2:
+                # Seed with velocity from the last 2 observations
+                p0, p1 = keep[-2], keep[-1]
+                dt_b = p1[3] - p0[3]
+                if dt_b > 1e-6:
+                    vx_b = (p1[0] - p0[0]) / dt_b
+                    vy_b = (p1[1] - p0[1]) / dt_b
+                    vz_b = (p1[2] - p0[2]) / dt_b
+                    self.state_estimator.initialize_from_measurement(
+                        p1[0], p1[1], p1[2], p1[3], vx_b, vy_b, vz_b)
+                else:
+                    self.state_estimator.initialize_from_measurement(*keep[-1])
+            elif keep:
+                self.state_estimator.initialize_from_measurement(*keep[-1])
             # Require more updates post-bounce for VZ to stabilize
             self.state_estimator.min_updates = self.POST_BOUNCE_MIN_UPDATES
 
@@ -331,31 +374,11 @@ class RobotPredictor:
 
         return x, y, z, vx, vy, vz, True
 
-    def predict_intercept(self, robot_pos=None):
+    def _scan_trajectory(self, x, y, z, vx, vy, vz):
+        """Forward-simulate trajectory and return intercept dict or None.
+
+        Shared by predict_intercept (mean state) and confidence sampling.
         """
-        Find the first future point where ball enters workspace.
-        If none found, clamp the nearest trajectory point to workspace.
-        Handles bounces off the table surface.
-        """
-        if not self.is_ready():
-            return None
-
-        if not self._ball_approaching():
-            return None
-
-        state = self._get_prediction_state()
-        if state is None:
-            return None
-
-        # Proximity filter
-        y_now = state[1]
-        if y_now > self.MAX_PREDICT_Y:
-            return None
-
-        # Replaces raw last-sample start with the current prediction state.
-        x, y, z, vx, vy, vz = state
-
-        # Track closest-to-workspace point for fallback
         best_clamp = None
         best_clamp_dist = float('inf')
 
@@ -373,7 +396,6 @@ class RobotPredictor:
                         'bounces': bounces,
                     }
 
-                # Track closest point for fallback
                 xc, yc, zc, cdist = clamp_to_workspace(x, y, z)
                 if cdist < best_clamp_dist:
                     best_clamp_dist = cdist
@@ -389,7 +411,6 @@ class RobotPredictor:
             x_prev, y_prev, z_prev = x, y, z
             x, y, z, vx, vy, vz = self._step_euler(x, y, z, vx, vy, vz, step)
 
-            # Bounce off table surface
             if bounces < MAX_BOUNCES:
                 x, y, z, vx, vy, vz, did_bounce = self._apply_bounce(
                     x_prev, y_prev, z_prev, x, y, z, vx, vy, vz, step)
@@ -398,11 +419,105 @@ class RobotPredictor:
 
             t += step
 
-        # Fallback: clamp nearest point if within MAX_CLAMP_DIST
         if best_clamp is not None and best_clamp_dist <= MAX_CLAMP_DIST:
             return best_clamp
-
         return None
+
+    def _compute_confidence(self, mean_intercept, state):
+        """Score prediction confidence by sampling from KF covariance.
+
+        Inspired by UZH's BallTrajectory model which samples N initial states
+        from a Bayesian posterior and computes empirical trajectory distribution.
+        We do the same using our KF covariance as the state uncertainty.
+
+        Returns (confidence 0-1, spread_mm, hit_ratio).
+        """
+        if self.state_estimator is None:
+            return 1.0, 0.0, 1.0
+
+        P = self.state_estimator.get_covariance()
+        mean_state = np.array(state, dtype=float)
+
+        # Ensure P is symmetric positive semi-definite
+        P_sym = 0.5 * (P + P.T)
+        # Clamp small negative eigenvalues from numerical noise
+        try:
+            eigvals = np.linalg.eigvalsh(P_sym)
+            if eigvals.min() < 0:
+                P_sym += (-eigvals.min() + 1e-6) * np.eye(6)
+            samples = np.random.multivariate_normal(mean_state, P_sym, self.CONFIDENCE_SAMPLES)
+        except np.linalg.LinAlgError:
+            return 1.0, 0.0, 1.0
+
+        hit_points = []
+        for s in samples:
+            result = self._scan_trajectory(s[0], s[1], s[2], s[3], s[4], s[5])
+            if result is not None:
+                hit_points.append((result['x'], result['y'], result['z']))
+
+        n_hits = len(hit_points)
+        hit_ratio = n_hits / self.CONFIDENCE_SAMPLES
+
+        if n_hits < 2:
+            return 0.0, float('inf'), hit_ratio
+
+        pts = np.array(hit_points)
+        spread = float(np.max(np.ptp(pts, axis=0)))  # max range across x/y/z
+
+        # Confidence: 1.0 when spread=0, 0.0 when spread >= MAX_INTERCEPT_SPREAD
+        conf = max(0.0, 1.0 - spread / self.MAX_INTERCEPT_SPREAD)
+        # Penalize low hit ratio
+        conf *= min(1.0, hit_ratio / self.MIN_HIT_RATIO)
+
+        return conf, spread, hit_ratio
+
+    def predict_intercept(self, robot_pos=None):
+        """
+        Find the first future point where ball enters workspace.
+        If none found, clamp the nearest trajectory point to workspace.
+        Handles bounces off the table surface.
+
+        Includes confidence scoring: samples from KF covariance to assess
+        prediction reliability. Low-confidence predictions are rejected.
+        """
+        if not self.is_ready():
+            return None
+
+        if not self._ball_approaching():
+            return None
+
+        state = self._get_prediction_state()
+        if state is None:
+            return None
+
+        # Proximity filter
+        y_now = state[1]
+        if y_now > self.MAX_PREDICT_Y:
+            return None
+
+        x, y, z, vx, vy, vz = state
+
+        # Primary trajectory scan (deterministic, from KF mean state)
+        result = self._scan_trajectory(x, y, z, vx, vy, vz)
+        if result is None:
+            return None
+
+        # Confidence scoring via covariance sampling
+        if self.state_estimator is not None:
+            conf, spread, hit_ratio = self._compute_confidence(result, state)
+            result['confidence'] = round(conf, 3)
+            result['spread_mm'] = round(spread, 1)
+            result['hit_ratio'] = round(hit_ratio, 2)
+
+            # Reject low-confidence predictions: spread too wide or too few hits
+            if conf < 0.15:
+                return None
+        else:
+            result['confidence'] = 1.0
+            result['spread_mm'] = 0.0
+            result['hit_ratio'] = 1.0
+
+        return result
 
     def get_current_position(self):
         if self.state_estimator is not None:

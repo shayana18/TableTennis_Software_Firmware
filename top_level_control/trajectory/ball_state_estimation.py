@@ -190,6 +190,9 @@ class BallStateEstimator3D:
         py: float,
         pz: float,
         timestamp_s: float,
+        vx: float = 0.0,
+        vy: float = 0.0,
+        vz: float = 0.0,
     ) -> tuple[float, float, float, float, float, float]:
         """
         Initialize from the first measurement.
@@ -197,6 +200,9 @@ class BallStateEstimator3D:
         Args:
             px, py, pz: Robot-frame position in mm.
             timestamp_s: Measurement timestamp in seconds.
+            vx, vy, vz: Optional initial velocity estimate (mm/s).
+                         When provided (non-zero), the velocity covariance
+                         is tightened so the KF converges faster.
 
         Returns:
             The initialized state tuple.
@@ -205,10 +211,21 @@ class BallStateEstimator3D:
             [px],
             [py],
             [pz],
-            [0.0],
-            [0.0],
-            [0.0],
+            [vx],
+            [vy],
+            [vz],
         ], dtype=float)
+        self.kf.P = self._build_initial_P()
+
+        # If a velocity seed is provided, tighten velocity covariance.
+        # The finite-difference estimate is rough (~500 mm/s uncertainty)
+        # but far better than the default 2000 mm/s.
+        has_vel_seed = abs(vx) > 1e-3 or abs(vy) > 1e-3 or abs(vz) > 1e-3
+        if has_vel_seed:
+            self.kf.P[3, 3] = 500.0 ** 2
+            self.kf.P[4, 4] = 500.0 ** 2
+            self.kf.P[5, 5] = 500.0 ** 2
+
         self.initialized = True
         self.last_timestamp_s = float(timestamp_s)
         self.update_count = 1

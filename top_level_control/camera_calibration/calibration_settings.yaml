@@ -8,4 +8,4 @@ view_resize: 1
 checkerboard_box_size_scale: 4.18
 checkerboard_rows: 4
 checkerboard_columns: 5
-cooldown: 50
+cooldown: 50          
