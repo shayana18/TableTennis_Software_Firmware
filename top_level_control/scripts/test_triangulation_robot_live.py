@@ -18,6 +18,7 @@ CONTROLS:
     SPACE - Skip background warmup
 """
 
+import csv
 import cv2
 import sys
 import os
@@ -105,6 +106,30 @@ def main():
     t_start = time.perf_counter()
     frame_num = 0
 
+    # --- Throw tracking for CSV export ---
+    csv_dir = os.path.join(script_dir, "triangulation_csvs")
+    os.makedirs(csv_dir, exist_ok=True)
+    throw_count = 0
+    throw_frames = []          # frames in the current throw
+    last_detection_time = None  # perf_counter time of last 3D detection
+    THROW_GAP_S = 0.3           # 300ms without detection = end of throw
+
+    CSV_COLUMNS = [
+        "frame", "time_s", "rob_x", "rob_y", "rob_z",
+        "cam_x", "cam_y", "cam_z", "disparity", "reproj_err",
+    ]
+
+    def save_throw_csv(throw_id, frames):
+        if not frames:
+            return
+        path = os.path.join(csv_dir, f"throw_{throw_id:03d}.csv")
+        with open(path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=CSV_COLUMNS)
+            writer.writeheader()
+            for fr in frames:
+                writer.writerow(fr)
+        print(f"\n  [CSV] Throw #{throw_id} ({len(frames)} frames) -> {path}")
+
     print("--- LIVE ---  (move ball in front of cameras)\n")
     print(f"  {'Frame':>6} {'Time(s)':>8} {'Robot X':>9} {'Robot Y':>9} {'Robot Z':>9}  "
           f"{'Cam X':>8} {'Cam Y':>8} {'Cam Z':>8} {'Disp':>6} {'Reproj':>7}")
@@ -140,6 +165,39 @@ def main():
                           f"{cx:>+8.2f} {cy:>+8.2f} {cz:>+8.2f} {disp:>6.1f} {reproj:>7.2f}px")
             elif result.get('reject_reason'):
                 print(f"  {frame_num:>6} {t_now:>8.3f}  REJECTED: {result['reject_reason']}")
+
+            # --- Throw tracking: detect gaps and save CSV ---
+            if rob_pos is not None:
+                # If there was a gap, save the previous throw first
+                if (last_detection_time is not None
+                        and (time.perf_counter() - last_detection_time) > THROW_GAP_S
+                        and throw_frames):
+                    throw_count += 1
+                    save_throw_csv(throw_count, throw_frames)
+                    throw_frames = []
+
+                cx, cy, cz = result['position_3d']
+                throw_frames.append({
+                    "frame":      frame_num,
+                    "time_s":     round(t_now, 4),
+                    "rob_x":      round(rob_pos[0], 1),
+                    "rob_y":      round(rob_pos[1], 1),
+                    "rob_z":      round(rob_pos[2], 1),
+                    "cam_x":      round(cx, 2),
+                    "cam_y":      round(cy, 2),
+                    "cam_z":      round(cz, 2),
+                    "disparity":  round(result.get('disparity', 0), 1),
+                    "reproj_err": round(result.get('reproj_err', 0), 2),
+                })
+                last_detection_time = time.perf_counter()
+            else:
+                # No detection — check if a throw just ended
+                if (last_detection_time is not None
+                        and (time.perf_counter() - last_detection_time) > THROW_GAP_S
+                        and throw_frames):
+                    throw_count += 1
+                    save_throw_csv(throw_count, throw_frames)
+                    throw_frames = []
 
             # Visualization
             left_vis, right_vis = tri.draw_results(result)
@@ -232,6 +290,11 @@ def main():
     except KeyboardInterrupt:
         print("\n\nInterrupted.")
     finally:
+        # Save any in-progress throw
+        if throw_frames:
+            throw_count += 1
+            save_throw_csv(throw_count, throw_frames)
+            throw_frames = []
         tri.stop_cameras()
         cv2.destroyAllWindows()
 

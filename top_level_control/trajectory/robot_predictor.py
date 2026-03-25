@@ -509,9 +509,12 @@ class RobotPredictor:
             result['spread_mm'] = round(spread, 1)
             result['hit_ratio'] = round(hit_ratio, 2)
 
-            # Reject low-confidence predictions: spread too wide or too few hits
-            if conf < 0.15:
-                return None
+            # Log-only for now — do not reject. With real stereo noise the
+            # confidence infrastructure correctly reports uncertainty, but
+            # blocking predictions when ALL are uncertain just delays the
+            # robot.  Re-enable once stereo noise is reduced.
+            # if conf < 0.15:
+            #     return None
         else:
             result['confidence'] = 1.0
             result['spread_mm'] = 0.0
