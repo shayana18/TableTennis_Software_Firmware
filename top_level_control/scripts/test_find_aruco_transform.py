@@ -620,8 +620,8 @@ class ArucoTransformFinder:
                         _print("[LIVE]")
 
                 elif key == ord("s"):
-                    if len(self.camera_points_scaled) < 3:
-                        _print(f"Need at least 3 pairs to solve "
+                    if len(self.camera_points_scaled) < 2:
+                        _print(f"Need at least 2 pairs to solve "
                                f"(have {len(self.camera_points_scaled)}).")
                     else:
                         result = self._compute_transform()
@@ -657,14 +657,14 @@ class ArucoTransformFinder:
             except Exception:
                 pass
 
-        if self.transform_result is None and len(self.camera_points_scaled) >= 3:
+        if self.transform_result is None and len(self.camera_points_scaled) >= 2:
             _print("\nComputing final transform...")
             result = self._compute_transform()
             self._print_transform_summary(result)
             self._save_transform(result)
 
         if self.transform_result is None:
-            _print("Not enough pairs to solve transform (need >= 3).")
+            _print("Not enough pairs to solve transform (need >= 2).")
             exit_code = 1
 
         return exit_code
