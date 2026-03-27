@@ -1,0 +1,2 @@
+frame,time_s,rob_x,rob_y,rob_z,cam_x,cam_y,cam_z,disparity,reproj_err
+1238,31.0896,88.3,-1030.2,-1032.8,1.71,34.78,170.89,218.5,0.06
