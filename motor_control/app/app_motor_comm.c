@@ -340,8 +340,9 @@ static bool read_motor_position32_impl(io_motor_com_t *motor_com, char ID, bool 
   }
 
   if (log_timeout) {
-    static const char msg[] = "ERR: pos timeout\r\n";
-    HAL_UART_Transmit(&huart2, (uint8_t *)msg, sizeof(msg) - 1U, HAL_MAX_DELAY);
+    char msg[64];
+    snprintf(msg, sizeof(msg), "ERR: pos timeout id=%u\r\n", (unsigned char)ID);
+    HAL_UART_Transmit(&huart2, (uint8_t *)msg, (uint16_t)strlen(msg), HAL_MAX_DELAY);
   }
 
   return false;
