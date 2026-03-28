@@ -41,7 +41,7 @@ class RobotPredictor:
     # Prediction scan
     SCAN_DURATION  = 1.5    # seconds forward
     SCAN_DT        = 0.005  # 5ms steps
-    MIN_TIME_HIT   = 0.10   # minimum reaction time for robot
+    MIN_TIME_HIT   = 0.05   # minimum reaction time for robot
 
     # Proximity filter
     MAX_PREDICT_Y  = 1400.0  # mm -- ball must be closer than this
@@ -51,7 +51,7 @@ class RobotPredictor:
     APPROACH_Y_THRESHOLD = 600.0
 
     # Y offset applied to every predicted intercept (mm)
-    INTERCEPT_Y_OFFSET = 80.0
+    INTERCEPT_Y_OFFSET = 0
 
     # Confidence scoring via KF covariance sampling (inspired by UZH BallTrajectory)
     CONFIDENCE_SAMPLES    = 8      # number of initial-state samples
@@ -63,7 +63,7 @@ class RobotPredictor:
     BOUNCE_RISE_FRAMES = 3      # consecutive rising frames to confirm (was 2)
 
     # Post-bounce KF needs more updates before ready (VZ is very noisy after bounce)
-    POST_BOUNCE_MIN_UPDATES = 6
+    POST_BOUNCE_MIN_UPDATES = 3
 
     def __init__(self):
         self.positions = deque(maxlen=self.BUFFER_SIZE)

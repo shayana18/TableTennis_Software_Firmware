@@ -32,7 +32,7 @@ class BallStateEstimator3D:
         self,
         gravity_z: float,
         accel_std: float = 2500.0,
-        meas_std_xy: float = 55.0,
+        meas_std_xy: float = 70.0,
         meas_std_z: float = 125,
         max_gap_s: float = 0.12,
         min_updates: int = 8,

@@ -259,6 +259,159 @@ class DualArucoTransformFinder:
                 f"{self.height_axis_name} are not orthogonal (dot={dot:.3f})."
             )
 
+    # Multi-frame averaging
+    AVERAGE_FRAMES = 50
+    MAX_STD_MM = 5.0  # reject corners with std > this
+
+    def _collect_averaged_correspondences(self):
+        """Grab N frames, triangulate all markers in each, reject outliers, average."""
+        marker_origins = self._active_marker_origins()
+        needed_ids = set(marker_origins.keys())
+        n_frames = self.AVERAGE_FRAMES
+
+        # {(marker_id, corner_idx): [list of 3D positions]}
+        accum: dict[tuple[int, int], list[np.ndarray]] = {}
+        accum_reproj: dict[tuple[int, int], list[float]] = {}
+        for mid in needed_ids:
+            for cidx in range(4):
+                accum[(mid, cidx)] = []
+                accum_reproj[(mid, cidx)] = []
+
+        good_frames = 0
+        total_frames = 0
+        max_attempts = n_frames * 3
+
+        _print(f"\n  Averaging {n_frames} frames (hold markers still)...")
+
+        while good_frames < n_frames and total_frames < max_attempts:
+            result = self.triangulator.update()
+            if result["left_frame"] is None:
+                continue
+            total_frames += 1
+
+            left_markers = self._detect_markers(result["left_frame"])
+            right_markers = self._detect_markers(result["right_frame"])
+
+            if not needed_ids.issubset(left_markers.keys()):
+                continue
+            if not needed_ids.issubset(right_markers.keys()):
+                continue
+
+            frame_ok = True
+            frame_pts: dict[tuple[int, int], tuple] = {}
+            frame_reproj: dict[tuple[int, int], float] = {}
+            for mid in needed_ids:
+                tri_results = self._triangulate_marker(left_markers[mid], right_markers[mid])
+                for cidx, (pos, reproj) in enumerate(tri_results):
+                    if pos is None or reproj is None or reproj > self.max_reproj_px:
+                        frame_ok = False
+                        break
+                    frame_pts[(mid, cidx)] = pos
+                    frame_reproj[(mid, cidx)] = reproj
+                if not frame_ok:
+                    break
+
+            if not frame_ok:
+                continue
+
+            for key, pos in frame_pts.items():
+                accum[key].append(np.array(pos))
+                accum_reproj[key].append(frame_reproj[key])
+            good_frames += 1
+
+            if good_frames % 10 == 0:
+                _print(f"    {good_frames}/{n_frames} frames collected...")
+
+            cv2.waitKey(1)
+
+        if good_frames < 5:
+            return {
+                "ok": False,
+                "reason": f"Only {good_frames}/{n_frames} valid frames.",
+            }
+
+        _print(f"  Collected {good_frames} frames. Computing averages...")
+
+        camera_raw = []
+        camera_scaled = []
+        robot_points = []
+        reproj_errors = []
+        per_marker_counts: dict[int, int] = {}
+
+        for mid, origin_xyz in marker_origins.items():
+            if origin_xyz is None:
+                return {"ok": False, "reason": f"Missing origin for marker ID {mid}"}
+
+            robot_corners = self._compute_robot_corners(origin_xyz)
+            added = 0
+
+            for cidx in range(4):
+                key = (mid, cidx)
+                pts = accum[key]
+                if len(pts) < 5:
+                    continue
+
+                pts_arr = np.array(pts)
+                std_pos = pts_arr.std(axis=0)
+                std_mm = std_pos * self.camera_scale_to_robot_units
+                max_std = float(np.max(std_mm))
+
+                # Reject outlier samples (> 2 std from mean) before averaging
+                avg_raw = pts_arr.mean(axis=0)
+                dists = np.linalg.norm(pts_arr - avg_raw, axis=1)
+                threshold = 2.0 * np.std(dists)
+                inlier_mask = dists <= max(threshold, 1e-6)
+                inlier_pts = pts_arr[inlier_mask]
+
+                if len(inlier_pts) < 3:
+                    _print(f"    ID {mid} corner {cidx}: too few inliers ({len(inlier_pts)})")
+                    continue
+
+                avg_pos = inlier_pts.mean(axis=0)
+                inlier_std = inlier_pts.std(axis=0) * self.camera_scale_to_robot_units
+                avg_reproj = float(np.mean(accum_reproj[key]))
+
+                rejected = max_std > self.MAX_STD_MM
+                tag = f"  REJECTED (std {max_std:.1f} > {self.MAX_STD_MM})" if rejected else ""
+
+                _print(f"    ID {mid} corner {cidx}: "
+                       f"std=({inlier_std[0]:.1f}, {inlier_std[1]:.1f}, {inlier_std[2]:.1f})mm "
+                       f"reproj={avg_reproj:.2f}px  "
+                       f"({len(inlier_pts)}/{len(pts)} inliers){tag}")
+
+                if rejected:
+                    continue
+
+                cam_raw = (float(avg_pos[0]), float(avg_pos[1]), float(avg_pos[2]))
+                cam_s = (
+                    cam_raw[0] * self.camera_scale_to_robot_units,
+                    cam_raw[1] * self.camera_scale_to_robot_units,
+                    cam_raw[2] * self.camera_scale_to_robot_units,
+                )
+
+                camera_raw.append(cam_raw)
+                camera_scaled.append(cam_s)
+                robot_points.append(robot_corners[cidx])
+                reproj_errors.append(avg_reproj)
+                added += 1
+
+            per_marker_counts[mid] = added
+
+        if len(camera_scaled) < 3:
+            return {
+                "ok": False,
+                "reason": f"Only {len(camera_scaled)} valid averaged pairs (need >= 3).",
+            }
+
+        return {
+            "ok": True,
+            "camera_raw": camera_raw,
+            "camera_scaled": camera_scaled,
+            "robot_points": robot_points,
+            "reproj_errors": reproj_errors,
+            "per_marker_counts": per_marker_counts,
+        }
+
     def _collect_correspondences(self, left_markers: dict[int, np.ndarray], right_markers: dict[int, np.ndarray]):
         camera_raw: list[tuple[float, float, float]] = []
         camera_scaled: list[tuple[float, float, float]] = []
@@ -541,7 +694,8 @@ class DualArucoTransformFinder:
                     continue
                 if key == ord("s"):
                     self._ensure_fixture_definition()
-                    corr = self._collect_correspondences(left_markers, right_markers)
+                    _print(f"\n  Multi-frame averaging ({self.AVERAGE_FRAMES} frames)...")
+                    corr = self._collect_averaged_correspondences()
                     if not corr["ok"]:
                         _print(f"Cannot solve: {corr['reason']}")
                         continue

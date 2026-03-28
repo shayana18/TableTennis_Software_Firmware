@@ -633,7 +633,8 @@ class SimpleIntegration:
 
     # --- UART send ---
 
-    MIN_SEND_BUFFER = 10  # don't send until KF has enough points for stable velocity
+    MIN_SEND_BUFFER = 7  # don't send until KF has enough points for stable velocity
+    TIME_AGGRESSION = 0.1  # multiply intercept time by this (< 1.0 = arrive earlier)
 
     def maybe_send(self, intercept, frame_ts):
         if (not self.robot_homed or not self.run_gate or
@@ -677,7 +678,7 @@ class SimpleIntegration:
 
         time_sent = time.perf_counter()
         latency = max(0.0, time_sent - frame_ts)
-        t_adjusted = max(0.0, intercept['time'] - latency)
+        t_adjusted = max(0.0, (intercept['time'] - latency) * self.TIME_AGGRESSION)
 
         n_pts = len(self.predictor.positions)
 
@@ -816,7 +817,7 @@ class SimpleIntegration:
 
                 if self.run_gate and result["found_3d"]:
                     reproj = result.get("reproj_err", 0)
-                    if reproj > 7.5:
+                    if reproj > 5.0:
                         result["found_3d"] = False
                         result["reject_reason"] = f"reproj({reproj:.1f}px)"
                         print("point rejected as reproj = freproj({reproj:.1f}px)\n")
