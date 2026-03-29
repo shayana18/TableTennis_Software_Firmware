@@ -123,7 +123,8 @@ class SimpleIntegration:
 
         # === Throw data logger (detailed per-frame diagnostics) ===
         self._throw_log_path = os.path.join(SCRIPT_DIR, "throw_data_log.json")
-        self._throw_csv_path = os.path.join(SCRIPT_DIR, "throw_data.csv")
+        self._throw_csv_dir = os.path.join(SCRIPT_DIR, "simple_csvs")
+        os.makedirs(self._throw_csv_dir, exist_ok=True)
         self._throw_log: list[dict] = []      # completed throws
         self._active_throw: Optional[dict] = None
         self._throw_lost_count = 0
@@ -389,7 +390,7 @@ class SimpleIntegration:
         except Exception as e:
             _print(f"[WARN] Failed to save throw log: {e}")
 
-    # --- CSV export (one row per frame, appended after each throw) ---
+    # --- CSV export (one file per throw in simple_csvs/) ---
 
     _CSV_COLUMNS = [
         "throw_id", "frame_idx", "timestamp_s", "dt_ms",
@@ -413,14 +414,15 @@ class SimpleIntegration:
     ]
 
     def _save_throw_csv(self, throw: dict) -> None:
-        """Append one completed throw's frames to the CSV file."""
+        """Save this throw's frames to its own CSV file in simple_csvs/."""
         throw_id = throw.get("id", 0)
         frames = throw.get("frames", [])
         if not frames:
             return
 
+        csv_path = os.path.join(self._throw_csv_dir, f"throw_{throw_id:03d}.csv")
         try:
-            with open(self._throw_csv_path, "w", newline="", encoding="utf-8") as f:
+            with open(csv_path, "w", newline="", encoding="utf-8") as f:
                 writer = csv.DictWriter(f, fieldnames=self._CSV_COLUMNS,
                                         extrasaction="ignore")
                 writer.writeheader()
@@ -478,7 +480,7 @@ class SimpleIntegration:
                     }
                     writer.writerow(row)
 
-            _print(f"[CSV] Throw #{throw_id} ({len(frames)} frames) -> {self._throw_csv_path}")
+            _print(f"[CSV] Throw #{throw_id} ({len(frames)} frames) -> {csv_path}")
         except Exception as e:
             _print(f"[WARN] Failed to save CSV: {e}")
 
@@ -634,7 +636,7 @@ class SimpleIntegration:
     # --- UART send ---
 
     MIN_SEND_BUFFER = 7  # don't send until KF has enough points for stable velocity
-    TIME_AGGRESSION = 0.1  # multiply intercept time by this (< 1.0 = arrive earlier)
+    TIME_AGGRESSION = 0.95  # multiply intercept time by this (< 1.0 = arrive earlier)
 
     def maybe_send(self, intercept, frame_ts):
         if (not self.robot_homed or not self.run_gate or
@@ -837,57 +839,59 @@ class SimpleIntegration:
                 self._log_throw_frame(
                     frame_ts, result, robot_pos, pos_accepted, intercept)
 
-                # --- Visualization ---
-                left_vis, right_vis = self.triangulator.draw_results(result)
+                # --- Visualization (throttled — only every Nth frame) ---
+                DISPLAY_EVERY_N = 5
+                if frame_count % DISPLAY_EVERY_N == 0:
+                    left_vis, right_vis = self.triangulator.draw_results(result)
 
-                if self.intercept_sent and self.last_cmd is not None:
-                    self.draw_intercept_marker(left_vis, self.last_cmd)
+                    if self.intercept_sent and self.last_cmd is not None:
+                        self.draw_intercept_marker(left_vis, self.last_cmd)
 
-                # Overlay text
-                gate_str = "ON" if self.run_gate else "OFF"
-                if self._pending_action == 'intercept':
-                    tx_str = "MOVING"
-                elif self._pending_action == 'homing':
-                    tx_str = "HOMING"
-                elif self.intercept_sent:
-                    tx_str = "SENT"
-                else:
-                    tx_str = "READY"
-                stats = self.predictor.get_stats()
-                appr = "Y" if stats.get('approaching') else "N"
-                cv2.putText(left_vis,
-                    f"FPS:{fps:.0f}  Buf:{stats['buffer']}  Gate:{gate_str}  TX:{tx_str}  Appr:{appr}",
-                    (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 1)
-
-                if robot_pos is not None:
+                    # Overlay text
+                    gate_str = "ON" if self.run_gate else "OFF"
+                    if self._pending_action == 'intercept':
+                        tx_str = "MOVING"
+                    elif self._pending_action == 'homing':
+                        tx_str = "HOMING"
+                    elif self.intercept_sent:
+                        tx_str = "SENT"
+                    else:
+                        tx_str = "READY"
+                    stats = self.predictor.get_stats()
+                    appr = "Y" if stats.get('approaching') else "N"
                     cv2.putText(left_vis,
-                        f"Robot(mm): X={robot_pos[0]:+.0f} Y={robot_pos[1]:+.0f} Z={robot_pos[2]:+.0f}",
-                        (10, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 255, 0), 1)
+                        f"FPS:{fps:.0f}  Buf:{stats['buffer']}  Gate:{gate_str}  TX:{tx_str}  Appr:{appr}",
+                        (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 1)
 
-                if intercept is not None:
-                    ws = "IN" if in_workspace(intercept['x'], intercept['y'], intercept['z']) else "OUT"
-                    conf = intercept.get('confidence', 1.0)
-                    spread = intercept.get('spread_mm', 0)
-                    conf_color = (0, 220, 220) if conf >= 0.5 else (0, 140, 255)
+                    if robot_pos is not None:
+                        cv2.putText(left_vis,
+                            f"Robot(mm): X={robot_pos[0]:+.0f} Y={robot_pos[1]:+.0f} Z={robot_pos[2]:+.0f}",
+                            (10, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 255, 0), 1)
+
+                    if intercept is not None:
+                        ws = "IN" if in_workspace(intercept['x'], intercept['y'], intercept['z']) else "OUT"
+                        conf = intercept.get('confidence', 1.0)
+                        spread = intercept.get('spread_mm', 0)
+                        conf_color = (0, 220, 220) if conf >= 0.5 else (0, 140, 255)
+                        cv2.putText(left_vis,
+                            f"Int(mm): X={intercept['x']:+.0f} Y={intercept['y']:+.0f} "
+                            f"Z={intercept['z']:+.0f}  t={intercept['time']*1000:.0f}ms  "
+                            f"WS:{ws}  C:{conf:.0%}({spread:.0f}mm)",
+                            (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.42, conf_color, 1)
+
                     cv2.putText(left_vis,
-                        f"Int(mm): X={intercept['x']:+.0f} Y={intercept['y']:+.0f} "
-                        f"Z={intercept['z']:+.0f}  t={intercept['time']*1000:.0f}ms  "
-                        f"WS:{ws}  C:{conf:.0%}({spread:.0f}mm)",
-                        (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.42, conf_color, 1)
+                        f"Throws:{self.throw_count}  g=gate c=clear r=reset b=bg q=quit",
+                        (10, left_vis.shape[0] - 12),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.33, (120, 120, 120), 1)
 
-                cv2.putText(left_vis,
-                    f"Throws:{self.throw_count}  g=gate c=clear r=reset b=bg q=quit",
-                    (10, left_vis.shape[0] - 12),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.33, (120, 120, 120), 1)
+                    # Show
+                    dw = 640
+                    dh = int(dw * self.frame_height / self.frame_width)
+                    left_s = cv2.resize(left_vis, (dw, dh))
+                    right_s = cv2.resize(right_vis, (dw, dh))
+                    cv2.imshow("Simple Integration", cv2.hconcat([left_s, right_s]))
 
-                # Show
-                dw = 640
-                dh = int(dw * self.frame_height / self.frame_width)
-                left_s = cv2.resize(left_vis, (dw, dh))
-                right_s = cv2.resize(right_vis, (dw, dh))
-                cv2.imshow("Simple Integration", cv2.hconcat([left_s, right_s]))
-
-                # Key handling
+                # Key handling (must run every frame for responsiveness)
                 key = cv2.waitKey(1) & 0xFF
                 if key == ord("q"):
                     _print("[QUIT] Sending home...")

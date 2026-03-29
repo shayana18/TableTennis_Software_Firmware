@@ -1,0 +1,7 @@
+throw_id,frame_idx,timestamp_s,dt_ms,cam_x,cam_y,cam_z,rob_x,rob_y,rob_z,accepted,reject_reason,disparity,reproj_err,kf_pos_x,kf_pos_y,kf_pos_z,vel_x,vel_y,vel_z,kf_ready,kf_updates,buf_size,pred_x,pred_y,pred_z,pred_t_ms,pred_vx,pred_vy,pred_vz,confidence,spread_mm,hit_ratio,clamped,clamp_dist,bounces
+20,0,1219701.484355,,102.47,11.92,214.21,-771.5,2375.6,-924.1,True,,193.8,0.1,-771.5,2375.6,-924.1,,,,False,1,1,,,,,,,,,,,,,0
+20,1,1219701.504354,20.0,102.5,11.91,214.25,-772.1,2375.6,-924.1,True,,193.8,0.0,-772.1,2375.6,-924.1,,,,False,2,2,,,,,,,,,,,,,0
+20,2,1219701.523367,,,,,,,,,epipolar(dy=264px),240.5,,-772.1,2375.6,-924.1,,,,False,2,2,,,,,,,,,,,,,0
+20,3,1219701.550359,,,,,,,,,epipolar(dy=264px),240.3,,-772.1,2375.6,-924.1,,,,False,2,2,,,,,,,,,,,,,0
+20,4,1219701.570736,,,,,,,,,epipolar(dy=263px),239.2,,-772.1,2375.6,-924.1,,,,False,2,2,,,,,,,,,,,,,0
+20,5,1219701.593114,,,,,,,,,epipolar(dy=267px),239.9,,-772.1,2375.6,-924.1,,,,False,2,2,,,,,,,,,,,,,0

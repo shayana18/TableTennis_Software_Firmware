@@ -65,11 +65,21 @@ AXIS_MAP = {
     "-z": np.array([0.0, 0.0, -1.0]),
 }
 
-DEFAULT_MARKER0_ORIGIN = (-768.6, 337.44, -1104.59)
-DEFAULT_MARKER1_ORIGIN = (-768.6, 2613.0, -1104.59)
-DEFAULT_MARKER2_ORIGIN = (265.5, 1589.0, -1150.74)
-DEFAULT_WIDTH_AXIS = "-y"
-DEFAULT_HEIGHT_AXIS = "+z"
+# ============================================================
+# MARKER CONFIGURATION — Edit these to match your setup
+# ============================================================
+# Map each ArUco ID to its corner[0] (top-left) robot-frame (x, y, z) in mm.
+# All markers must share the same width/height axis orientation.
+MARKERS = {
+    0: (-769.7, 1579.6, -858.44),       # ID 0 — fill in measured (x, y, z)
+    1: (-769.7, 1795.5, -858.44),       # ID 1 — fill in measured (x, y, z)
+    2: (-769.7, 2011.4, -858.44),       # ID 2 — fill in measured (x, y, z)
+    3: (-769.7,2227.3, -858.44),       # ID 3 — fill in measured (x, y, z)
+}
+MARKER_SIZE_MM = 195.0
+DEFAULT_WIDTH_AXIS = "+y"
+DEFAULT_HEIGHT_AXIS = "-z"
+# ============================================================
 
 
 def _parse_xyz_arg(text: Optional[str]) -> Optional[tuple[float, float, float]]:
@@ -89,13 +99,8 @@ def _parse_xyz_arg(text: Optional[str]) -> Optional[tuple[float, float, float]]:
 class DualArucoTransformFinder:
     def __init__(
         self,
-        marker_size_mm: float = 195.0,
-        marker0_id: int = 0,
-        marker1_id: int = 1,
-        marker2_id: Optional[int] = None,
-        marker0_origin: Optional[tuple[float, float, float]] = DEFAULT_MARKER0_ORIGIN,
-        marker1_origin: Optional[tuple[float, float, float]] = DEFAULT_MARKER1_ORIGIN,
-        marker2_origin: Optional[tuple[float, float, float]] = None,
+        markers: dict[int, tuple[float, float, float]] = None,
+        marker_size_mm: float = MARKER_SIZE_MM,
         width_axis: str = DEFAULT_WIDTH_AXIS,
         height_axis: str = DEFAULT_HEIGHT_AXIS,
         camera_scale_to_robot_units: float = 10.0,
@@ -116,13 +121,9 @@ class DualArucoTransformFinder:
         self.display_width = 640
         self.display_height = int(self.display_width * self.frame_height / self.frame_width)
 
+        # Marker config: {aruco_id: (x, y, z)} in robot frame mm
+        self.markers = dict(markers) if markers is not None else dict(MARKERS)
         self.marker_size_mm = float(marker_size_mm)
-        self.marker0_id = int(marker0_id)
-        self.marker1_id = int(marker1_id)
-        self.marker2_id = int(marker2_id) if marker2_id is not None else None
-        self.marker0_origin = marker0_origin
-        self.marker1_origin = marker1_origin
-        self.marker2_origin = marker2_origin
         self.width_axis_name = width_axis.strip().lower()
         self.height_axis_name = height_axis.strip().lower()
         self.camera_scale_to_robot_units = float(camera_scale_to_robot_units)
@@ -229,28 +230,14 @@ class DualArucoTransformFinder:
             except ValueError:
                 _print("Invalid numbers. Try again.")
 
-    def _active_marker_origins(self) -> dict[int, Optional[tuple[float, float, float]]]:
-        marker_origins: dict[int, Optional[tuple[float, float, float]]] = {
-            self.marker0_id: self.marker0_origin,
-            self.marker1_id: self.marker1_origin,
-        }
-        if self.marker2_id is not None:
-            marker_origins[self.marker2_id] = self.marker2_origin
-        return marker_origins
+    def _active_marker_origins(self) -> dict[int, tuple[float, float, float]]:
+        return dict(self.markers)
 
     def _ensure_fixture_definition(self) -> None:
-        if self.marker0_origin is None:
-            self.marker0_origin = self._prompt_xyz(
-                f"Enter robot-frame (x y z) mm for marker ID {self.marker0_id} corner[0]:"
-            )
-        if self.marker1_origin is None:
-            self.marker1_origin = self._prompt_xyz(
-                f"Enter robot-frame (x y z) mm for marker ID {self.marker1_id} corner[0]:"
-            )
-        if self.marker2_id is not None and self.marker2_origin is None:
-            self.marker2_origin = self._prompt_xyz(
-                f"Enter robot-frame (x y z) mm for marker ID {self.marker2_id} corner[0]:"
-            )
+        for mid in sorted(self.markers.keys()):
+            origin = self.markers[mid]
+            if origin == (0.0, 0.0, 0.0):
+                _print(f"WARNING: Marker ID {mid} origin is (0, 0, 0) — did you forget to measure it?")
 
         dot = float(np.dot(self.width_axis_vec, self.height_axis_vec))
         if abs(dot) > 1e-6:
@@ -260,8 +247,8 @@ class DualArucoTransformFinder:
             )
 
     # Multi-frame averaging
-    AVERAGE_FRAMES = 50
-    MAX_STD_MM = 5.0  # reject corners with std > this
+    AVERAGE_FRAMES = 500
+    MAX_STD_MM = 2.5  # reject corners with std > this
 
     def _collect_averaged_correspondences(self):
         """Grab N frames, triangulate all markers in each, reject outliers, average."""
@@ -730,22 +717,8 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Find camera->robot transform from fixed ArUco markers."
     )
-    parser.add_argument("--marker-size", type=float, default=195.0,
-                        help="Marker side length in mm (default: 195)")
-    parser.add_argument("--marker0-id", type=int, default=0,
-                        help="First marker ID (default: 0)")
-    parser.add_argument("--marker1-id", type=int, default=1,
-                        help="Second marker ID (default: 1)")
-    parser.add_argument("--marker2-id", type=int, default=None,
-                        help="Optional third marker ID (default: disabled)")
-    parser.add_argument("--marker0-origin", type=str,
-                        default=f"{DEFAULT_MARKER0_ORIGIN[0]} {DEFAULT_MARKER0_ORIGIN[1]} {DEFAULT_MARKER0_ORIGIN[2]}",
-                        help='Robot xyz(mm) of marker0 corner[0], e.g. "0 0 -900"')
-    parser.add_argument("--marker1-origin", type=str,
-                        default=f"{DEFAULT_MARKER1_ORIGIN[0]} {DEFAULT_MARKER1_ORIGIN[1]} {DEFAULT_MARKER1_ORIGIN[2]}",
-                        help='Robot xyz(mm) of marker1 corner[0], e.g. "300 0 -900"')
-    parser.add_argument("--marker2-origin", type=str, default=None,
-                        help='Robot xyz(mm) of marker2 corner[0], e.g. "150 1400 -900"')
+    parser.add_argument("--marker-size", type=float, default=MARKER_SIZE_MM,
+                        help=f"Marker side length in mm (default: {MARKER_SIZE_MM})")
     parser.add_argument("--width-axis", type=str, default=DEFAULT_WIDTH_AXIS, choices=sorted(AXIS_MAP.keys()),
                         help=f"Robot axis for marker width direction (default: {DEFAULT_WIDTH_AXIS})")
     parser.add_argument("--height-axis", type=str, default=DEFAULT_HEIGHT_AXIS, choices=sorted(AXIS_MAP.keys()),
@@ -756,35 +729,14 @@ def _parse_args() -> argparse.Namespace:
                         help="Reject triangulated corners above this reprojection error (default: 3.0)")
     parser.add_argument("--output-file", type=str, default=DEFAULT_POINTS_BASED_TRANSFORM_FILE,
                         help="Path to save transform JSON")
-    args = parser.parse_args()
-
-    args.marker0_origin = _parse_xyz_arg(args.marker0_origin)
-    args.marker1_origin = _parse_xyz_arg(args.marker1_origin)
-    args.marker2_origin = _parse_xyz_arg(args.marker2_origin)
-
-    if args.marker2_id is None and args.marker2_origin is not None:
-        parser.error("--marker2-origin requires --marker2-id")
-    if args.marker2_id is not None and args.marker2_origin is None:
-        args.marker2_origin = DEFAULT_MARKER2_ORIGIN
-
-    ids = [args.marker0_id, args.marker1_id]
-    if args.marker2_id is not None:
-        ids.append(args.marker2_id)
-    if len(set(ids)) != len(ids):
-        parser.error("--marker IDs must be different")
-    return args
+    return parser.parse_args()
 
 
 def main() -> int:
     args = _parse_args()
     app = DualArucoTransformFinder(
+        markers=MARKERS,
         marker_size_mm=args.marker_size,
-        marker0_id=args.marker0_id,
-        marker1_id=args.marker1_id,
-        marker2_id=args.marker2_id,
-        marker0_origin=args.marker0_origin,
-        marker1_origin=args.marker1_origin,
-        marker2_origin=args.marker2_origin,
         width_axis=args.width_axis,
         height_axis=args.height_axis,
         camera_scale_to_robot_units=args.camera_scale_to_robot_units,
