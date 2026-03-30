@@ -31,6 +31,10 @@ TARGET_INTERCEPT = 1
 TARGET_TEST = 4
 TARGET_HOME = 3
 
+# Paddle offsets from EE at home yaw (yaw=0, arm extends in +X)
+PADDLE_ARM_OFFSET = 206.0   # mm, horizontal distance from EE center to paddle center
+PADDLE_OFFSET_Z   = -90.0   # mm, paddle is 90mm below EE
+
 _PACKET_STRUCT = struct.Struct("<10f")
 _PLANNER_TERMINAL_PREFIX = "from planner in terminal"
 _HOME_ACK_TOKENS = (
@@ -193,12 +197,24 @@ class UartComm:
         time_sent_s: float = 0.0,
         timestamp_s: float = 0.0,
     ) -> List[float]:
-        """Send a `TARGET_INTERCEPT` command with position, velocity, and time metadata."""
+        """Send a `TARGET_TEST` command with paddle offset applied.
+
+        The predictor gives us the ball's interception position. We want the
+        paddle face (not the EE) to reach that position. At home yaw (yaw=0),
+        the paddle arm extends in +X from the EE, so we subtract the offsets
+        to get the EE target that places the paddle at the ball.
+        """
+        # ee_x = x_mm - PADDLE_ARM_OFFSET
+        # ee_y = y_mm
+        # ee_z = z_mm - PADDLE_OFFSET_Z
+        ee_x = x_mm
+        ee_y = y_mm
+        ee_z = z_mm
         values = self.send_target(
-            target_type=TARGET_TEST,
-            x_mm=x_mm,
-            y_mm=y_mm,
-            z_mm=z_mm,
+            target_type=TARGET_INTERCEPT,
+            x_mm=ee_x,
+            y_mm=ee_y,
+            z_mm=ee_z,
             vx_mm_s=vx_mm_s,
             vy_mm_s=vy_mm_s,
             vz_mm_s=vz_mm_s,

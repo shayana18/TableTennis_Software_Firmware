@@ -11,11 +11,11 @@ These constants match the firmware (robot.h) with safety margins applied.
 import math
 
 # Workspace -- firmware ellipse with safety margin to avoid IK rejections
-ELLIPSE_A      = 584.0    # mm X semi-axis (711.0 after 10% margin)
-ELLIPSE_B      = 540.0    # mm Y semi-axis (486.0 after 10% margin)
-Z_MIN          = -930.0        # mm (-1025, 25mm margin from robot.h limit)
-Z_MAX          = -710.0         # mm (-731, 10mm margin)
-MAX_CLAMP_DIST = 300.0          # mm -- max distance to clamp to workspace
+ELLIPSE_A      = 720    # mm X semi-axis (711.0 after 10% margin)
+ELLIPSE_B      = 470.0    # mm Y semi-axis (486.0 after 10% margin)
+Z_MIN          = -1020.0        # mm (-1025, 25mm margin from robot.h limit)
+Z_MAX          = -800.0         # mm (-731, 10mm margin)
+MAX_CLAMP_DIST = 100         # mm -- max distance to clamp to workspace
 
 ROBOT_HOME     = (0.0, 0.0, -900.0)
 MAX_CART_VEL   = 4000.0         # mm/s
@@ -31,7 +31,7 @@ GRAVITY_Z      = -9810.0        # mm/s^2, robot Z is vertical, negative = down
 DRAG_K         = 0.000124       # mm^-1 -- drag deceleration: a = -DRAG_K * |v| * v
 
 Z_TABLE_SURFACE   = -1150.0    # mm, table top in robot frame
-RESTITUTION_COEFF = 0.85       # vz damping on bounce (ping pong on MDF)
+RESTITUTION_COEFF = 0.90       # vz damping on bounce (ping pong on hard table)
 FRICTION_COEFF    = 0.95       # vx/vy damping on bounce (tangential friction)
 MAX_BOUNCES       = 2          # max bounces in prediction scan
 

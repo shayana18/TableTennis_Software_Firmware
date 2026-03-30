@@ -41,7 +41,7 @@ class RobotPredictor:
     # Prediction scan
     SCAN_DURATION  = 1.5    # seconds forward
     SCAN_DT        = 0.005  # 5ms steps
-    MIN_TIME_HIT   = 0.05   # minimum reaction time for robot
+    MIN_TIME_HIT   = 0.10   # minimum reaction time for robot
 
     # Proximity filter
     MAX_PREDICT_Y  = 1400.0  # mm -- ball must be closer than this
@@ -54,7 +54,7 @@ class RobotPredictor:
     INTERCEPT_Y_OFFSET = 0
 
     # Confidence scoring via KF covariance sampling (inspired by UZH BallTrajectory)
-    CONFIDENCE_SAMPLES    = 8      # number of initial-state samples
+    CONFIDENCE_SAMPLES    = 4      # number of initial-state samples (reduced from 8 for FPS)
     MAX_INTERCEPT_SPREAD  = 250.0  # mm -- reject if intercept spread exceeds this
     MIN_HIT_RATIO         = 0.5    # at least 50% of samples must find a workspace hit
 
@@ -63,7 +63,7 @@ class RobotPredictor:
     BOUNCE_RISE_FRAMES = 3      # consecutive rising frames to confirm (was 2)
 
     # Post-bounce KF needs more updates before ready (VZ is very noisy after bounce)
-    POST_BOUNCE_MIN_UPDATES = 3
+    POST_BOUNCE_MIN_UPDATES = 6
 
     def __init__(self):
         self.positions = deque(maxlen=self.BUFFER_SIZE)
@@ -74,7 +74,7 @@ class RobotPredictor:
             self.state_estimator = BallStateEstimator3D(
                 gravity_z=GRAVITY_Z,
                 max_gap_s=self.GAP_RESET,
-                min_updates=4,  # fewer updates needed with smoother KF (was MIN_POINTS=6)
+                min_updates=4,  # fewer updates needed with smoother KF 
             )
             self._using_state_estimator = True
         except ImportError:
@@ -502,23 +502,11 @@ class RobotPredictor:
         if result is None:
             return None
 
-        # Confidence scoring via covariance sampling
-        if self.state_estimator is not None:
-            conf, spread, hit_ratio = self._compute_confidence(result, state)
-            result['confidence'] = round(conf, 3)
-            result['spread_mm'] = round(spread, 1)
-            result['hit_ratio'] = round(hit_ratio, 2)
-
-            # Log-only for now — do not reject. With real stereo noise the
-            # confidence infrastructure correctly reports uncertainty, but
-            # blocking predictions when ALL are uncertain just delays the
-            # robot.  Re-enable once stereo noise is reduced.
-            # if conf < 0.15:
-            #     return None
-        else:
-            result['confidence'] = 1.0
-            result['spread_mm'] = 0.0
-            result['hit_ratio'] = 1.0
+        # Confidence scoring disabled for FPS — was log-only anyway.
+        # Re-enable _compute_confidence() call when stereo noise is reduced.
+        result['confidence'] = 1.0
+        result['spread_mm'] = 0.0
+        result['hit_ratio'] = 1.0
 
         return result
 

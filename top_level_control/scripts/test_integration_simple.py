@@ -636,7 +636,7 @@ class SimpleIntegration:
     # --- UART send ---
 
     MIN_SEND_BUFFER = 7  # don't send until KF has enough points for stable velocity
-    TIME_AGGRESSION = 0.95  # multiply intercept time by this (< 1.0 = arrive earlier)
+    TIME_AGGRESSION = 0.85  # multiply intercept time by this (< 1.0 = arrive earlier)
 
     def maybe_send(self, intercept, frame_ts):
         if (not self.robot_homed or not self.run_gate or
@@ -819,7 +819,7 @@ class SimpleIntegration:
 
                 if self.run_gate and result["found_3d"]:
                     reproj = result.get("reproj_err", 0)
-                    if reproj > 5.0:
+                    if reproj > 10.0:
                         result["found_3d"] = False
                         result["reject_reason"] = f"reproj({reproj:.1f}px)"
                         print("point rejected as reproj = freproj({reproj:.1f}px)\n")
@@ -839,60 +839,23 @@ class SimpleIntegration:
                 self._log_throw_frame(
                     frame_ts, result, robot_pos, pos_accepted, intercept)
 
-                # --- Visualization (throttled — only every Nth frame) ---
-                DISPLAY_EVERY_N = 5
-                if frame_count % DISPLAY_EVERY_N == 0:
-                    left_vis, right_vis = self.triangulator.draw_results(result)
+                # --- Headless mode: no visualization, just FPS print ---
+                # All tracking/prediction/UART runs every frame.
+                # Only key handling and FPS counter below.
+                if frame_count % 30 == 0:
+                    _print(f"[FPS:{fps:.0f}] Throws:{self.throw_count} "
+                           f"Buf:{len(self.predictor.positions)} "
+                           f"Gate:{'ON' if self.run_gate else 'OFF'}")
 
-                    if self.intercept_sent and self.last_cmd is not None:
-                        self.draw_intercept_marker(left_vis, self.last_cmd)
-
-                    # Overlay text
-                    gate_str = "ON" if self.run_gate else "OFF"
-                    if self._pending_action == 'intercept':
-                        tx_str = "MOVING"
-                    elif self._pending_action == 'homing':
-                        tx_str = "HOMING"
-                    elif self.intercept_sent:
-                        tx_str = "SENT"
-                    else:
-                        tx_str = "READY"
-                    stats = self.predictor.get_stats()
-                    appr = "Y" if stats.get('approaching') else "N"
-                    cv2.putText(left_vis,
-                        f"FPS:{fps:.0f}  Buf:{stats['buffer']}  Gate:{gate_str}  TX:{tx_str}  Appr:{appr}",
-                        (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 1)
-
-                    if robot_pos is not None:
-                        cv2.putText(left_vis,
-                            f"Robot(mm): X={robot_pos[0]:+.0f} Y={robot_pos[1]:+.0f} Z={robot_pos[2]:+.0f}",
-                            (10, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 255, 0), 1)
-
-                    if intercept is not None:
-                        ws = "IN" if in_workspace(intercept['x'], intercept['y'], intercept['z']) else "OUT"
-                        conf = intercept.get('confidence', 1.0)
-                        spread = intercept.get('spread_mm', 0)
-                        conf_color = (0, 220, 220) if conf >= 0.5 else (0, 140, 255)
-                        cv2.putText(left_vis,
-                            f"Int(mm): X={intercept['x']:+.0f} Y={intercept['y']:+.0f} "
-                            f"Z={intercept['z']:+.0f}  t={intercept['time']*1000:.0f}ms  "
-                            f"WS:{ws}  C:{conf:.0%}({spread:.0f}mm)",
-                            (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.42, conf_color, 1)
-
-                    cv2.putText(left_vis,
-                        f"Throws:{self.throw_count}  g=gate c=clear r=reset b=bg q=quit",
-                        (10, left_vis.shape[0] - 12),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.33, (120, 120, 120), 1)
-
-                    # Show
-                    dw = 640
-                    dh = int(dw * self.frame_height / self.frame_width)
-                    left_s = cv2.resize(left_vis, (dw, dh))
-                    right_s = cv2.resize(right_vis, (dw, dh))
-                    cv2.imshow("Simple Integration", cv2.hconcat([left_s, right_s]))
-
-                # Key handling (must run every frame for responsiveness)
-                key = cv2.waitKey(1) & 0xFF
+                # Key handling — only poll every 5th frame to save time.
+                # A tiny 1x1 window is created once so waitKey works on Windows.
+                if frame_count == 1:
+                    cv2.namedWindow("ctrl", cv2.WINDOW_NORMAL)
+                    cv2.resizeWindow("ctrl", 1, 1)
+                    cv2.moveWindow("ctrl", 0, 0)
+                key = 0xFF
+                if frame_count % 5 == 0:
+                    key = cv2.waitKey(1) & 0xFF
                 if key == ord("q"):
                     _print("[QUIT] Sending home...")
                     self.request_shutdown_home()

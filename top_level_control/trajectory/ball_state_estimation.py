@@ -32,8 +32,9 @@ class BallStateEstimator3D:
         self,
         gravity_z: float,
         accel_std: float = 2500.0,
-        meas_std_xy: float = 70.0,
-        meas_std_z: float = 125,
+        meas_std_x: float = 25.0,
+        meas_std_y: float = 25.0,
+        meas_std_z: float = 25.0,
         max_gap_s: float = 0.12,
         min_updates: int = 8,
         fading_factor: float = 1.03,
@@ -44,8 +45,9 @@ class BallStateEstimator3D:
         Args:
             gravity_z: Known vertical acceleration in robot frame, mm/s^2.
             accel_std: Process acceleration std, mm/s^2.
-            meas_std_xy: Measurement std for x/y, mm.
-            meas_std_z: Measurement std for z, mm.
+            meas_std_x: Measurement std for x (lateral), mm.
+            meas_std_y: Measurement std for y (approach direction), mm.
+            meas_std_z: Measurement std for z (vertical/depth), mm.
             max_gap_s: Reinitialize after larger time gaps.
             min_updates: Updates required before is_ready() is true.
             fading_factor: P covariance inflation per step (>1 = recent points
@@ -60,7 +62,8 @@ class BallStateEstimator3D:
 
         self.gravity_z = float(gravity_z)
         self.accel_std = float(accel_std)
-        self.meas_std_xy = float(meas_std_xy)
+        self.meas_std_x = float(meas_std_x)
+        self.meas_std_y = float(meas_std_y)
         self.meas_std_z = float(meas_std_z)
         self.max_gap_s = float(max_gap_s)
         self.min_updates = int(min_updates)
@@ -70,7 +73,7 @@ class BallStateEstimator3D:
         self.kf.x = np.zeros((6, 1), dtype=float)
         self.kf.H = self._build_H()
         # Start conservative; tune R/Q from replayed throws before live hitting.
-        self.kf.R = self._build_R(self.meas_std_xy, self.meas_std_z)
+        self.kf.R = self._build_R(self.meas_std_x, self.meas_std_y, self.meas_std_z)
         self.kf.P = self._build_initial_P()
 
         self.initialized = False
@@ -116,12 +119,11 @@ class BallStateEstimator3D:
         ], dtype=float)
 
     @staticmethod
-    def _build_R(meas_std_xy: float, meas_std_z: float) -> np.ndarray:
-        """Build the measurement covariance."""
-        # Larger R trusts triangulation less and smooths harder.
+    def _build_R(meas_std_x: float, meas_std_y: float, meas_std_z: float) -> np.ndarray:
+        """Build the measurement covariance with independent X, Y, Z noise."""
         return np.diag([
-            float(meas_std_xy) ** 2,
-            float(meas_std_xy) ** 2,
+            float(meas_std_x) ** 2,
+            float(meas_std_y) ** 2,
             float(meas_std_z) ** 2,
         ])
 
@@ -178,7 +180,7 @@ class BallStateEstimator3D:
         """Reset the estimator state."""
         self.kf.x[:] = 0.0
         self.kf.H = self._build_H()
-        self.kf.R = self._build_R(self.meas_std_xy, self.meas_std_z)
+        self.kf.R = self._build_R(self.meas_std_x, self.meas_std_y, self.meas_std_z)
         self.kf.P = self._build_initial_P()
         self.initialized = False
         self.last_timestamp_s = None
