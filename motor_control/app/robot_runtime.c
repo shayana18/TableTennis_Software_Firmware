@@ -121,42 +121,8 @@ void robot_runtime_set_paddle_abs_deg(float paddle_yaw_deg) {
   const float paddle_ticks_per_deg =
       ((float)PULSES_PER_REV * PADDLE_GEAR_RATIO) / 360.0f;
   const float motor_tick = paddle_yaw_deg * paddle_ticks_per_deg;
-  long paddle_tick = (long)lroundf(motor_tick);
-  long paddle_cdeg = (long)lroundf(paddle_yaw_deg * 100.0f);
-  long paddle_pos_before_tick = 0;
-  bool paddle_pos_before_valid = false;
-
-  if (ReadMotorPosition32Quiet(s_motor_com, ROBOT_MOTOR_1_ID)) {
-    paddle_pos_before_tick = io_motor_com_get_motor_pos(s_motor_com);
-    paddle_pos_before_valid = true;
-  }
-
-  long delta_tick = paddle_tick - paddle_pos_before_tick;
-  long delta_cdeg = (long)lroundf(
-      ((float)delta_tick) * (36000.0f / ((float)PULSES_PER_REV * PADDLE_GEAR_RATIO)));
-
-  char msg[128];
-  if (paddle_pos_before_valid) {
-    snprintf(msg, sizeof(msg),
-             "PADDLE CMD: %ld cdeg tick=%ld from=%ld dtick=%ld dcdeg=%ld\r\n",
-             paddle_cdeg, paddle_tick, paddle_pos_before_tick, delta_tick, delta_cdeg);
-  } else {
-    snprintf(msg, sizeof(msg),
-             "PADDLE CMD: %ld cdeg tick=%ld (pre-read timeout, joint=paddle motor_id=%d)\r\n",
-             paddle_cdeg, paddle_tick, ROBOT_MOTOR_1_ID);
-  }
-  robot_runtime_send_status(msg);
-
+  const long paddle_tick = (long)lroundf(motor_tick);
   move_abs32(s_motor_com, ROBOT_MOTOR_1_ID, paddle_tick);
-
-  if (ReadMotorPosition32Quiet(s_motor_com, ROBOT_MOTOR_1_ID)) {
-    long paddle_pos_tick = io_motor_com_get_motor_pos(s_motor_com);
-    snprintf(msg, sizeof(msg), "PADDLE POS: tick=%ld, err=%ld\r\n", paddle_pos_tick, paddle_tick - paddle_pos_tick);
-    robot_runtime_send_status(msg);
-  } else {
-    snprintf(msg, sizeof(msg), "ERR: paddle pos timeout (joint=paddle motor_id=%d)\r\n", ROBOT_MOTOR_1_ID);
-    robot_runtime_send_status(msg);
-  }
 }
 
 

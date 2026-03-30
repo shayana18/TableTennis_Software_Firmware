@@ -347,14 +347,6 @@ void motion_execute_plan_strike(robot_t *robot) {
     paddle_yaw += PI_F;
   }
 
-  {
-    long yaw_norm_cdeg = (long)lroundf(yaw_norm * (18000.0f / PI_F));
-    long paddle_yaw_cdeg = (long)lroundf(paddle_yaw * (18000.0f / PI_F));
-    char msg[96];
-    snprintf(msg, sizeof(msg), "PADDLE YAW: norm=%ld cmd=%ld cdeg\r\n", yaw_norm_cdeg, paddle_yaw_cdeg);
-    robot_runtime_send_status(msg);
-  }
-
   // Offset the EE using the commanded paddle yaw frame (mechanical reference).
   const float paddle_yaw_rad = paddle_yaw;
   const float paddle_yaw_deg = paddle_yaw * (180.0f / PI_F);

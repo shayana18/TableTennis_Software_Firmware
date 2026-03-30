@@ -8,6 +8,7 @@
 #include <stdio.h>
 
 
+int x = 0;
 
 void delta_fsm_init(robot_t *robot)
 {
@@ -54,7 +55,12 @@ void delta_fsm(robot_t *robot)
   switch (robot->state) {
     case STATE_OFF:
     
+    while (x < 1){
       robot_runtime_send_status("STATE: OFF\r\n");
+      x++;
+    }
+      
+
       if(robot_runtime_pop_target(&robot->current_target) && robot->current_target.type == TARGET_HOME)
       {
           robot_runtime_send_status("HOMING...\r\n");

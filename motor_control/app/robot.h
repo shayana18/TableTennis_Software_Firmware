@@ -30,7 +30,7 @@
 // Home position (mm)
 #define HOME_X 0.0f
 #define HOME_Y 0.0f
-#define HOME_Z -900.0f
+#define HOME_Z -880.0f
 #define HOME_TIME 2.0f
 
 // Striking Parameters
@@ -101,7 +101,7 @@
 #define ROBOT_JOINT_SIGN -1.0f
 #define Q_TOLERANCE 0.5 // degrees
 
-#define BUFFER_TIME 0.2f // seconds, Time buffer to account for communication and execution delays when planning to target arrival time.
+#define BUFFER_TIME 0.4f // seconds, Time buffer to account for communication and execution delays when planning to target arrival time.
 
 
 // Motor IDs on the daisy-chain
