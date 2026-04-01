@@ -11,11 +11,11 @@ These constants match the firmware (robot.h) with safety margins applied.
 import math
 
 # Workspace -- firmware ellipse with safety margin to avoid IK rejections
-ELLIPSE_A      = 790.0    # mm X semi-axis (711.0 after 10% margin)
+ELLIPSE_A      = 584    # mm X semi-axis (711.0 after 10% margin)
 ELLIPSE_B      = 540.0    # mm Y semi-axis (486.0 after 10% margin)
-Z_MIN          = -800.0        # mm (-1025, 25mm margin from robot.h limit)
-Z_MAX          = -1020.0         # mm (-731, 10mm margin)
-MAX_CLAMP_DIST = 300.0          # mm -- max distance to clamp to workspace
+Z_MAX          = -710.0        # mm (-1025, 25mm margin from robot.h limit)
+Z_MIN          = -930.0         # mm (-731, 10mm margin)
+MAX_CLAMP_DIST = 200          # mm -- max distance to clamp to workspace
 
 ROBOT_HOME     = (0.0, 0.0, -900.0)
 MAX_CART_VEL   = 4000.0         # mm/s
