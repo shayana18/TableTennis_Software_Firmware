@@ -263,7 +263,7 @@ void motion_execute_make_home_target(robot_t *robot)
   robot->current_target.t_arrival_s = HOME_TIME;
   robot->current_target.received_time = HAL_GetTick();
   // Keep paddle axis aligned to its zero reference whenever we send the robot home.
-  robot_runtime_set_paddle_abs_deg(0.0f);
+  robot_runtime_set_paddle_abs_deg(90.0);
 }
 
 void motion_execute_prepare_strike(robot_t *robot)
@@ -337,7 +337,7 @@ void motion_execute_plan_strike(robot_t *robot) {
   } else if (yaw_norm > (HALF_PI_F)) {
     paddle_yaw -= HALF_PI_F;
   } else {
-    paddle_yaw = 0.0f;
+    paddle_yaw = HALF_PI_F;
   }
   paddle_yaw += (STRIKE_YAW_BIAS_DEG * DTR);
   while (paddle_yaw >= PI_F) {
