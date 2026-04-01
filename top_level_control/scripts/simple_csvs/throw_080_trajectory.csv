@@ -1,0 +1,5 @@
+source,time_ms,meas_x,meas_y,meas_z,kf_x,kf_y,kf_z,kf_vx,kf_vy,kf_vz,pred_x,pred_y,pred_z,intercept_x,intercept_y,intercept_z,bounces
+measured,0.0,-226.0,1563.6,-966.2,-226.0,1563.6,-966.2,,,,,,,,,,0
+measured,89.5,,,,-226.0,1563.6,-966.2,,,,,,,,,,0
+measured,106.2,,,,-226.0,1563.6,-966.2,,,,,,,,,,0
+measured,120.8,,,,-226.0,1563.6,-966.2,,,,,,,,,,0

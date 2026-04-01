@@ -28,11 +28,11 @@ GRAVITY_Z      = -9810.0        # mm/s^2, robot Z is vertical, negative = down
 # Air drag for ping pong ball (mass=2.7g, diameter=40mm, Cd=0.445)
 # k = 0.5 * Cd * rho_air * A / m  (in mm^-1)
 #   = 0.5 * 0.445 * 1.2e-9 * pi*20^2 / 0.0027 = 1.243e-4
-DRAG_K         = 0.000124       # mm^-1 -- drag deceleration: a = -DRAG_K * |v| * v
+DRAG_K         = 0.000180       # mm^-1 -- drag deceleration: a = -DRAG_K * |v| * v
 
-Z_TABLE_SURFACE   = -1150.0    # mm, table top in robot frame
-RESTITUTION_COEFF = 0.90       # vz damping on bounce (ping pong on hard table)
-FRICTION_COEFF    = 0.95       # vx/vy damping on bounce (tangential friction)
+Z_TABLE_SURFACE   = -1110.0    # mm, table top in robot frame (measured from rolling ball test)
+RESTITUTION_COEFF = 0.95       # vz damping on bounce (ping pong on hard table)
+FRICTION_COEFF    = 0.88       # vx/vy damping on bounce (tangential friction)
 MAX_BOUNCES       = 2          # max bounces in prediction scan
 
 
