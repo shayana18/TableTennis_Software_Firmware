@@ -635,8 +635,8 @@ class SimpleIntegration:
 
     # --- UART send ---
 
-    MIN_SEND_BUFFER = 7  # don't send until KF has enough points for stable velocity
-    TIME_AGGRESSION = 0.85  # multiply intercept time by this (< 1.0 = arrive earlier)
+    MIN_SEND_BUFFER = 5  # don't send until KF has enough points for stable velocity
+    TIME_AGGRESSION = 1 # multiply intercept time by this (< 1.0 = arrive earlier)
 
     def maybe_send(self, intercept, frame_ts):
         if (not self.robot_homed or not self.run_gate or

@@ -37,7 +37,7 @@ class BallStateEstimator3D:
         meas_std_z: float = 25.0,
         max_gap_s: float = 0.12,
         min_updates: int = 8,
-        fading_factor: float = 1.03,
+        fading_factor: float = 1.0,
     ) -> None:
         """
         Create the estimator.

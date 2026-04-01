@@ -11,6 +11,7 @@ Pipeline:
 from __future__ import annotations
 
 import math
+from re import S
 import time
 from collections import deque
 
@@ -44,7 +45,7 @@ class RobotPredictor:
     MIN_TIME_HIT   = 0.10   # minimum reaction time for robot
 
     # Proximity filter
-    MAX_PREDICT_Y  = 1400.0  # mm -- ball must be closer than this
+    MAX_PREDICT_Y  = 2000  # mm -- ball must be closer than this
 
     # Direction filter
     MIN_APPROACH_VY = 0
@@ -63,7 +64,7 @@ class RobotPredictor:
     BOUNCE_RISE_FRAMES = 3      # consecutive rising frames to confirm (was 2)
 
     # Post-bounce KF needs more updates before ready (VZ is very noisy after bounce)
-    POST_BOUNCE_MIN_UPDATES = 6
+    POST_BOUNCE_MIN_UPDATES = 1
 
     def __init__(self):
         self.positions = deque(maxlen=self.BUFFER_SIZE)

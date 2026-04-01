@@ -17,6 +17,7 @@ CONTROLS:
 import cv2
 import sys
 import os
+import time
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -79,11 +80,21 @@ class SingleCameraTester:
         if not self.start_camera():
             return
 
+        fps_count = 0
+        fps_time = time.time()
+        fps = 0.0
+
         try:
             while True:
                 ret, frame = self.cap.read()
                 if not ret:
                     continue
+
+                fps_count += 1
+                if fps_count % 30 == 0:
+                    fps = 30.0 / max(1e-6, time.time() - fps_time)
+                    fps_time = time.time()
+                    print(f"FPS: {fps:.1f}")
 
                 result = self.tracker.detect(frame, return_debug=self.show_debug)
 
@@ -105,6 +116,8 @@ class SingleCameraTester:
                     cv2.putText(vis, "No ball detected", (10, 30),
                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
 
+                cv2.putText(vis, f"FPS: {fps:.0f}", (10, 60),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
                 cv2.putText(vis, f"Camera: {self.camera_id}", (10, vis.shape[0] - 40),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
                 cv2.putText(vis, "q:quit d:debug b:reset-bg c:cycle-cam", (10, vis.shape[0] - 15),

@@ -71,10 +71,10 @@ AXIS_MAP = {
 # Map each ArUco ID to its corner[0] (top-left) robot-frame (x, y, z) in mm.
 # All markers must share the same width/height axis orientation.
 MARKERS = {
-    0: (-769.7, 1579.6, -858.44),       # ID 0 — fill in measured (x, y, z)
-    1: (-769.7, 1795.5, -858.44),       # ID 1 — fill in measured (x, y, z)
-    2: (-769.7, 2011.4, -858.44),       # ID 2 — fill in measured (x, y, z)
-    3: (-769.7,2227.3, -858.44),       # ID 3 — fill in measured (x, y, z)
+    0: (-769.7, 1508.6, -858.44),       # ID 0 — fill in measured (x, y, z)
+    1: (-769.7, 1724.5, -858.44),       # ID 1 — fill in measured (x, y, z)
+    2: (-769.7, 1940.4, -858.44),       # ID 2 — fill in measured (x, y, z)
+    3: (-769.7,2156.3, -858.44),       # ID 3 — fill in measured (x, y, z)
 }
 MARKER_SIZE_MM = 195.0
 DEFAULT_WIDTH_AXIS = "+y"
