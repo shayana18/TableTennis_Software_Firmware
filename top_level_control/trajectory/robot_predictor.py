@@ -19,6 +19,7 @@ import numpy as np
 from .workspace import (
     MAX_CLAMP_DIST, GRAVITY_Z, DRAG_K,
     Z_TABLE_SURFACE, RESTITUTION_COEFF, FRICTION_COEFF, MAX_BOUNCES,
+    ROBOT_HOME,
     in_workspace, clamp_to_workspace,
 )
 from .ball_state_estimation import BallStateEstimator3D
@@ -416,13 +417,24 @@ class RobotPredictor:
 
         return x, y, z, vx, vy, vz, True
 
-    def _scan_trajectory(self, x, y, z, vx, vy, vz):
-        """Forward-simulate trajectory and return intercept dict or None.
+    # Workspace center — the robot's ideal resting position.
+    # Intercept is chosen as the in-workspace point closest to this.
+    WORKSPACE_CENTER = ROBOT_HOME  # (0, 0, -900)
 
-        Shared by predict_intercept (mean state) and confidence sampling.
+    def _scan_trajectory(self, x, y, z, vx, vy, vz):
+        """Forward-simulate trajectory and return the in-workspace point
+        closest to workspace center, or the nearest clamp fallback.
+
+        By choosing the point closest to center we minimise robot travel
+        and reduce the chance of IK limit violations.
         """
-        best_clamp = None
+        best_ws = None          # best in-workspace point (closest to center)
+        best_ws_cdist = float('inf')
+
+        best_clamp = None       # fallback: nearest point to workspace boundary
         best_clamp_dist = float('inf')
+
+        cx, cy, cz = self.WORKSPACE_CENTER
 
         t = 0.0
         step = self.SCAN_DT
@@ -430,25 +442,29 @@ class RobotPredictor:
         while t <= self.SCAN_DURATION:
             if t >= self.MIN_TIME_HIT:
                 if in_workspace(x, y, z):
-                    return {
-                        'x': x, 'y': y + self.INTERCEPT_Y_OFFSET, 'z': z,
-                        'time': t,
-                        'vx': vx, 'vy': vy, 'vz': vz,
-                        'clamped': False,
-                        'bounces': bounces,
-                    }
-
-                xc, yc, zc, cdist = clamp_to_workspace(x, y, z)
-                if cdist < best_clamp_dist:
-                    best_clamp_dist = cdist
-                    best_clamp = {
-                        'x': xc, 'y': yc + self.INTERCEPT_Y_OFFSET, 'z': zc,
-                        'time': t,
-                        'vx': vx, 'vy': vy, 'vz': vz,
-                        'clamped': True,
-                        'clamp_dist': cdist,
-                        'bounces': bounces,
-                    }
+                    # Distance from workspace center
+                    d2 = (x - cx)**2 + (y - cy)**2 + (z - cz)**2
+                    if d2 < best_ws_cdist:
+                        best_ws_cdist = d2
+                        best_ws = {
+                            'x': x, 'y': y + self.INTERCEPT_Y_OFFSET, 'z': z,
+                            'time': t,
+                            'vx': vx, 'vy': vy, 'vz': vz,
+                            'clamped': False,
+                            'bounces': bounces,
+                        }
+                else:
+                    xc, yc, zc, cdist = clamp_to_workspace(x, y, z)
+                    if cdist < best_clamp_dist:
+                        best_clamp_dist = cdist
+                        best_clamp = {
+                            'x': xc, 'y': yc + self.INTERCEPT_Y_OFFSET, 'z': zc,
+                            'time': t,
+                            'vx': vx, 'vy': vy, 'vz': vz,
+                            'clamped': True,
+                            'clamp_dist': cdist,
+                            'bounces': bounces,
+                        }
 
             x_prev, y_prev, z_prev = x, y, z
             x, y, z, vx, vy, vz = self._step_euler(x, y, z, vx, vy, vz, step)
@@ -461,6 +477,8 @@ class RobotPredictor:
 
             t += step
 
+        if best_ws is not None:
+            return best_ws
         if best_clamp is not None and best_clamp_dist <= MAX_CLAMP_DIST:
             return best_clamp
         return None
