@@ -23,7 +23,7 @@
 #define MAX_JOINT_ACC 10000.0L     // RPM/s, Conservative Values
 
 #define MAX_CART_VEL 4000.0f     // mm/s Default: 4000
-#define MAX_CART_ACC 22000.0f    // mm/s^2  default: 20000
+#define MAX_CART_ACC 20000.0f    // mm/s^2  default: 20000
 
 #define MAX_STRIKE_VEL 4000.0f    // mm/s
 
