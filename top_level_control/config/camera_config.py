@@ -14,8 +14,8 @@ import time
 # ====================================================================
 #  CAMERA SETTINGS
 # ====================================================================
-CAMERA_LEFT_ID  = 1     # USB device index for left camera  (camersd)
-CAMERA_RIGHT_ID = 2       # USB device index for right camera (camera1)
+CAMERA_LEFT_ID  = 2     # USB device index for left camera  (camersd)
+CAMERA_RIGHT_ID = 1       # USB device index for right camera (camera1)
 FRAME_WIDTH     = 640     # Horizontal resolution
 FRAME_HEIGHT    = 480     # Vertical resolution
 FPS             = 100     # Target framerate

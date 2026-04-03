@@ -30,19 +30,18 @@ import numpy as np
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PARENT_DIR = os.path.dirname(SCRIPT_DIR)
-CAMERA_PROPERTIES_DIR = os.path.join(PARENT_DIR, "camera_params", "camera_properties")
 if PARENT_DIR not in sys.path:
     sys.path.insert(0, PARENT_DIR)
 
-from comm_functions.points_based_transform import (
+from comm_function.points_based_transform import (
     load_points_based_transform,
     cam_to_robot,
 )
-from comm_functions.transmit_over_uart import UartComm
+from comm_function.transmit_over_uart import UartComm
 from config.camera_config import load_camera_settings
-from ball_tracking.stereo_triangulator import StereoTriangulator
-from estimation.robot_predictor import RobotPredictor
-from estimation.workspace import (
+from tracking.stereo_triangulator import StereoTriangulator
+from trajectory.robot_predictor import RobotPredictor
+from trajectory.workspace import (
     ELLIPSE_A, ELLIPSE_B, Z_MIN, Z_MAX,
     ROBOT_HOME, DRAG_K,
     in_workspace,
@@ -69,7 +68,9 @@ class SimpleIntegration:
     ):
         self.script_dir = SCRIPT_DIR
         self.base_dir = PARENT_DIR
-        self.calibration_dir = CAMERA_PROPERTIES_DIR
+        self.calibration_dir = os.path.join(
+            self.base_dir, "camera_calibration", "camera_parameters"
+        )
 
         cam = load_camera_settings()
         self.frame_width = cam["frame_width"]
@@ -113,6 +114,11 @@ class SimpleIntegration:
         # Throw counter for logging
         self.throw_count = 0
         self._update_count = 0
+
+        # Snapshot of the KF state at first send — used for trajectory CSV
+        self._first_send_state = None  # (x, y, z, vx, vy, vz) at moment of first send
+        self._first_send_intercept = None  # the intercept dict that was sent
+        self._first_send_ts = None  # frame timestamp of first send
 
         # Intercept log — saved to JSON on each throw
         self._intercept_log: list[dict] = []
@@ -204,6 +210,7 @@ class SimpleIntegration:
         self._active_throw = None
         self._save_throw_log()
         self._save_throw_csv(throw)
+        self._save_trajectory_csv(throw)
 
     def _log_throw_frame(
         self,
@@ -354,7 +361,7 @@ class SimpleIntegration:
 
     def _save_throw_log(self) -> None:
         """Write all completed throws to JSON."""
-        from estimation.workspace import GRAVITY_Z as _GZ, DRAG_K as _DK
+        from trajectory.workspace import GRAVITY_Z as _GZ, DRAG_K as _DK
         payload = {
             "session_start": self._session_start,
             "config": {
@@ -374,7 +381,8 @@ class SimpleIntegration:
                 "min_time_hit_s": RobotPredictor.MIN_TIME_HIT,
                 "bounce_fall_z_mm": RobotPredictor.MIN_BOUNCE_FALL_Z,
                 "bounce_rise_frames": RobotPredictor.BOUNCE_RISE_FRAMES,
-                "post_bounce_min_updates": RobotPredictor.POST_BOUNCE_MIN_UPDATES,
+                "bounce_fall_frames": RobotPredictor.BOUNCE_FALL_FRAMES,
+                "bounce_keep_points": RobotPredictor.BOUNCE_KEEP_POINTS,
                 "confidence_samples": RobotPredictor.CONFIDENCE_SAMPLES,
                 "max_intercept_spread_mm": RobotPredictor.MAX_INTERCEPT_SPREAD,
                 "min_hit_ratio": RobotPredictor.MIN_HIT_RATIO,
@@ -483,6 +491,111 @@ class SimpleIntegration:
         except Exception as e:
             _print(f"[WARN] Failed to save CSV: {e}")
 
+    def _save_trajectory_csv(self, throw: dict) -> None:
+        """Save measured positions, KF estimates, and the ONE predicted trajectory.
+
+        Only includes the trajectory from the first prediction that produced
+        the interception point sent to the STM32. No later trajectories.
+        """
+        from trajectory.robot_predictor import RobotPredictor
+        from trajectory.workspace import MAX_BOUNCES
+
+        throw_id = throw.get("id", 0)
+        frames = throw.get("frames", [])
+        if not frames:
+            return
+
+        traj_path = os.path.join(self._throw_csv_dir, f"throw_{throw_id:03d}_trajectory.csv")
+
+        columns = [
+            "source", "time_ms",
+            "meas_x", "meas_y", "meas_z",
+            "kf_x", "kf_y", "kf_z",
+            "kf_vx", "kf_vy", "kf_vz",
+            "pred_x", "pred_y", "pred_z",
+            "intercept_x", "intercept_y", "intercept_z",
+            "bounces",
+        ]
+
+        t0 = frames[0].get("t", 0)
+
+        try:
+            with open(traj_path, "w", newline="", encoding="utf-8") as f:
+                writer = csv.DictWriter(f, fieldnames=columns, extrasaction="ignore")
+                writer.writeheader()
+
+                # --- Part 1: Measured + KF data (one row per frame) ---
+                for fr in frames:
+                    rob = fr.get("rob")
+                    kfp = fr.get("kf_pos")
+                    vel = fr.get("vel")
+                    elapsed = round((fr.get("t", t0) - t0) * 1000, 1)
+
+                    writer.writerow({
+                        "source":  "measured",
+                        "time_ms": elapsed,
+                        "meas_x":  rob[0] if rob else None,
+                        "meas_y":  rob[1] if rob else None,
+                        "meas_z":  rob[2] if rob else None,
+                        "kf_x":    kfp[0] if kfp else None,
+                        "kf_y":    kfp[1] if kfp else None,
+                        "kf_z":    kfp[2] if kfp else None,
+                        "kf_vx":   vel[0] if vel else None,
+                        "kf_vy":   vel[1] if vel else None,
+                        "kf_vz":   vel[2] if vel else None,
+                        "pred_x":  None,
+                        "pred_y":  None,
+                        "pred_z":  None,
+                        "intercept_x": None,
+                        "intercept_y": None,
+                        "intercept_z": None,
+                        "bounces": fr.get("bnc", 0),
+                    })
+
+                # --- Part 2: Predicted trajectory from the FIRST send only ---
+                if self._first_send_state is not None and self._first_send_intercept is not None:
+                    x, y, z, vx, vy, vz = self._first_send_state
+                    intercept = self._first_send_intercept
+                    pred_t0 = round((self._first_send_ts - t0) * 1000, 1) if self._first_send_ts else 0
+
+                    step = 0.005  # 5ms steps
+                    t = 0.0
+                    bounces = 0
+                    while t <= 1.5:
+                        writer.writerow({
+                            "source":  "predicted",
+                            "time_ms": round(pred_t0 + t * 1000, 1),
+                            "meas_x":  None,
+                            "meas_y":  None,
+                            "meas_z":  None,
+                            "kf_x":    None,
+                            "kf_y":    None,
+                            "kf_z":    None,
+                            "kf_vx":   None,
+                            "kf_vy":   None,
+                            "kf_vz":   None,
+                            "pred_x":  round(x, 1),
+                            "pred_y":  round(y, 1),
+                            "pred_z":  round(z, 1),
+                            "intercept_x": round(intercept['x'], 1),
+                            "intercept_y": round(intercept['y'], 1),
+                            "intercept_z": round(intercept['z'], 1),
+                            "bounces": bounces,
+                        })
+                        x_prev, y_prev, z_prev = x, y, z
+                        x, y, z, vx, vy, vz = RobotPredictor._step_euler(
+                            x, y, z, vx, vy, vz, step)
+                        if bounces < MAX_BOUNCES:
+                            x, y, z, vx, vy, vz, did = RobotPredictor._apply_bounce(
+                                x_prev, y_prev, z_prev, x, y, z, vx, vy, vz, step)
+                            if did:
+                                bounces += 1
+                        t += step
+
+            _print(f"[TRAJ] Throw #{throw_id} -> {traj_path}")
+        except Exception as e:
+            _print(f"[WARN] Failed to save trajectory CSV: {e}")
+
     # --- UART RX processing ---
 
     def process_uart_rx(self):
@@ -511,6 +624,9 @@ class SimpleIntegration:
                     self._end_throw_log("intercept_done")
                     self.predictor.reset()
                     self.intercept_sent = False
+                    self._first_send_state = None
+                    self._first_send_intercept = None
+                    self._first_send_ts = None
                     self._update_count = 0
 
                 elif self._pending_action == 'homing':
@@ -520,6 +636,9 @@ class SimpleIntegration:
                     self._end_throw_log("manual_home_done")
                     self.predictor.reset()
                     self.intercept_sent = False
+                    self._first_send_state = None
+                    self._first_send_intercept = None
+                    self._first_send_ts = None
                     self._update_count = 0
                     _print("[HOME] Home done. Ready for next throw.")
 
@@ -634,8 +753,8 @@ class SimpleIntegration:
 
     # --- UART send ---
 
-    MIN_SEND_BUFFER = 7  # don't send until KF has enough points for stable velocity
-    TIME_AGGRESSION = 0.85  # multiply intercept time by this (< 1.0 = arrive earlier)
+    MIN_SEND_BUFFER = 5  # don't send until KF has enough points for stable velocity
+    TIME_AGGRESSION = 1 # multiply intercept time by this (< 1.0 = arrive earlier)
 
     def maybe_send(self, intercept, frame_ts):
         if (not self.robot_homed or not self.run_gate or
@@ -739,6 +858,85 @@ class SimpleIntegration:
         cv2.putText(frame, f"t={intercept['time']*1000:.0f}ms",
                     (px+20, py-6), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 255), 1)
 
+    def _robot_to_pixel(self, rx, ry, rz):
+        """Convert robot-frame (mm) to left camera pixel. Returns (px, py) or None."""
+        R_inv = self.R.T
+        p_cam_cm = R_inv @ (np.array([rx, ry, rz]) - self.t_vec) / self.cam_scale
+        uv = self.triangulator.project_to_image(
+            (float(p_cam_cm[0]), float(p_cam_cm[1]), float(p_cam_cm[2])),
+            camera="left")
+        if uv is None:
+            return None
+        return int(round(float(uv[0]))), int(round(float(uv[1])))
+
+    def draw_predicted_trajectory(self, frame, intercept):
+        """Draw the predicted trajectory arc and intercept target on the frame.
+
+        Runs the same forward Euler scan as the predictor to generate the
+        trajectory points, then projects each one onto the camera image.
+        """
+        if intercept is None:
+            return
+        if not self.predictor.is_ready():
+            return
+
+        state = self.predictor._get_prediction_state()
+        if state is None:
+            return
+
+        x, y, z, vx, vy, vz = state
+
+        # Generate trajectory points (same physics as the predictor)
+        from trajectory.robot_predictor import RobotPredictor
+        from trajectory.workspace import (
+            Z_TABLE_SURFACE, RESTITUTION_COEFF, FRICTION_COEFF, MAX_BOUNCES,
+        )
+
+        points = []
+        step = 0.010  # 10ms steps for smooth visual arc
+        t = 0.0
+        bounces = 0
+        while t <= 1.5:
+            points.append((x, y, z))
+            x_prev, y_prev, z_prev = x, y, z
+            x, y, z, vx, vy, vz = RobotPredictor._step_euler(x, y, z, vx, vy, vz, step)
+            if bounces < MAX_BOUNCES:
+                x, y, z, vx, vy, vz, did_bounce = RobotPredictor._apply_bounce(
+                    x_prev, y_prev, z_prev, x, y, z, vx, vy, vz, step)
+                if did_bounce:
+                    bounces += 1
+            t += step
+
+        # Project trajectory points to pixels and draw arc
+        prev_px = None
+        for i, (rx, ry, rz) in enumerate(points):
+            pt = self._robot_to_pixel(rx, ry, rz)
+            if pt is None:
+                prev_px = None
+                continue
+            px, py = pt
+
+            # Color: green at start, transitions to red near end
+            frac = i / max(len(points) - 1, 1)
+            r_col = int(255 * frac)
+            g_col = int(255 * (1 - frac))
+            color = (0, g_col, r_col)
+
+            if prev_px is not None:
+                cv2.line(frame, prev_px, (px, py), color, 2)
+            prev_px = (px, py)
+
+        # Draw intercept target as a filled circle
+        target_pt = self._robot_to_pixel(intercept['x'], intercept['y'], intercept['z'])
+        if target_pt is not None:
+            tx, ty = target_pt
+            cv2.circle(frame, (tx, ty), 12, (0, 255, 255), -1)
+            cv2.circle(frame, (tx, ty), 14, (0, 0, 0), 2)
+            cv2.putText(frame, f"({intercept['x']:+.0f},{intercept['y']:+.0f},{intercept['z']:+.0f})",
+                        (tx + 18, ty - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (0, 255, 255), 1)
+            cv2.putText(frame, f"t={intercept['time']*1000:.0f}ms",
+                        (tx + 18, ty + 14), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (0, 255, 255), 1)
+
     # --- Main loop ---
 
     def run(self):
@@ -785,9 +983,6 @@ class SimpleIntegration:
             self.uart.close()
             return
 
-        cv2.namedWindow("Simple Integration", cv2.WINDOW_NORMAL)
-        cv2.resizeWindow("Simple Integration", 1280, 800)
-
         if not self.warmup_background():
             self.request_shutdown_home()
             self.triangulator.stop_cameras()
@@ -831,61 +1026,64 @@ class SimpleIntegration:
                         robot_pos = (rx, ry, rz)
                         pos_accepted = self.predictor.add_position(rx, ry, rz, frame_ts)
 
-                if self.run_gate and self.predictor.is_ready():
+                # Only predict if we haven't sent yet — firmware accepts one interception per move
+                if self.run_gate and not self.intercept_sent and self.predictor.is_ready():
                     intercept = self.predictor.predict_intercept(
                         robot_pos=self.robot_current_pos)
                     if intercept is not None and result["found_3d"]:
+                        # Capture KF state before sending — this is the state the trajectory is derived from
+                        self._first_send_state = self.predictor._get_prediction_state()
+                        self._first_send_intercept = intercept
+                        self._first_send_ts = frame_ts
                         self.maybe_send(intercept, frame_ts)
 
                 # --- Throw data logging ---
                 self._log_throw_frame(
                     frame_ts, result, robot_pos, pos_accepted, intercept)
 
-                # --- Live visualization ---
-                left_vis, right_vis = self.triangulator.draw_results(result)
-                if intercept is not None:
-                    self.draw_intercept_marker(left_vis, intercept)
+                # --- Visualization with trajectory overlay (every 5th frame) ---
+                DISPLAY_EVERY_N = 5
+                if frame_count % DISPLAY_EVERY_N == 0 and result["left_frame"] is not None:
+                    vis = result["left_frame"].copy()
 
-                status_lines = [
-                    f"FPS:{fps:.0f}",
-                    f"Gate:{'ON' if self.run_gate else 'OFF'}",
-                    f"Throws:{self.throw_count}",
-                    f"Buf:{len(self.predictor.positions)}",
-                ]
-                if robot_pos is not None:
-                    status_lines.append(
-                        f"Robot(mm): x={robot_pos[0]:+.0f} y={robot_pos[1]:+.0f} z={robot_pos[2]:+.0f}"
-                    )
-                if result.get("reject_reason"):
-                    status_lines.append(f"Reject: {result['reject_reason']}")
+                    # Draw predicted trajectory arc
+                    self.draw_predicted_trajectory(vis, intercept)
 
-                for i, text in enumerate(status_lines):
-                    y = 30 + i * 24
-                    cv2.putText(left_vis, text, (10, y),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-                    cv2.putText(left_vis, text, (10, y),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 1)
+                    # Draw intercept marker
+                    if self.intercept_sent and self.last_cmd is not None:
+                        self.draw_intercept_marker(vis, self.last_cmd)
 
-                left_vis = cv2.resize(
-                    left_vis, (640, int(640 * left_vis.shape[0] / left_vis.shape[1])))
-                right_vis = cv2.resize(
-                    right_vis, (640, int(640 * right_vis.shape[0] / right_vis.shape[1])))
-                live_view = np.hstack((left_vis, right_vis))
-                cv2.imshow("Simple Integration", live_view)
+                    # Overlay status text
+                    gate_str = "ON" if self.run_gate else "OFF"
+                    stats = self.predictor.get_stats()
+                    cv2.putText(vis,
+                        f"FPS:{fps:.0f}  Buf:{stats['buffer']}  Gate:{gate_str}  Throws:{self.throw_count}",
+                        (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 1)
 
-                # --- Headless mode: no visualization, just FPS print ---
-                # All tracking/prediction/UART runs every frame.
-                # Only key handling and FPS counter below.
+                    if robot_pos is not None:
+                        cv2.putText(vis,
+                            f"Ball(mm): X={robot_pos[0]:+.0f} Y={robot_pos[1]:+.0f} Z={robot_pos[2]:+.0f}",
+                            (10, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 255, 0), 1)
+
+                    if intercept is not None:
+                        cv2.putText(vis,
+                            f"Target: X={intercept['x']:+.0f} Y={intercept['y']:+.0f} "
+                            f"Z={intercept['z']:+.0f}  t={intercept['time']*1000:.0f}ms",
+                            (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 220, 220), 1)
+
+                    dw = 640
+                    dh = int(dw * self.frame_height / self.frame_width)
+                    cv2.imshow("Integration", cv2.resize(vis, (dw, dh)))
+
                 if frame_count % 30 == 0:
                     _print(f"[FPS:{fps:.0f}] Throws:{self.throw_count} "
                            f"Buf:{len(self.predictor.positions)} "
                            f"Gate:{'ON' if self.run_gate else 'OFF'}")
 
-                # Key handling — only poll every 5th frame to save time.
-                # A tiny 1x1 window is created once so waitKey works on Windows.
-                key = cv2.waitKeyEx(1)
-                if 0 <= key <= 255:
-                    key = ord(chr(key).lower())
+                # Key handling — poll every 5th frame.
+                key = 0xFF
+                if frame_count % 5 == 0:
+                    key = cv2.waitKey(1) & 0xFF
                 if key == ord("q"):
                     _print("[QUIT] Sending home...")
                     self.request_shutdown_home()
@@ -896,6 +1094,9 @@ class SimpleIntegration:
                         self._end_throw_log("gate_on")
                         self.predictor.reset()
                         self.intercept_sent = False
+                        self._first_send_state = None
+                        self._first_send_intercept = None
+                        self._first_send_ts = None
                         _print("[GATE] ON -- tracking active, ready to send")
                     else:
                         self._end_throw_log("gate_off")
@@ -904,17 +1105,26 @@ class SimpleIntegration:
                 elif key == ord("c"):
                     self._end_throw_log("manual_clear")
                     self.intercept_sent = False
+                    self._first_send_state = None
+                    self._first_send_intercept = None
+                    self._first_send_ts = None
                     self.predictor.reset()
                     _print("[CLEAR] Manual clear -- ready for next intercept")
                 elif key == ord("r"):
                     self._end_throw_log("manual_reset")
                     self.predictor.reset()
                     self.intercept_sent = False
+                    self._first_send_state = None
+                    self._first_send_intercept = None
+                    self._first_send_ts = None
                     _print("[RESET] Predictor reset")
                 elif key == ord("b"):
                     self._end_throw_log("bg_reset")
                     self.predictor.reset()
                     self.intercept_sent = False
+                    self._first_send_state = None
+                    self._first_send_intercept = None
+                    self._first_send_ts = None
                     _print("[BG RESET] Re-learning...")
                     if not self.warmup_background():
                         break

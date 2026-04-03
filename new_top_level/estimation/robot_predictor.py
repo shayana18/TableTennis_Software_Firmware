@@ -19,6 +19,7 @@ import numpy as np
 from .workspace import (
     MAX_CLAMP_DIST, GRAVITY_Z, DRAG_K,
     Z_TABLE_SURFACE, RESTITUTION_COEFF, FRICTION_COEFF, MAX_BOUNCES,
+    ROBOT_HOME,
     in_workspace, clamp_to_workspace,
 )
 from .ball_state_estimation import BallStateEstimator3D
@@ -30,8 +31,8 @@ class RobotPredictor:
     Uses BallStateEstimator3D when available, else falls back to legacy fitting.
     """
 
-    BUFFER_SIZE    = 10
-    MIN_POINTS     = 8      # minimum updates before ready
+    BUFFER_SIZE    = 15
+    MIN_POINTS     = 5      # minimum points for regression velocity (was 8 for KF)
     MIN_TIME_SPAN  = 0.06   # seconds of measurement history before ready (was 0.08)
     MAX_SPEED      = 15000.0 # mm/s
     MAX_JUMP       = 400.0   # mm
@@ -44,7 +45,7 @@ class RobotPredictor:
     MIN_TIME_HIT   = 0.10   # minimum reaction time for robot
 
     # Proximity filter
-    MAX_PREDICT_Y  = 1400.0  # mm -- ball must be closer than this
+    MAX_PREDICT_Y  = 1500.0  # mm -- ball must be closer than this
 
     # Direction filter
     MIN_APPROACH_VY = 0
@@ -61,9 +62,10 @@ class RobotPredictor:
     # Observed bounce detection
     MIN_BOUNCE_FALL_Z  = 150.0  # mm minimum Z descent before accepting bounce (was 50; stereo noise is ±30-50mm)
     BOUNCE_RISE_FRAMES = 3      # consecutive rising frames to confirm (was 2)
+    BOUNCE_FALL_FRAMES = 3      # consecutive falling frames required BEFORE rising can trigger
 
-    # Post-bounce KF needs more updates before ready (VZ is very noisy after bounce)
-    POST_BOUNCE_MIN_UPDATES = 6
+    # Post-bounce: with regression velocity (not KF-gated), we only need
+    # MIN_POINTS observations on the new arc before prediction resumes.
 
     def __init__(self):
         self.positions = deque(maxlen=self.BUFFER_SIZE)
@@ -74,7 +76,7 @@ class RobotPredictor:
             self.state_estimator = BallStateEstimator3D(
                 gravity_z=GRAVITY_Z,
                 max_gap_s=self.GAP_RESET,
-                min_updates=4,  # fewer updates needed with smoother KF 
+                min_updates=4,  # fewer updates needed with smoother KF
             )
             self._using_state_estimator = True
         except ImportError:
@@ -85,6 +87,8 @@ class RobotPredictor:
         self._last_reject_reason = None
         self._z_min_since_reset = None
         self._rising_count = 0
+        self._falling_count = 0
+        self._has_fallen = False  # True once we've seen enough falling frames
         self._bounce_count = 0
         self._velocity_seeded = False
 
@@ -95,6 +99,8 @@ class RobotPredictor:
             self.state_estimator.reset()
         self._z_min_since_reset = None
         self._rising_count = 0
+        self._falling_count = 0
+        self._has_fallen = False
         self._bounce_count = 0
         self._velocity_seeded = False
 
@@ -157,7 +163,9 @@ class RobotPredictor:
                         self.state_estimator.initialize_from_measurement(
                             x, y, z, t, vx_seed, vy_seed, vz_seed)
                         self._velocity_seeded = True
-                        self.velocity = None
+                        # Skip estimate() — seeding already set the KF state
+                        # at this timestamp. Calling estimate() would get dt=0
+                        # and reject, popping this position from the buffer.
                         return True
 
             accepted, _state = self.state_estimator.estimate(x, y, z, t)
@@ -168,12 +176,10 @@ class RobotPredictor:
                 self._last_reject_reason = "kf_dt"
                 return False
 
-            self.velocity = (
-                self.state_estimator.get_velocity()
-                if self.state_estimator.is_ready()
-                else None
-            )
-        elif len(self.positions) >= self.MIN_POINTS:
+        # Always use regression velocity — it fits ALL buffered points equally
+        # and is far more stable than the KF for near-zero axes (e.g. X).
+        # The KF position is still used for smoothed position in _get_prediction_state.
+        if len(self.positions) >= self.MIN_POINTS:
             span = self.positions[-1][3] - self.positions[0][3]
             if span >= self.MIN_TIME_SPAN:
                 self._estimate_velocity_legacy()
@@ -181,11 +187,19 @@ class RobotPredictor:
         return True
 
     def _detect_observed_bounce(self):
-        """Detect Z reversal (ball bouncing off table) in observed data."""
-        if len(self.positions) < 3:
+        """Detect Z reversal (ball bouncing off table) in observed data.
+
+        Requires an actual fall-then-rise sequence:
+          1. Ball must be observed FALLING for >= BOUNCE_FALL_FRAMES
+          2. Then observed RISING for >= BOUNCE_RISE_FRAMES
+          3. And the total Z descent >= MIN_BOUNCE_FALL_Z
+        This prevents false triggers on balls caught mid-rise.
+        """
+        if len(self.positions) < 2:
             return False
 
         z = self.positions[-1][2]
+        z_prev = self.positions[-2][2]
 
         # Track minimum Z since reset
         if self._z_min_since_reset is None:
@@ -193,31 +207,56 @@ class RobotPredictor:
         else:
             self._z_min_since_reset = min(self._z_min_since_reset, z)
 
-        # Check if ball is rising
-        z_prev = self.positions[-2][2]
-        if z > z_prev:
-            self._rising_count += 1
-        else:
+        if z < z_prev:
+            # Ball is falling — accumulate falling count
+            self._falling_count += 1
             self._rising_count = 0
+            # Mark that we've seen enough falling to arm the bounce detector
+            if self._falling_count >= self.BOUNCE_FALL_FRAMES:
+                self._has_fallen = True
             return False
 
-        # Need enough consecutive rising frames
+        if z > z_prev:
+            # Ball is rising
+            self._rising_count += 1
+            self._falling_count = 0
+        else:
+            # z == z_prev — neither rising nor falling, reset rising count
+            self._rising_count = 0
+            self._falling_count = 0
+            return False
+
+        # Must have actually fallen first (not just caught mid-rise)
+        if not self._has_fallen:
+            return False
+
+        # Need enough consecutive rising frames after the fall
         if self._rising_count < self.BOUNCE_RISE_FRAMES:
             return False
 
-        # Must have fallen enough from first buffered Z
+        # Must have fallen enough total (from peak to trough)
         z_first = self.positions[0][2]
         fall = z_first - self._z_min_since_reset
         return fall >= self.MIN_BOUNCE_FALL_Z
 
-    def _handle_observed_bounce(self):
-        """Reset buffer after observed bounce, keeping last 2 points.
+    # How many post-bounce points to keep for regression continuity
+    BOUNCE_KEEP_POINTS = 4
 
-        Post-bounce velocity is seeded from the kept points so the KF
-        starts the new arc with a reasonable velocity estimate instead of
-        (0,0,0). This cuts convergence time by ~3 updates.
+    def _handle_observed_bounce(self):
+        """Reset state after observed bounce, keeping recent points.
+
+        Keeps BOUNCE_KEEP_POINTS (4) recent observations so the regression
+        velocity estimator has enough data to produce a fit quickly on the
+        new arc. The pre-bounce vy is carried forward (scaled by friction
+        coefficient) as a velocity hint since table bounces preserve most
+        of the horizontal velocity.
         """
-        keep = list(self.positions)[-2:]
+        # Save pre-bounce vy for seeding (if available)
+        pre_bounce_vy = None
+        if self.velocity is not None:
+            pre_bounce_vy = self.velocity[1] * FRICTION_COEFF
+
+        keep = list(self.positions)[-self.BOUNCE_KEEP_POINTS:]
         self.positions.clear()
         for p in keep:
             self.positions.append(p)
@@ -233,18 +272,22 @@ class RobotPredictor:
                     vx_b = (p1[0] - p0[0]) / dt_b
                     vy_b = (p1[1] - p0[1]) / dt_b
                     vz_b = (p1[2] - p0[2]) / dt_b
+                    # Use pre-bounce vy if we have it — more stable than
+                    # 2-point finite difference for the approach direction
+                    if pre_bounce_vy is not None:
+                        vy_b = pre_bounce_vy
                     self.state_estimator.initialize_from_measurement(
                         p1[0], p1[1], p1[2], p1[3], vx_b, vy_b, vz_b)
                 else:
                     self.state_estimator.initialize_from_measurement(*keep[-1])
             elif keep:
                 self.state_estimator.initialize_from_measurement(*keep[-1])
-            # Require more updates post-bounce for VZ to stabilize
-            self.state_estimator.min_updates = self.POST_BOUNCE_MIN_UPDATES
 
         self.velocity = None
         self._z_min_since_reset = None
         self._rising_count = 0
+        self._falling_count = 0
+        self._has_fallen = False
         self._bounce_count += 1
 
     def _estimate_velocity_legacy(self):
@@ -285,8 +328,6 @@ class RobotPredictor:
         self.velocity = (vx, vy, vz)
 
     def is_ready(self):
-        if self.state_estimator is not None and not self.state_estimator.is_ready():
-            return False
         if not self.positions:
             return False
         if self.velocity is None:
@@ -298,11 +339,13 @@ class RobotPredictor:
         return age < self.STALE_TIMEOUT
 
     def _get_prediction_state(self):
-        """Return the current state used to seed future prediction."""
-        if self.state_estimator is not None:
-            state = self.state_estimator.get_state()
-            if state is not None:
-                return state
+        """Return the current state used to seed future prediction.
+
+        Uses raw measured position + regression velocity.
+        The KF position has a systematic Z bias (~60mm too negative)
+        due to gravity in its predict step, so raw position is more
+        accurate for prediction starting points.
+        """
         if not self.positions or self.velocity is None:
             return None
         x, y, z, _ = self.positions[-1]
@@ -374,13 +417,24 @@ class RobotPredictor:
 
         return x, y, z, vx, vy, vz, True
 
-    def _scan_trajectory(self, x, y, z, vx, vy, vz):
-        """Forward-simulate trajectory and return intercept dict or None.
+    # Workspace center — the robot's ideal resting position.
+    # Intercept is chosen as the in-workspace point closest to this.
+    WORKSPACE_CENTER = ROBOT_HOME  # (0, 0, -900)
 
-        Shared by predict_intercept (mean state) and confidence sampling.
+    def _scan_trajectory(self, x, y, z, vx, vy, vz):
+        """Forward-simulate trajectory and return the in-workspace point
+        closest to workspace center, or the nearest clamp fallback.
+
+        By choosing the point closest to center we minimise robot travel
+        and reduce the chance of IK limit violations.
         """
-        best_clamp = None
+        best_ws = None          # best in-workspace point (closest to center)
+        best_ws_cdist = float('inf')
+
+        best_clamp = None       # fallback: nearest point to workspace boundary
         best_clamp_dist = float('inf')
+
+        cx, cy, cz = self.WORKSPACE_CENTER
 
         t = 0.0
         step = self.SCAN_DT
@@ -388,25 +442,29 @@ class RobotPredictor:
         while t <= self.SCAN_DURATION:
             if t >= self.MIN_TIME_HIT:
                 if in_workspace(x, y, z):
-                    return {
-                        'x': x, 'y': y + self.INTERCEPT_Y_OFFSET, 'z': z,
-                        'time': t,
-                        'vx': vx, 'vy': vy, 'vz': vz,
-                        'clamped': False,
-                        'bounces': bounces,
-                    }
-
-                xc, yc, zc, cdist = clamp_to_workspace(x, y, z)
-                if cdist < best_clamp_dist:
-                    best_clamp_dist = cdist
-                    best_clamp = {
-                        'x': xc, 'y': yc + self.INTERCEPT_Y_OFFSET, 'z': zc,
-                        'time': t,
-                        'vx': vx, 'vy': vy, 'vz': vz,
-                        'clamped': True,
-                        'clamp_dist': cdist,
-                        'bounces': bounces,
-                    }
+                    # Distance from workspace center
+                    d2 = (x - cx)**2 + (y - cy)**2 + (z - cz)**2
+                    if d2 < best_ws_cdist:
+                        best_ws_cdist = d2
+                        best_ws = {
+                            'x': x, 'y': y + self.INTERCEPT_Y_OFFSET, 'z': z,
+                            'time': t,
+                            'vx': vx, 'vy': vy, 'vz': vz,
+                            'clamped': False,
+                            'bounces': bounces,
+                        }
+                else:
+                    xc, yc, zc, cdist = clamp_to_workspace(x, y, z)
+                    if cdist < best_clamp_dist:
+                        best_clamp_dist = cdist
+                        best_clamp = {
+                            'x': xc, 'y': yc + self.INTERCEPT_Y_OFFSET, 'z': zc,
+                            'time': t,
+                            'vx': vx, 'vy': vy, 'vz': vz,
+                            'clamped': True,
+                            'clamp_dist': cdist,
+                            'bounces': bounces,
+                        }
 
             x_prev, y_prev, z_prev = x, y, z
             x, y, z, vx, vy, vz = self._step_euler(x, y, z, vx, vy, vz, step)
@@ -419,6 +477,8 @@ class RobotPredictor:
 
             t += step
 
+        if best_ws is not None:
+            return best_ws
         if best_clamp is not None and best_clamp_dist <= MAX_CLAMP_DIST:
             return best_clamp
         return None
