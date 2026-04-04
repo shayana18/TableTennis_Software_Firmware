@@ -3,6 +3,7 @@
 ## Purpose
 Generate synthetic interception data with selectable YAML presets:
 - `broad` (legacy broad distribution)
+- `clean_broad` (broad coverage with near-zero measurement/model noise)
 - `real_matched` (narrowed to resemble real captures)
 
 ## Presets YAML
@@ -12,6 +13,7 @@ File:
 Run selection:
 ```powershell
 python .\scripts\synthetic_dataset_generator.py --preset broad
+python .\scripts\synthetic_dataset_generator.py --preset clean_broad
 python .\scripts\synthetic_dataset_generator.py --preset real_matched
 ```
 
@@ -49,3 +51,16 @@ Label fallback behavior:
 
 All legacy numeric flags are still available as per-run overrides to preset values
 (for example `--pos-noise-std`, `--scan-duration`, `--max-bounces`, etc.).
+
+## Real-Matched Velocity Shaping
+`real_match` now supports optional launch-velocity shaping knobs in the preset YAML:
+- `vx_scale`, `vy_scale`, `vz_scale`
+- `vz_bias_mm_s`
+- `vx_noise_std_mm_s`, `vy_noise_std_mm_s`, `vz_noise_std_mm_s`
+
+These are only applied when `real_match.enabled: true`, and help align synthetic
+`vx_hit/vy_hit/vz_hit/t_hit` distributions to real captures while keeping tunable variance.
+
+Additional real-matching knobs:
+- `second_bounce_prob`: when `max_bounces >= 2`, probabilistically allow the second bounce.
+- `t_hit_min_s`, `t_hit_max_s`: optional filter on label `t_hit` (time from point 4 to intercept).

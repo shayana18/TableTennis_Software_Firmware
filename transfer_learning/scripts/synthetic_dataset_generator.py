@@ -102,6 +102,20 @@ class RealMatchedConfig:
     dt_max_s: float = 0.0210
     require_valid_intercept: bool = False
     require_reachable: bool = False
+    # When max_bounces >= 2, probabilistically allow second bounce to better
+    # match real-data bounce count distribution.
+    second_bounce_prob: float = 1.0
+    # Optional filter on time-from-point4-to-hit [s] for tighter real matching.
+    t_hit_min_s: Optional[float] = None
+    t_hit_max_s: Optional[float] = None
+    # Optional velocity-shaping controls (applied only when enabled=True).
+    vx_scale: float = 1.0
+    vy_scale: float = 1.0
+    vz_scale: float = 1.0
+    vz_bias_mm_s: float = 0.0
+    vx_noise_std_mm_s: float = 180.0
+    vy_noise_std_mm_s: float = 220.0
+    vz_noise_std_mm_s: float = 180.0
 
 
 def _deep_update(dst: Dict, src: Dict) -> Dict:
@@ -321,7 +335,11 @@ def sample_initial_state(
     box: LaunchBoxConfig,
     ws: WorkspaceConfig,
     gravity_z: float,
+    rm_cfg: Optional[RealMatchedConfig] = None,
 ) -> Tuple[float, float, float, float, float, float]:
+    if rm_cfg is None:
+        rm_cfg = RealMatchedConfig()
+
     # First observed point starts inside the player-side launch box.
     x0 = float(rng.uniform(box.x_min, box.x_max))
     y0 = float(rng.uniform(box.y_min, box.y_max))
@@ -358,10 +376,24 @@ def sample_initial_state(
         vz_ms = float(rng.uniform(-5.0, 2.0))
     vz0 = 1000.0 * vz_ms
 
+    # Optionally reshape launch-velocity distribution for real-matched generation.
+    if rm_cfg.enabled:
+        vx0 *= float(rm_cfg.vx_scale)
+        vy0 *= float(rm_cfg.vy_scale)
+        vz0 = vz0 * float(rm_cfg.vz_scale) + float(rm_cfg.vz_bias_mm_s)
+
+        vx_noise_std = float(rm_cfg.vx_noise_std_mm_s)
+        vy_noise_std = float(rm_cfg.vy_noise_std_mm_s)
+        vz_noise_std = float(rm_cfg.vz_noise_std_mm_s)
+    else:
+        vx_noise_std = 180.0
+        vy_noise_std = 220.0
+        vz_noise_std = 180.0
+
     # Mild randomization to avoid hard-edged synthetic bands.
-    vx0 += float(rng.normal(0.0, 180.0))
-    vy0 += float(rng.normal(0.0, 220.0))
-    vz0 += float(rng.normal(0.0, 180.0))
+    vx0 += float(rng.normal(0.0, vx_noise_std))
+    vy0 += float(rng.normal(0.0, vy_noise_std))
+    vz0 += float(rng.normal(0.0, vz_noise_std))
 
     # Keep speeds in a realistic numeric range.
     vx0 = float(np.clip(vx0, -5500.0, 5500.0))
@@ -524,8 +556,13 @@ def generate_single_sample(
         rm_cfg = RealMatchedConfig()
 
     gravity_z = cfg.gravity_z_mm_s2 * (1.0 + rng.normal(0.0, cfg.gravity_jitter_frac_std))
-    launch_state = sample_initial_state(rng, box=box, ws=ws, gravity_z=gravity_z)
+    launch_state = sample_initial_state(rng, box=box, ws=ws, gravity_z=gravity_z, rm_cfg=rm_cfg)
     x0, y0, z0, vx0, vy0, vz0 = launch_state
+
+    max_bounces_use = cfg.max_bounces
+    if rm_cfg.enabled and cfg.max_bounces >= 2:
+        p_second = float(np.clip(rm_cfg.second_bounce_prob, 0.0, 1.0))
+        max_bounces_use = cfg.max_bounces if rng.random() < p_second else 1
 
     t_scan, states, bounces_scan = simulate_no_loss_trajectory(
         x0=x0,
@@ -538,7 +575,7 @@ def generate_single_sample(
         duration_s=cfg.scan_duration_s,
         dt_s=cfg.scan_dt_s,
         table_z_mm=cfg.table_z_mm,
-        max_bounces=cfg.max_bounces,
+        max_bounces=max_bounces_use,
     )
 
     intercept = select_intercept_like_robot_predictor(
@@ -586,6 +623,13 @@ def generate_single_sample(
         gravity_z=gravity_z,
     )
 
+    if rm_cfg.enabled and float(row.get("intercept_valid", 0.0)) > 0.5:
+        t_hit_val = float(row["t_hit"])
+        if rm_cfg.t_hit_min_s is not None and t_hit_val < float(rm_cfg.t_hit_min_s):
+            return None
+        if rm_cfg.t_hit_max_s is not None and t_hit_val > float(rm_cfg.t_hit_max_s):
+            return None
+
     if not want_trace:
         return row, None
 
@@ -600,7 +644,7 @@ def generate_single_sample(
         duration_s=cfg.preview_duration_s,
         dt_s=cfg.preview_dt_s,
         table_z_mm=cfg.table_z_mm,
-        max_bounces=cfg.max_bounces,
+        max_bounces=max_bounces_use,
         stop_y_mm=cfg.preview_stop_y_mm,
         stop_z_mm=cfg.preview_stop_z_mm,
     )

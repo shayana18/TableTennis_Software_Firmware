@@ -43,15 +43,30 @@ presets:
     real_match:
       enabled: false
 
+  clean_broad:
+    inherits: broad
+    description: "Broad launch/workspace coverage with near-deterministic measurements for model-capacity sanity checks."
+    generator:
+      gravity_jitter_frac_std: 0.0
+      max_attempts_factor: 80
+    noise:
+      position_std_mm: 0.0
+      bias_std_mm: 0.0
+      outlier_prob: 0.0
+      outlier_std_mm: 0.0
+      timestamp_jitter_ms: 0.0
+    real_match:
+      enabled: false
+
   real_matched:
     inherits: broad
-    description: "Narrower distribution to mimic observed real capture statistics."
+    description: "Matched to real captures with controlled extra variance to reduce collection-bias overfitting."
     generator:
       gravity_jitter_frac_std: 0.02
-      obs_dt_min_s: 0.0125
+      obs_dt_min_s: 0.0130
       obs_dt_max_s: 0.0210
-      obs_last_time_cap_s: 0.35
-      max_attempts_factor: 120
+      obs_last_time_cap_s: 0.38
+      max_attempts_factor: 220
       max_bounces: 2
     noise:
       position_std_mm: 4.0
@@ -60,18 +75,28 @@ presets:
       outlier_std_mm: 12.0
       timestamp_jitter_ms: 1.2
     launch_box:
-      x_min: -450.0
-      x_max: 750.0
-      y_min: 2450.0
-      y_max: 2750.0
-      z_min: -1080.0
-      z_max: -450.0
+      x_min: -380.0
+      x_max: 620.0
+      y_min: 2520.0
+      y_max: 2850.0
+      z_min: -1180.0
+      z_max: -620.0
     real_match:
       enabled: true
       dt_mode: normal
-      dt_mean_s: 0.0158
-      dt_std_s: 0.0013
-      dt_min_s: 0.0125
+      dt_mean_s: 0.0156
+      dt_std_s: 0.0011
+      dt_min_s: 0.0130
       dt_max_s: 0.0210
       require_valid_intercept: true
       require_reachable: true
+      second_bounce_prob: 0.40
+      t_hit_min_s: 0.42
+      t_hit_max_s: 1.05
+      vx_scale: 0.32
+      vy_scale: 0.39
+      vz_scale: 0.24
+      vz_bias_mm_s: 650.0
+      vx_noise_std_mm_s: 100.0
+      vy_noise_std_mm_s: 120.0
+      vz_noise_std_mm_s: 90.0
