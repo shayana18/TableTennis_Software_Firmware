@@ -35,7 +35,7 @@ python .\scripts\synthetic_dataset_generator.py --preset real_matched --run-tag 
 
 ## Key Label Definition
 `t_hit` is always saved as:
-- **time from point 4 to intercept** (seconds)
+- **time from last input point (pointK) to intercept** (seconds)
 
 Label fallback behavior:
 - Primary: closest in-workspace trajectory point to workspace center.
@@ -63,4 +63,4 @@ These are only applied when `real_match.enabled: true`, and help align synthetic
 
 Additional real-matching knobs:
 - `second_bounce_prob`: when `max_bounces >= 2`, probabilistically allow the second bounce.
-- `t_hit_min_s`, `t_hit_max_s`: optional filter on label `t_hit` (time from point 4 to intercept).
+- `t_hit_min_s`, `t_hit_max_s`: optional filter on label `t_hit` (time from pointK to intercept).

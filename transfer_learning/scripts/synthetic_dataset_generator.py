@@ -9,11 +9,11 @@ Key behavior mirrors top_level_control/trajectory/robot_predictor.py:
    ROBOT_HOME anyway (marked `is_reachable=0`).
 
 Inputs (default):
-    x1 y1 z1 x2 y2 z2 x3 y3 z3 x4 y4 z4 dt12 dt23 dt34
+    x1 y1 z1 ... xK yK zK dt12 ... dt(K-1)K
 
 Outputs:
     x_hit y_hit z_hit vx_hit vy_hit vz_hit t_hit is_reachable
-    where t_hit is time-from-point4-to-intercept [s]
+    where t_hit is time-from-last-input-point (pointK)-to-intercept [s]
     (+ metadata columns)
 """
 
@@ -58,7 +58,7 @@ class NoiseConfig:
 @dataclass(frozen=True)
 class GeneratorConfig:
     n_samples: int = 10000
-    k_points: int = 4
+    k_points: int = 6
     scan_duration_s: float = 1.5
     scan_dt_s: float = 0.005
     min_time_hit_s: float = 0.10
@@ -105,7 +105,7 @@ class RealMatchedConfig:
     # When max_bounces >= 2, probabilistically allow second bounce to better
     # match real-data bounce count distribution.
     second_bounce_prob: float = 1.0
-    # Optional filter on time-from-point4-to-hit [s] for tighter real matching.
+    # Optional filter on time-from-last-input-point (pointK)-to-hit [s] for tighter matching.
     t_hit_min_s: Optional[float] = None
     t_hit_max_s: Optional[float] = None
     # Optional velocity-shaping controls (applied only when enabled=True).
@@ -300,7 +300,7 @@ def select_intercept_like_robot_predictor(
                 "vy_hit": float(vy),
                 "vz_hit": float(vz),
                 # Absolute hit time from launch-time reference (t=0 at x1 true sample).
-                # Converted to time-from-point4 in build_row().
+                # Converted to time-from-last-input-point (pointK) in build_row().
                 "t_hit_abs": ti,
                 "is_reachable": 0.0,
                 "bounces_before_hit": float(b_before),
@@ -318,7 +318,7 @@ def select_intercept_like_robot_predictor(
                     "vy_hit": float(vy),
                     "vz_hit": float(vz),
                     # Absolute hit time from launch-time reference (t=0 at x1 true sample).
-                    # Converted to time-from-point4 in build_row().
+                    # Converted to time-from-last-input-point (pointK) in build_row().
                     "t_hit_abs": ti,
                     "is_reachable": 1.0,
                     "bounces_before_hit": float(b_before),
@@ -510,11 +510,11 @@ def build_row(
             }
         )
     else:
-        # Define target t_hit consistently as time from point4 to intercept.
+        # Define target t_hit consistently as time from last input point (pointK) to intercept.
         # Use noisy observation timing (same timing source as dt features).
-        # p4 time relative to p1 is (noisy_t[3] - noisy_t[0]).
-        t_p4_from_p1 = float(noisy_t[3] - noisy_t[0])
-        t_hit_from_p4 = float(intercept["t_hit_abs"] - t_p4_from_p1)
+        # pointK time relative to p1 is (noisy_t[-1] - noisy_t[0]).
+        t_pk_from_p1 = float(noisy_t[-1] - noisy_t[0])
+        t_hit_from_pk = float(intercept["t_hit_abs"] - t_pk_from_p1)
         row.update(
             {
                 "x_hit": float(intercept["x_hit"]),
@@ -523,7 +523,7 @@ def build_row(
                 "vx_hit": float(intercept["vx_hit"]),
                 "vy_hit": float(intercept["vy_hit"]),
                 "vz_hit": float(intercept["vz_hit"]),
-                "t_hit": t_hit_from_p4,
+                "t_hit": t_hit_from_pk,
                 "is_reachable": float(intercept["is_reachable"]),
                 "bounces_before_hit": float(intercept["bounces_before_hit"]),
                 "has_bounce_before_hit": float(intercept["has_bounce_before_hit"]),

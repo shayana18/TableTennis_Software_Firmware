@@ -1,7 +1,8 @@
 presets:
   broad:
-    description: "Broad synthetic distribution with simpler sensing noise."
+    description: "Broad synthetic distribution with no-loss flight/bounce physics and simpler sensing noise."
     generator:
+      k_points: 6
       scan_duration_s: 1.5
       scan_dt_s: 0.005
       min_time_hit_s: 0.10
@@ -60,43 +61,44 @@ presets:
 
   real_matched:
     inherits: broad
-    description: "Matched to real captures with controlled extra variance to reduce collection-bias overfitting."
+    description: "Real-like timing/noise with intentionally broader launch and trajectory diversity."
     generator:
-      gravity_jitter_frac_std: 0.02
+      k_points: 6
+      gravity_jitter_frac_std: 0.015
       obs_dt_min_s: 0.0130
-      obs_dt_max_s: 0.0210
-      obs_last_time_cap_s: 0.38
-      max_attempts_factor: 220
+      obs_dt_max_s: 0.0200
+      obs_last_time_cap_s: 0.55
+      max_attempts_factor: 180
       max_bounces: 2
     noise:
-      position_std_mm: 4.0
-      bias_std_mm: 2.0
-      outlier_prob: 0.01
-      outlier_std_mm: 12.0
-      timestamp_jitter_ms: 1.2
+      position_std_mm: 3.5
+      bias_std_mm: 1.8
+      outlier_prob: 0.007
+      outlier_std_mm: 10.0
+      timestamp_jitter_ms: 0.9
     launch_box:
-      x_min: -380.0
-      x_max: 620.0
-      y_min: 2520.0
-      y_max: 2850.0
-      z_min: -1180.0
-      z_max: -620.0
+      x_min: -900.0
+      x_max: 900.0
+      y_min: 2150.0
+      y_max: 3200.0
+      z_min: -1150.74
+      z_max: -520.0
     real_match:
       enabled: true
       dt_mode: normal
-      dt_mean_s: 0.0156
-      dt_std_s: 0.0011
+      dt_mean_s: 0.0159
+      dt_std_s: 0.0013
       dt_min_s: 0.0130
-      dt_max_s: 0.0210
+      dt_max_s: 0.0200
       require_valid_intercept: true
-      require_reachable: true
-      second_bounce_prob: 0.40
-      t_hit_min_s: 0.42
-      t_hit_max_s: 1.05
-      vx_scale: 0.32
-      vy_scale: 0.39
-      vz_scale: 0.24
-      vz_bias_mm_s: 650.0
-      vx_noise_std_mm_s: 100.0
-      vy_noise_std_mm_s: 120.0
-      vz_noise_std_mm_s: 90.0
+      require_reachable: false
+      second_bounce_prob: 0.35
+      t_hit_min_s: 0.22
+      t_hit_max_s: 1.20
+      vx_scale: 0.55
+      vy_scale: 0.62
+      vz_scale: 0.45
+      vz_bias_mm_s: 350.0
+      vx_noise_std_mm_s: 140.0
+      vy_noise_std_mm_s: 180.0
+      vz_noise_std_mm_s: 150.0
