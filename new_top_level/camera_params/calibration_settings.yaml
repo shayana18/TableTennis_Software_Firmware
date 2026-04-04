@@ -1,5 +1,5 @@
-camera0: 2
-camera1: 0
+camera0: 1
+camera1: 2
 frame_width: 640
 frame_height: 480
 mono_calibration_frames: 30

@@ -1,0 +1,11 @@
+source_file: real_transfer_data\real_transfer_dataset.csv
+total_rows: 91
+clean_rows: 80
+rejected_rows: 11
+reason_counts:
+  below_table_first4: 1
+  large_dt: 2
+  launch_box_mismatch: 10
+  non_approach_y: 1
+rejected_sample_ids:
+  7, 10, 19, 22, 23, 28, 41, 49, 64, 66, 87

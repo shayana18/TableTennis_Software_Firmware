@@ -5,13 +5,15 @@ Synthetic dataset generator for ping pong interception learning.
 Key behavior mirrors top_level_control/trajectory/robot_predictor.py:
 1. Forward-simulate trajectory in robot frame.
 2. Select the in-workspace point closest to ROBOT_HOME.
-3. If no in-workspace point exists, label as out-of-workspace (no clamp).
+3. If no in-workspace point exists, label the closest trajectory point to
+   ROBOT_HOME anyway (marked `is_reachable=0`).
 
 Inputs (default):
     x1 y1 z1 x2 y2 z2 x3 y3 z3 x4 y4 z4 dt12 dt23 dt34
 
 Outputs:
     x_hit y_hit z_hit vx_hit vy_hit vz_hit t_hit is_reachable
+    where t_hit is time-from-point4-to-intercept [s]
     (+ metadata columns)
 """
 
@@ -20,11 +22,18 @@ from __future__ import annotations
 import argparse
 import csv
 import math
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, fields, replace
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
+import yaml
+
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+DEFAULT_PRESETS_YAML = SCRIPT_DIR / "synthetic_data_generated" / "synthetic_generator_presets.yaml"
+DEFAULT_RUNS_ROOT = SCRIPT_DIR / "synthetic_data_generated" / "runs"
 
 
 # Match top_level_control/trajectory/workspace.py defaults (mm units).
@@ -39,11 +48,11 @@ class WorkspaceConfig:
 
 @dataclass(frozen=True)
 class NoiseConfig:
-    position_std_mm: float = 7.0
+    position_std_mm: float = 15.0
     bias_std_mm: float = 4.0
     outlier_prob: float = 0.02
-    outlier_std_mm: float = 25.0
-    timestamp_jitter_ms: float = 1.0
+    outlier_std_mm: float = 30.0
+    timestamp_jitter_ms: float = 2.0
 
 
 @dataclass(frozen=True)
@@ -55,8 +64,8 @@ class GeneratorConfig:
     min_time_hit_s: float = 0.10
     gravity_z_mm_s2: float = -9810.0
     gravity_jitter_frac_std: float = 0.03
-    obs_dt_min_s: float = 0.008
-    obs_dt_max_s: float = 0.020
+    obs_dt_min_s: float = 0.01
+    obs_dt_max_s: float = 0.02
     obs_pre_hit_margin_s: float = 0.030
     obs_last_time_cap_s: float = 0.250
     max_attempts_factor: int = 60
@@ -65,6 +74,8 @@ class GeneratorConfig:
     preview_stop_y_mm: float = -700.0
     preview_stop_z_mm: float = -1700.0
     table_z_mm: float = -1150.74
+    table_length_mm: float = 2740.0
+    table_width_mm: float = 1525.0
     max_bounces: int = 2
     preview_z_exaggeration: float = 1.8
 
@@ -79,6 +90,73 @@ class LaunchBoxConfig:
     # Clarified convention: launch Z is always negative in this robot frame.
     z_min: float = -1150.74
     z_max: float = -450.74
+
+
+@dataclass(frozen=True)
+class RealMatchedConfig:
+    enabled: bool = False
+    dt_mode: str = "uniform"
+    dt_mean_s: float = 0.0158
+    dt_std_s: float = 0.0013
+    dt_min_s: float = 0.0125
+    dt_max_s: float = 0.0210
+    require_valid_intercept: bool = False
+    require_reachable: bool = False
+
+
+def _deep_update(dst: Dict, src: Dict) -> Dict:
+    for key, value in src.items():
+        if isinstance(value, dict) and isinstance(dst.get(key), dict):
+            _deep_update(dst[key], value)
+        else:
+            dst[key] = value
+    return dst
+
+
+def _build_dataclass(cls, overrides: Optional[Dict] = None):
+    overrides = overrides or {}
+    defaults = asdict(cls())
+    unknown = sorted(set(overrides.keys()) - set(defaults.keys()))
+    if unknown:
+        raise KeyError(f"Unknown keys for {cls.__name__}: {unknown}")
+    defaults.update(overrides)
+    return cls(**defaults)
+
+
+def load_presets_yaml(path: Path) -> Dict:
+    if not path.exists():
+        raise FileNotFoundError(f"Preset YAML not found: {path}")
+    with path.open("r", encoding="utf-8") as f:
+        data = yaml.safe_load(f) or {}
+    presets = data.get("presets")
+    if not isinstance(presets, dict) or not presets:
+        raise ValueError(f"Invalid presets YAML structure in: {path}")
+    return presets
+
+
+def resolve_preset_bundle(presets: Dict, preset_name: str) -> Dict:
+    if preset_name not in presets:
+        raise KeyError(f"Preset '{preset_name}' not found. Available: {sorted(presets.keys())}")
+
+    preset_raw = dict(presets[preset_name] or {})
+    base_name = preset_raw.pop("inherits", None)
+
+    if base_name:
+        if base_name not in presets:
+            raise KeyError(
+                f"Preset '{preset_name}' inherits unknown preset '{base_name}'. "
+                f"Available: {sorted(presets.keys())}"
+            )
+        merged = dict(presets[base_name] or {})
+        _deep_update(merged, preset_raw)
+        return merged
+
+    return preset_raw
+
+
+def sanitize_tag(text: str) -> str:
+    safe = "".join(ch if (ch.isalnum() or ch in "-_") else "_" for ch in text.strip())
+    return safe.strip("_")
 
 
 def in_workspace(x: float, y: float, z: float, ws: WorkspaceConfig) -> bool:
@@ -186,6 +264,8 @@ def select_intercept_like_robot_predictor(
     cx, cy, cz = ws.robot_home
     best_ws: Optional[Dict[str, float]] = None
     best_ws_d2 = float("inf")
+    best_any: Optional[Dict[str, float]] = None
+    best_any_d2 = float("inf")
 
     for i in range(t.shape[0]):
         ti = float(t[i])
@@ -195,8 +275,25 @@ def select_intercept_like_robot_predictor(
         x, y, z, vx, vy, vz = states[i]
         b_before = int(bounces[i]) if i < bounces.shape[0] else 0
         has_bounce = 1.0 if b_before > 0 else 0.0
+        d2 = (x - cx) ** 2 + (y - cy) ** 2 + (z - cz) ** 2
+        if d2 < best_any_d2:
+            best_any_d2 = float(d2)
+            best_any = {
+                "x_hit": float(x),
+                "y_hit": float(y),
+                "z_hit": float(z),
+                "vx_hit": float(vx),
+                "vy_hit": float(vy),
+                "vz_hit": float(vz),
+                # Absolute hit time from launch-time reference (t=0 at x1 true sample).
+                # Converted to time-from-point4 in build_row().
+                "t_hit_abs": ti,
+                "is_reachable": 0.0,
+                "bounces_before_hit": float(b_before),
+                "has_bounce_before_hit": has_bounce,
+            }
+
         if in_workspace(float(x), float(y), float(z), ws):
-            d2 = (x - cx) ** 2 + (y - cy) ** 2 + (z - cz) ** 2
             if d2 < best_ws_d2:
                 best_ws_d2 = float(d2)
                 best_ws = {
@@ -206,7 +303,9 @@ def select_intercept_like_robot_predictor(
                     "vx_hit": float(vx),
                     "vy_hit": float(vy),
                     "vz_hit": float(vz),
-                    "t_hit": ti,
+                    # Absolute hit time from launch-time reference (t=0 at x1 true sample).
+                    # Converted to time-from-point4 in build_row().
+                    "t_hit_abs": ti,
                     "is_reachable": 1.0,
                     "bounces_before_hit": float(b_before),
                     "has_bounce_before_hit": has_bounce,
@@ -214,7 +313,7 @@ def select_intercept_like_robot_predictor(
 
     if best_ws is not None:
         return best_ws
-    return None
+    return best_any
 
 
 def sample_initial_state(
@@ -275,15 +374,20 @@ def sample_initial_state(
 def sample_observation_times(
     rng: np.random.Generator,
     cfg: GeneratorConfig,
-    t_hit: Optional[float],
+    t_hit_abs: Optional[float],
+    rm_cfg: Optional[RealMatchedConfig] = None,
 ) -> Optional[np.ndarray]:
-    dts = rng.uniform(cfg.obs_dt_min_s, cfg.obs_dt_max_s, size=cfg.k_points - 1)
+    if rm_cfg is not None and rm_cfg.enabled and rm_cfg.dt_mode.lower() == "normal":
+        dts = rng.normal(rm_cfg.dt_mean_s, rm_cfg.dt_std_s, size=cfg.k_points - 1)
+        dts = np.clip(dts, rm_cfg.dt_min_s, rm_cfg.dt_max_s)
+    else:
+        dts = rng.uniform(cfg.obs_dt_min_s, cfg.obs_dt_max_s, size=cfg.k_points - 1)
     total_dt = float(np.sum(dts))
 
-    if t_hit is None:
+    if t_hit_abs is None:
         last_obs_max = cfg.obs_last_time_cap_s
     else:
-        last_obs_max = min(cfg.obs_last_time_cap_s, t_hit - cfg.obs_pre_hit_margin_s)
+        last_obs_max = min(cfg.obs_last_time_cap_s, t_hit_abs - cfg.obs_pre_hit_margin_s)
 
     # Start observation at launch time (t=0), so x1/y1/z1 begin in the launch box.
     if total_dt > last_obs_max:
@@ -374,7 +478,25 @@ def build_row(
             }
         )
     else:
-        row.update(intercept)
+        # Define target t_hit consistently as time from point4 to intercept.
+        # Use noisy observation timing (same timing source as dt features).
+        # p4 time relative to p1 is (noisy_t[3] - noisy_t[0]).
+        t_p4_from_p1 = float(noisy_t[3] - noisy_t[0])
+        t_hit_from_p4 = float(intercept["t_hit_abs"] - t_p4_from_p1)
+        row.update(
+            {
+                "x_hit": float(intercept["x_hit"]),
+                "y_hit": float(intercept["y_hit"]),
+                "z_hit": float(intercept["z_hit"]),
+                "vx_hit": float(intercept["vx_hit"]),
+                "vy_hit": float(intercept["vy_hit"]),
+                "vz_hit": float(intercept["vz_hit"]),
+                "t_hit": t_hit_from_p4,
+                "is_reachable": float(intercept["is_reachable"]),
+                "bounces_before_hit": float(intercept["bounces_before_hit"]),
+                "has_bounce_before_hit": float(intercept["has_bounce_before_hit"]),
+            }
+        )
         row["intercept_valid"] = 1.0
 
     x0, y0, z0, vx0, vy0, vz0 = launch_state
@@ -395,8 +517,12 @@ def generate_single_sample(
     ws: WorkspaceConfig,
     box: LaunchBoxConfig,
     noise: NoiseConfig,
+    rm_cfg: Optional[RealMatchedConfig] = None,
     want_trace: bool = False,
 ) -> Optional[Tuple[Dict[str, float], Optional[Dict[str, np.ndarray]]]]:
+    if rm_cfg is None:
+        rm_cfg = RealMatchedConfig()
+
     gravity_z = cfg.gravity_z_mm_s2 * (1.0 + rng.normal(0.0, cfg.gravity_jitter_frac_std))
     launch_state = sample_initial_state(rng, box=box, ws=ws, gravity_z=gravity_z)
     x0, y0, z0, vx0, vy0, vz0 = launch_state
@@ -423,8 +549,18 @@ def generate_single_sample(
         min_time_hit_s=cfg.min_time_hit_s,
     )
 
-    t_hit = intercept["t_hit"] if intercept is not None else None
-    t_obs = sample_observation_times(rng, cfg, t_hit=t_hit)
+    if rm_cfg.enabled:
+        if rm_cfg.require_valid_intercept and intercept is None:
+            return None
+        if (
+            rm_cfg.require_reachable
+            and intercept is not None
+            and float(intercept.get("is_reachable", 0.0)) <= 0.5
+        ):
+            return None
+
+    t_hit_abs = intercept["t_hit_abs"] if intercept is not None else None
+    t_obs = sample_observation_times(rng, cfg, t_hit_abs=t_hit_abs, rm_cfg=rm_cfg)
     if t_obs is None:
         return None
 
@@ -502,6 +638,7 @@ def plot_examples(
     ws: WorkspaceConfig,
     box: LaunchBoxConfig,
     noise: NoiseConfig,
+    rm_cfg: RealMatchedConfig,
     rows: List[Dict[str, float]],
     n_examples: int,
     save_path: Optional[Path] = None,
@@ -520,7 +657,7 @@ def plot_examples(
     max_attempts = max(200, n_examples * 30)
     while len(examples) < n_examples and attempts < max_attempts:
         attempts += 1
-        item = generate_single_sample(rng, cfg, ws, box, noise, want_trace=True)
+        item = generate_single_sample(rng, cfg, ws, box, noise, rm_cfg=rm_cfg, want_trace=True)
         if item is None:
             continue
         row, trace = item
@@ -541,6 +678,24 @@ def plot_examples(
     ax3d.plot(wx, wy, np.full_like(theta, ws.z_min), color="gray", alpha=0.8, linewidth=1.0)
     ax3d.plot(wx, wy, np.full_like(theta, ws.z_max), color="gray", alpha=0.8, linewidth=1.0)
     ax3d.plot(wx, wy, np.full_like(theta, cfg.table_z_mm), color="tab:brown", alpha=0.7, linewidth=1.2)
+    # Table top outline: z fixed at table height, x centered on 0, y starts at 0.
+    half_table_w = 0.5 * cfg.table_width_mm
+    table_x = np.array(
+        [-half_table_w, half_table_w, half_table_w, -half_table_w, -half_table_w],
+        dtype=float,
+    )
+    table_y = np.array([0.0, 0.0, cfg.table_length_mm, cfg.table_length_mm, 0.0], dtype=float)
+    table_z = np.full_like(table_x, cfg.table_z_mm)
+    ax3d.plot(table_x, table_y, table_z, color="tab:green", linewidth=2.0, label="table outline")
+    # Centerline (x=0) for orientation.
+    ax3d.plot(
+        [0.0, 0.0],
+        [0.0, cfg.table_length_mm],
+        [cfg.table_z_mm, cfg.table_z_mm],
+        color="tab:green",
+        linewidth=1.0,
+        linestyle="--",
+    )
     # Orientation guides (not rotated): x-major radius and y-minor radius.
     ax3d.plot(
         [-ws.ellipse_a, ws.ellipse_a],
@@ -595,6 +750,15 @@ def plot_examples(
             xyz_blocks.append(np.array([[row["x_hit"], row["y_hit"], row["z_hit"]]], dtype=float))
 
     if xyz_blocks:
+        xyz_blocks.append(
+            np.column_stack(
+                [
+                    table_x,
+                    table_y,
+                    table_z,
+                ]
+            )
+        )
         xyz_all = np.concatenate(xyz_blocks, axis=0)
         xyz_min = np.min(xyz_all, axis=0)
         xyz_max = np.max(xyz_all, axis=0)
@@ -776,48 +940,76 @@ def parse_args() -> argparse.Namespace:
         description="Generate synthetic transfer-learning data for ping pong interception."
     )
     parser.add_argument("--num-samples", type=int, default=10000, help="Number of rows to generate.")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed.")
+
+    parser.add_argument(
+        "--preset",
+        type=str,
+        default="broad",
+        help="Preset name from YAML (e.g., broad, real_matched).",
+    )
+    parser.add_argument(
+        "--presets-yaml",
+        type=str,
+        default=str(DEFAULT_PRESETS_YAML),
+        help="Path to presets YAML file.",
+    )
+    parser.add_argument(
+        "--runs-root",
+        type=str,
+        default=str(DEFAULT_RUNS_ROOT),
+        help="Root folder where timestamped run folders are created.",
+    )
+    parser.add_argument(
+        "--run-tag",
+        type=str,
+        default="",
+        help="Optional short tag appended to run folder name.",
+    )
     parser.add_argument(
         "--output",
         type=str,
-        default="synthetic_intercept_dataset.csv",
-        help="Output CSV path.",
+        default="",
+        help="Optional explicit CSV output path. Empty -> timestamped run folder output.",
     )
-    parser.add_argument("--seed", type=int, default=42, help="Random seed.")
 
-    parser.add_argument("--scan-duration", type=float, default=1.5, help="Trajectory scan duration [s].")
-    parser.add_argument("--scan-dt", type=float, default=0.005, help="Trajectory scan step [s].")
-    parser.add_argument("--min-time-hit", type=float, default=0.10, help="Minimum intercept time [s].")
-    parser.add_argument("--table-z", type=float, default=-1150.74, help="Table plane Z in robot frame [mm].")
+    # Optional overrides (if provided, override the selected preset).
+    parser.add_argument("--scan-duration", type=float, default=None, help="Override: trajectory scan duration [s].")
+    parser.add_argument("--scan-dt", type=float, default=None, help="Override: trajectory scan step [s].")
+    parser.add_argument("--min-time-hit", type=float, default=None, help="Override: minimum intercept time [s].")
+    parser.add_argument("--table-z", type=float, default=None, help="Override: table plane Z in robot frame [mm].")
+    parser.add_argument("--table-length", type=float, default=None, help="Override: table length along +y [mm].")
+    parser.add_argument("--table-width", type=float, default=None, help="Override: table width across x [mm].")
     parser.add_argument(
         "--max-bounces",
         type=int,
-        default=2,
-        help="Maximum no-loss bounces to simulate.",
+        default=None,
+        help="Override: maximum no-loss bounces to simulate.",
     )
     parser.add_argument(
         "--preview-duration",
         type=float,
-        default=2.5,
-        help="Preview trajectory max duration [s] (visualization only).",
+        default=None,
+        help="Override: preview trajectory max duration [s] (visualization only).",
     )
     parser.add_argument(
         "--preview-z-exaggeration",
         type=float,
-        default=1.8,
-        help="Vertical exaggeration factor for 3D preview readability.",
+        default=None,
+        help="Override: vertical exaggeration factor for 3D preview readability.",
     )
     parser.add_argument(
-        "--pos-noise-std", type=float, default=7.0, help="Gaussian position noise std [mm]."
+        "--pos-noise-std", type=float, default=None, help="Override: Gaussian position noise std [mm]."
     )
-    parser.add_argument("--bias-noise-std", type=float, default=4.0, help="Per-trajectory bias std [mm].")
-    parser.add_argument("--outlier-prob", type=float, default=0.02, help="Outlier probability per point.")
-    parser.add_argument("--outlier-std", type=float, default=25.0, help="Outlier noise std [mm].")
-    parser.add_argument("--time-jitter-ms", type=float, default=1.0, help="Timestamp jitter std [ms].")
+    parser.add_argument("--bias-noise-std", type=float, default=None, help="Override: per-trajectory bias std [mm].")
+    parser.add_argument("--outlier-prob", type=float, default=None, help="Override: outlier probability per point.")
+    parser.add_argument("--outlier-std", type=float, default=None, help="Override: outlier noise std [mm].")
+    parser.add_argument("--time-jitter-ms", type=float, default=None, help="Override: timestamp jitter std [ms].")
     parser.add_argument(
         "--gravity-jitter-frac-std",
         type=float,
-        default=0.03,
-        help="Std of multiplicative gravity randomization fraction.",
+        default=None,
+        help="Override: std of multiplicative gravity randomization fraction.",
     )
 
     parser.add_argument(
@@ -833,7 +1025,7 @@ def parse_args() -> argparse.Namespace:
         "--save-plot",
         type=str,
         default="",
-        help="Optional image path to save sanity-check plot.",
+        help="Optional explicit image path to save sanity-check plot.",
     )
 
     return parser.parse_args()
@@ -843,33 +1035,65 @@ def main() -> None:
     args = parse_args()
     rng = np.random.default_rng(args.seed)
 
-    cfg = GeneratorConfig(
-        n_samples=args.num_samples,
-        scan_duration_s=args.scan_duration,
-        scan_dt_s=args.scan_dt,
-        min_time_hit_s=args.min_time_hit,
-        gravity_jitter_frac_std=args.gravity_jitter_frac_std,
-        preview_duration_s=args.preview_duration,
-        preview_z_exaggeration=max(0.5, float(args.preview_z_exaggeration)),
-        table_z_mm=args.table_z,
-        max_bounces=max(0, int(args.max_bounces)),
-    )
-    noise = NoiseConfig(
-        position_std_mm=args.pos_noise_std,
-        bias_std_mm=args.bias_noise_std,
-        outlier_prob=args.outlier_prob,
-        outlier_std_mm=args.outlier_std,
-        timestamp_jitter_ms=args.time_jitter_ms,
-    )
-    ws = WorkspaceConfig()
-    box = LaunchBoxConfig()
+    presets = load_presets_yaml(Path(args.presets_yaml))
+    preset_bundle = resolve_preset_bundle(presets, args.preset)
+
+    cfg = _build_dataclass(GeneratorConfig, preset_bundle.get("generator", {}))
+    noise = _build_dataclass(NoiseConfig, preset_bundle.get("noise", {}))
+    ws = _build_dataclass(WorkspaceConfig, preset_bundle.get("workspace", {}))
+    box = _build_dataclass(LaunchBoxConfig, preset_bundle.get("launch_box", {}))
+    rm_cfg = _build_dataclass(RealMatchedConfig, preset_bundle.get("real_match", {}))
+
+    # Top-level per-run overrides
+    cfg = replace(cfg, n_samples=args.num_samples)
+    if args.scan_duration is not None:
+        cfg = replace(cfg, scan_duration_s=float(args.scan_duration))
+    if args.scan_dt is not None:
+        cfg = replace(cfg, scan_dt_s=float(args.scan_dt))
+    if args.min_time_hit is not None:
+        cfg = replace(cfg, min_time_hit_s=float(args.min_time_hit))
+    if args.gravity_jitter_frac_std is not None:
+        cfg = replace(cfg, gravity_jitter_frac_std=float(args.gravity_jitter_frac_std))
+    if args.preview_duration is not None:
+        cfg = replace(cfg, preview_duration_s=float(args.preview_duration))
+    if args.preview_z_exaggeration is not None:
+        cfg = replace(cfg, preview_z_exaggeration=max(0.5, float(args.preview_z_exaggeration)))
+    if args.table_z is not None:
+        cfg = replace(cfg, table_z_mm=float(args.table_z))
+    if args.table_length is not None:
+        cfg = replace(cfg, table_length_mm=float(args.table_length))
+    if args.table_width is not None:
+        cfg = replace(cfg, table_width_mm=float(args.table_width))
+    if args.max_bounces is not None:
+        cfg = replace(cfg, max_bounces=max(0, int(args.max_bounces)))
+
+    if args.pos_noise_std is not None:
+        noise = replace(noise, position_std_mm=float(args.pos_noise_std))
+    if args.bias_noise_std is not None:
+        noise = replace(noise, bias_std_mm=float(args.bias_noise_std))
+    if args.outlier_prob is not None:
+        noise = replace(noise, outlier_prob=float(args.outlier_prob))
+    if args.outlier_std is not None:
+        noise = replace(noise, outlier_std_mm=float(args.outlier_std))
+    if args.time_jitter_ms is not None:
+        noise = replace(noise, timestamp_jitter_ms=float(args.time_jitter_ms))
+
+    runs_root = Path(args.runs_root)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    tag = sanitize_tag(args.run_tag)
+    run_name = f"{timestamp}_{args.preset}" + (f"_{tag}" if tag else "")
+    run_dir = runs_root / run_name
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    output_path = Path(args.output) if args.output else run_dir / "synthetic_intercept_dataset.csv"
+    resolved_cfg_path = run_dir / "resolved_config.yaml"
 
     rows: List[Dict[str, float]] = []
     max_attempts = cfg.n_samples * cfg.max_attempts_factor
     attempts = 0
     while len(rows) < cfg.n_samples and attempts < max_attempts:
         attempts += 1
-        item = generate_single_sample(rng, cfg, ws, box, noise, want_trace=False)
+        item = generate_single_sample(rng, cfg, ws, box, noise, rm_cfg=rm_cfg, want_trace=False)
         if item is None:
             continue
         row, _ = item
@@ -881,14 +1105,31 @@ def main() -> None:
             "Try loosening generation ranges or constraints."
         )
 
-    output_path = Path(args.output)
     write_csv(rows, output_path)
+
+    resolved = {
+        "timestamp": timestamp,
+        "preset": args.preset,
+        "seed": int(args.seed),
+        "presets_yaml": str(Path(args.presets_yaml).resolve()),
+        "generator": asdict(cfg),
+        "noise": asdict(noise),
+        "workspace": asdict(ws),
+        "launch_box": asdict(box),
+        "real_match": asdict(rm_cfg),
+        "output_csv": str(output_path.resolve()),
+    }
+    with resolved_cfg_path.open("w", encoding="utf-8") as f:
+        yaml.safe_dump(resolved, f, sort_keys=False)
 
     reachable = sum(1 for r in rows if r["is_reachable"] > 0.5)
     invalid = sum(1 for r in rows if r["intercept_valid"] < 0.5)
     bounced = sum(1 for r in rows if r.get("has_bounce_before_hit", 0.0) > 0.5)
 
+    print(f"[INFO] Preset: {args.preset}")
+    print(f"[INFO] Run folder: {run_dir}")
     print(f"[INFO] Generated {len(rows)} samples -> {output_path}")
+    print(f"[INFO] Saved resolved config -> {resolved_cfg_path}")
     print(
         "[INFO] Label mix: "
         f"reachable={reachable} ({100.0*reachable/len(rows):.1f}%), "
@@ -911,13 +1152,18 @@ def main() -> None:
     else:
         n_examples = max(0, int(args.show_examples))
 
-    save_plot_path = Path(args.save_plot) if args.save_plot else None
+    if args.save_plot:
+        save_plot_path = Path(args.save_plot)
+    else:
+        save_plot_path = (run_dir / "sanity_preview.png") if n_examples > 0 else None
+
     plot_examples(
         rng=rng,
         cfg=cfg,
         ws=ws,
         box=box,
         noise=noise,
+        rm_cfg=rm_cfg,
         rows=rows,
         n_examples=n_examples,
         save_path=save_plot_path,
