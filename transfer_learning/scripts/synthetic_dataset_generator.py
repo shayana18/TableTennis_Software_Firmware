@@ -4,8 +4,9 @@ Synthetic dataset generator for ping pong interception learning.
 
 Key behavior:
 1. Forward-simulate trajectory in robot frame.
-2. Select the single trajectory point (after min_time_hit) that is closest to
-   ROBOT_HOME, regardless of workspace membership.
+2. Select the in-workspace trajectory point (after min_time_hit) that is
+   closest to ROBOT_HOME. If none are in workspace, fallback to the closest
+   trajectory point overall.
 3. Mark that selected point as `is_reachable=1` only if it lies inside the
    workspace, else `is_reachable=0`.
 
@@ -69,6 +70,10 @@ class GeneratorConfig:
     obs_dt_max_s: float = 0.02
     obs_pre_hit_margin_s: float = 0.030
     obs_last_time_cap_s: float = 0.250
+    # Observation start strategy:
+    # - "entry": point1 starts at FoV upper-y entry.
+    # - "uniform": point1 start time sampled uniformly across feasible window.
+    obs_start_mode: str = "entry"
     max_attempts_factor: int = 60
     preview_duration_s: float = 2.5
     preview_dt_s: float = 0.005
@@ -84,13 +89,26 @@ class GeneratorConfig:
 @dataclass(frozen=True)
 class LaunchBoxConfig:
     # Player-side launch box in robot frame (mm), from user-provided 8 vertices.
+    # This is where the physical shot starts (not where x1/y1/z1 are sampled).
     x_min: float = -1062.5
     x_max: float = 1062.5
+    # Original launch depth range (before FoV-limited observation windowing).
     y_min: float = 1940.0
     y_max: float = 3240.0
     # Clarified convention: launch Z is always negative in this robot frame.
     z_min: float = -1150.74
     z_max: float = -450.74
+
+
+@dataclass(frozen=True)
+class ObservationWindowConfig:
+    # Camera-visible y-range for observed model inputs x1..xK (mm).
+    y_min: float = 760.0
+    y_max: float = 2060.0
+    # Optional hard bounds for observed point1 x1 (mm). When provided,
+    # sample generation enforces x1 inside [x1_min, x1_max].
+    x1_min: Optional[float] = None
+    x1_max: Optional[float] = None
 
 
 @dataclass(frozen=True)
@@ -117,6 +135,10 @@ class RealMatchedConfig:
     vx_noise_std_mm_s: float = 180.0
     vy_noise_std_mm_s: float = 220.0
     vz_noise_std_mm_s: float = 180.0
+    # Observation start strategy inside the FoV window:
+    # - "entry": point1 starts at upper-y window entry.
+    # - "uniform": point1 start time is sampled uniformly inside feasible window.
+    obs_start_mode: str = "entry"
 
 
 def _deep_update(dst: Dict, src: Dict) -> Dict:
@@ -277,6 +299,8 @@ def select_intercept_like_robot_predictor(
     min_time_hit_s: float,
 ) -> Optional[Dict[str, float]]:
     cx, cy, cz = ws.robot_home
+    best_ws: Optional[Dict[str, float]] = None
+    best_ws_d2 = float("inf")
     best_any: Optional[Dict[str, float]] = None
     best_any_d2 = float("inf")
 
@@ -289,6 +313,24 @@ def select_intercept_like_robot_predictor(
         b_before = int(bounces[i]) if i < bounces.shape[0] else 0
         has_bounce = 1.0 if b_before > 0 else 0.0
         d2 = (x - cx) ** 2 + (y - cy) ** 2 + (z - cz) ** 2
+
+        if in_workspace(float(x), float(y), float(z), ws) and d2 < best_ws_d2:
+            best_ws_d2 = float(d2)
+            best_ws = {
+                "x_hit": float(x),
+                "y_hit": float(y),
+                "z_hit": float(z),
+                "vx_hit": float(vx),
+                "vy_hit": float(vy),
+                "vz_hit": float(vz),
+                # Absolute hit time from launch-time reference (t=0 at physical launch).
+                # Converted to time-from-last-input-point (pointK) in build_row().
+                "t_hit_abs": ti,
+                "is_reachable": 1.0,
+                "bounces_before_hit": float(b_before),
+                "has_bounce_before_hit": has_bounce,
+            }
+
         if d2 < best_any_d2:
             best_any_d2 = float(d2)
             reachable = 1.0 if in_workspace(float(x), float(y), float(z), ws) else 0.0
@@ -299,14 +341,14 @@ def select_intercept_like_robot_predictor(
                 "vx_hit": float(vx),
                 "vy_hit": float(vy),
                 "vz_hit": float(vz),
-                # Absolute hit time from launch-time reference (t=0 at x1 true sample).
+                # Absolute hit time from launch-time reference (t=0 at physical launch).
                 # Converted to time-from-last-input-point (pointK) in build_row().
                 "t_hit_abs": ti,
                 "is_reachable": reachable,
                 "bounces_before_hit": float(b_before),
                 "has_bounce_before_hit": has_bounce,
             }
-    return best_any
+    return best_ws if best_ws is not None else best_any
 
 
 def sample_initial_state(
@@ -319,7 +361,7 @@ def sample_initial_state(
     if rm_cfg is None:
         rm_cfg = RealMatchedConfig()
 
-    # First observed point starts inside the player-side launch box.
+    # Physical launch state starts inside the player-side launch box.
     x0 = float(rng.uniform(box.x_min, box.x_max))
     y0 = float(rng.uniform(box.y_min, box.y_max))
     z0 = float(rng.uniform(box.z_min, box.z_max))
@@ -386,6 +428,8 @@ def sample_observation_times(
     rng: np.random.Generator,
     cfg: GeneratorConfig,
     t_hit_abs: Optional[float],
+    launch_state: Tuple[float, float, float, float, float, float],
+    obs_window: ObservationWindowConfig,
     rm_cfg: Optional[RealMatchedConfig] = None,
 ) -> Optional[np.ndarray]:
     if rm_cfg is not None and rm_cfg.enabled and rm_cfg.dt_mode.lower() == "normal":
@@ -400,11 +444,61 @@ def sample_observation_times(
     else:
         last_obs_max = min(cfg.obs_last_time_cap_s, t_hit_abs - cfg.obs_pre_hit_margin_s)
 
-    # Start observation at launch time (t=0), so x1/y1/z1 begin in the launch box.
     if total_dt > last_obs_max:
         return None
 
-    t_obs = np.concatenate([[0.0], np.cumsum(dts)])
+    x0, y0, _, vx0, vy0, _ = launch_state
+    if vy0 >= -1e-6:
+        return None
+
+    # Require launch to start beyond the visible upper-y boundary so point1
+    # is sampled at FoV entry instead of an already-visible state.
+    if y0 <= obs_window.y_max:
+        return None
+
+    # Choose observation start so x1..xK stay inside camera FoV in y:
+    #   obs_window.y_min <= y(t) <= obs_window.y_max.
+    # For vy0<0 and linear y(t)=y0+vy0*t:
+    #   t_enter_max = time when y first reaches y_max (FoV entry from far side),
+    #   t_exit_min  = time when y reaches y_min (FoV exit toward robot side).
+    t_enter_max = (obs_window.y_max - y0) / vy0
+    t_exit_min = (obs_window.y_min - y0) / vy0
+
+    # Start point at FoV entry (or as early as possible if already in-window).
+    t_start_min = max(0.0, t_enter_max)
+    t_start_max = min(last_obs_max - total_dt, t_exit_min - total_dt)
+    if t_start_min > t_start_max:
+        return None
+
+    # Optionally constrain observed point1 x1 to configured bounds.
+    if obs_window.x1_min is not None and obs_window.x1_max is not None:
+        x1_lo = float(min(obs_window.x1_min, obs_window.x1_max))
+        x1_hi = float(max(obs_window.x1_min, obs_window.x1_max))
+        if abs(vx0) <= 1e-9:
+            if x0 < x1_lo or x0 > x1_hi:
+                return None
+        else:
+            t_x_lo = (x1_lo - x0) / vx0
+            t_x_hi = (x1_hi - x0) / vx0
+            t_x_min = min(t_x_lo, t_x_hi)
+            t_x_max = max(t_x_lo, t_x_hi)
+            t_start_min = max(t_start_min, t_x_min)
+            t_start_max = min(t_start_max, t_x_max)
+            if t_start_min > t_start_max:
+                return None
+
+    start_mode = str(cfg.obs_start_mode).strip().lower() or "entry"
+    if rm_cfg is not None and rm_cfg.enabled:
+        rm_start_mode = str(rm_cfg.obs_start_mode).strip().lower()
+        if rm_start_mode:
+            start_mode = rm_start_mode
+
+    if start_mode == "uniform":
+        t_start = float(rng.uniform(t_start_min, t_start_max))
+    else:
+        # Default behavior keeps point1 near FoV entry.
+        t_start = t_start_min
+    t_obs = t_start + np.concatenate([[0.0], np.cumsum(dts)])
     return t_obs
 
 
@@ -426,7 +520,7 @@ def inject_observation_noise(
     points: np.ndarray,
     t_obs: np.ndarray,
     noise: NoiseConfig,
-    box: Optional[LaunchBoxConfig] = None,
+    obs_window: Optional[ObservationWindowConfig] = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
     # Per-trajectory systematic camera calibration bias.
     bias_xyz = rng.normal(0.0, noise.bias_std_mm, size=3)
@@ -437,11 +531,9 @@ def inject_observation_noise(
         if rng.random() < noise.outlier_prob:
             noisy_points[i] += rng.normal(0.0, noise.outlier_std_mm, size=3)
 
-    # Keep first observed point inside launch box as requested.
-    if box is not None and noisy_points.shape[0] > 0:
-        noisy_points[0, 0] = float(np.clip(noisy_points[0, 0], box.x_min, box.x_max))
-        noisy_points[0, 1] = float(np.clip(noisy_points[0, 1], box.y_min, box.y_max))
-        noisy_points[0, 2] = float(np.clip(noisy_points[0, 2], box.z_min, box.z_max))
+    # Keep observed model inputs inside the camera FoV in y.
+    if obs_window is not None and noisy_points.shape[0] > 0:
+        noisy_points[:, 1] = np.clip(noisy_points[:, 1], obs_window.y_min, obs_window.y_max)
 
     # Timestamp jitter, then enforce monotonicity.
     jitter_s = noise.timestamp_jitter_ms / 1000.0
@@ -490,10 +582,9 @@ def build_row(
         )
     else:
         # Define target t_hit consistently as time from last input point (pointK) to intercept.
-        # Use noisy observation timing (same timing source as dt features).
-        # pointK time relative to p1 is (noisy_t[-1] - noisy_t[0]).
-        t_pk_from_p1 = float(noisy_t[-1] - noisy_t[0])
-        t_hit_from_pk = float(intercept["t_hit_abs"] - t_pk_from_p1)
+        # Use pointK timestamp from noisy observation timing (same timing source as dt features).
+        t_pk_abs = float(noisy_t[-1])
+        t_hit_from_pk = float(intercept["t_hit_abs"] - t_pk_abs)
         row.update(
             {
                 "x_hit": float(intercept["x_hit"]),
@@ -527,6 +618,7 @@ def generate_single_sample(
     cfg: GeneratorConfig,
     ws: WorkspaceConfig,
     box: LaunchBoxConfig,
+    obs_window: ObservationWindowConfig,
     noise: NoiseConfig,
     rm_cfg: Optional[RealMatchedConfig] = None,
     want_trace: bool = False,
@@ -576,7 +668,14 @@ def generate_single_sample(
             return None
 
     t_hit_abs = intercept["t_hit_abs"] if intercept is not None else None
-    t_obs = sample_observation_times(rng, cfg, t_hit_abs=t_hit_abs, rm_cfg=rm_cfg)
+    t_obs = sample_observation_times(
+        rng,
+        cfg,
+        t_hit_abs=t_hit_abs,
+        launch_state=launch_state,
+        obs_window=obs_window,
+        rm_cfg=rm_cfg,
+    )
     if t_obs is None:
         return None
 
@@ -591,8 +690,20 @@ def generate_single_sample(
         points=points_true,
         t_obs=t_obs,
         noise=noise,
-        box=box,
+        obs_window=obs_window,
     )
+
+    # Enforce optional x1 bounds on the final observed sample (after noise).
+    if (
+        noisy_points.shape[0] > 0
+        and obs_window.x1_min is not None
+        and obs_window.x1_max is not None
+    ):
+        x1_lo = float(min(obs_window.x1_min, obs_window.x1_max))
+        x1_hi = float(max(obs_window.x1_min, obs_window.x1_max))
+        x1_val = float(noisy_points[0, 0])
+        if x1_val < x1_lo or x1_val > x1_hi:
+            return None
 
     row = build_row(
         noisy_points=noisy_points,
@@ -660,6 +771,7 @@ def plot_examples(
     cfg: GeneratorConfig,
     ws: WorkspaceConfig,
     box: LaunchBoxConfig,
+    obs_window: ObservationWindowConfig,
     noise: NoiseConfig,
     rm_cfg: RealMatchedConfig,
     rows: List[Dict[str, float]],
@@ -680,7 +792,16 @@ def plot_examples(
     max_attempts = max(200, n_examples * 30)
     while len(examples) < n_examples and attempts < max_attempts:
         attempts += 1
-        item = generate_single_sample(rng, cfg, ws, box, noise, rm_cfg=rm_cfg, want_trace=True)
+        item = generate_single_sample(
+            rng,
+            cfg,
+            ws,
+            box,
+            obs_window,
+            noise,
+            rm_cfg=rm_cfg,
+            want_trace=True,
+        )
         if item is None:
             continue
         row, trace = item
@@ -833,18 +954,18 @@ def plot_examples(
     fig_scope, axs = plt.subplots(2, 3, figsize=(15, 9))
     ax = axs[0, 0]
     ax.scatter(x1, y1, s=6, alpha=0.35, color="tab:blue")
-    ax.set_title("Launch Scope (x1 vs y1)")
+    ax.set_title("Observed Point1 Scope (x1 vs y1)")
     ax.set_xlabel("x1 [mm]")
     ax.set_ylabel("y1 [mm]")
     ax.set_xlim(box.x_min - 100, box.x_max + 100)
-    ax.set_ylim(box.y_min - 100, box.y_max + 100)
+    ax.set_ylim(obs_window.y_min - 100, obs_window.y_max + 100)
 
     ax = axs[0, 1]
     ax.scatter(y1, z1, s=6, alpha=0.35, color="tab:purple")
-    ax.set_title("Launch Scope (y1 vs z1)")
+    ax.set_title("Observed Point1 Scope (y1 vs z1)")
     ax.set_xlabel("y1 [mm]")
     ax.set_ylabel("z1 [mm]")
-    ax.set_xlim(box.y_min - 100, box.y_max + 100)
+    ax.set_xlim(obs_window.y_min - 100, obs_window.y_max + 100)
     ax.set_ylim(box.z_min - 100, box.z_max + 100)
 
     ax = axs[0, 2]
@@ -1065,6 +1186,7 @@ def main() -> None:
     noise = _build_dataclass(NoiseConfig, preset_bundle.get("noise", {}))
     ws = _build_dataclass(WorkspaceConfig, preset_bundle.get("workspace", {}))
     box = _build_dataclass(LaunchBoxConfig, preset_bundle.get("launch_box", {}))
+    obs_window = _build_dataclass(ObservationWindowConfig, preset_bundle.get("observation_window", {}))
     rm_cfg = _build_dataclass(RealMatchedConfig, preset_bundle.get("real_match", {}))
 
     # Top-level per-run overrides
@@ -1116,7 +1238,16 @@ def main() -> None:
     attempts = 0
     while len(rows) < cfg.n_samples and attempts < max_attempts:
         attempts += 1
-        item = generate_single_sample(rng, cfg, ws, box, noise, rm_cfg=rm_cfg, want_trace=False)
+        item = generate_single_sample(
+            rng,
+            cfg,
+            ws,
+            box,
+            obs_window,
+            noise,
+            rm_cfg=rm_cfg,
+            want_trace=False,
+        )
         if item is None:
             continue
         row, _ = item
@@ -1139,6 +1270,7 @@ def main() -> None:
         "noise": asdict(noise),
         "workspace": asdict(ws),
         "launch_box": asdict(box),
+        "observation_window": asdict(obs_window),
         "real_match": asdict(rm_cfg),
         "output_csv": str(output_path.resolve()),
     }
@@ -1185,6 +1317,7 @@ def main() -> None:
         cfg=cfg,
         ws=ws,
         box=box,
+        obs_window=obs_window,
         noise=noise,
         rm_cfg=rm_cfg,
         rows=rows,

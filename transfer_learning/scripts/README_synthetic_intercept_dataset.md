@@ -17,7 +17,7 @@ python .\scripts\synthetic_dataset_generator.py --preset clean_broad
 python .\scripts\synthetic_dataset_generator.py --preset real_matched
 ```
 
-`broad` is configured to keep prior behavior (same physics and default noise profile as before preset support).
+`broad` now uses a randomized observation start (`obs_start_mode: uniform`) so `y1` is not pinned to the FoV entry line.
 
 ## Output Organization
 By default, every run is saved into a timestamped folder:
@@ -64,3 +64,8 @@ These are only applied when `real_match.enabled: true`, and help align synthetic
 Additional real-matching knobs:
 - `second_bounce_prob`: when `max_bounces >= 2`, probabilistically allow the second bounce.
 - `t_hit_min_s`, `t_hit_max_s`: optional filter on label `t_hit` (time from pointK to intercept).
+
+## Observation Window Notes
+- `observation_window.y_min/y_max` constrain observed `y` points.
+- `observation_window.x1_min/x1_max` optionally constrain observed point1 `x1`.
+- `generator.obs_start_mode` controls whether point1 starts at FoV entry (`entry`) or is sampled across the feasible window (`uniform`).

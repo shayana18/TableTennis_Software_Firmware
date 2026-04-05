@@ -12,6 +12,7 @@ presets:
       obs_dt_max_s: 0.018
       obs_pre_hit_margin_s: 0.03
       obs_last_time_cap_s: 0.25
+      obs_start_mode: uniform
       max_attempts_factor: 60
       preview_duration_s: 2.5
       preview_dt_s: 0.005
@@ -35,6 +36,11 @@ presets:
       y_max: 3240.0
       z_min: -1150.74
       z_max: -450.74
+    observation_window:
+      y_min: 760.0
+      y_max: 2060.0
+      x1_min: -720.0
+      x1_max: 720.0
     workspace:
       ellipse_a: 720.0
       ellipse_b: 470.0
@@ -61,43 +67,50 @@ presets:
 
   real_matched:
     inherits: broad
-    description: "6-point matched profile tuned to real data ranges (still no-loss physics + light noise)."
+    description: "Fast 6-point profile with similar noise/jitter style and broader acceptance (not strict matching)."
     generator:
       k_points: 6
       gravity_jitter_frac_std: 0.01
-      obs_dt_min_s: 0.0105
+      obs_dt_min_s: 0.0115
       obs_dt_max_s: 0.0205
-      obs_last_time_cap_s: 0.30
-      max_attempts_factor: 140
+      obs_last_time_cap_s: 0.34
+      max_bounces: 2
+      max_attempts_factor: 50
     noise:
-      position_std_mm: 3.0
-      bias_std_mm: 1.5
+      position_std_mm: 3.5
+      bias_std_mm: 1.8
       outlier_prob: 0.003
       outlier_std_mm: 8.0
-      timestamp_jitter_ms: 0.6
+      timestamp_jitter_ms: 0.7
     launch_box:
-      x_min: -460.0
-      x_max: 700.0
-      y_min: 2380.0
-      y_max: 2590.0
-      z_min: -1060.0
-      z_max: -340.0
+      x_min: -520.0
+      x_max: 760.0
+      y_min: 2520.0
+      y_max: 3300.0
+      z_min: -820.0
+      z_max: -180.0
+    observation_window:
+      y_min: 760.0
+      y_max: 2060.0
+      x1_min: -720.0
+      x1_max: 720.0
     real_match:
       enabled: true
       dt_mode: normal
-      dt_mean_s: 0.0156
-      dt_std_s: 0.0018
-      dt_min_s: 0.0105
+      dt_mean_s: 0.0158
+      dt_std_s: 0.0017
+      dt_min_s: 0.0120
       dt_max_s: 0.0205
       require_valid_intercept: true
-      require_reachable: true
-      second_bounce_prob: 0.70
-      t_hit_min_s: 0.58
-      t_hit_max_s: 1.20
-      vx_scale: 0.65
-      vy_scale: 0.40
-      vz_scale: 0.85
-      vz_bias_mm_s: -300.0
-      vx_noise_std_mm_s: 120.0
-      vy_noise_std_mm_s: 180.0
-      vz_noise_std_mm_s: 170.0
+      require_reachable: false
+      second_bounce_prob: 0.10
+      t_hit_min_s: null
+      t_hit_max_s: null
+      vx_scale: 0.95
+      vy_scale: 0.72
+      vz_scale: 0.90
+      vz_bias_mm_s: 900.0
+      vx_noise_std_mm_s: 220.0
+      vy_noise_std_mm_s: 300.0
+      vz_noise_std_mm_s: 240.0
+      obs_start_mode: uniform
