@@ -75,7 +75,7 @@ class RuntimeState:
 
 
 class AnnGameApp:
-    MIN_SEND_BUFFER = 6
+    MIN_SEND_BUFFER = 4
 
     def __init__(
         self,
@@ -258,10 +258,29 @@ class AnnGameApp:
 
         expected_features = 3 * self._num_points + (self._num_points - 1)
         if isinstance(in_shape, (tuple, list)) and in_shape and in_shape[-1] is not None:
-            if int(in_shape[-1]) != expected_features:
+            model_features = int(in_shape[-1])
+            if model_features != expected_features:
+                inferred_points = None
+                if (model_features + 1) % 4 == 0:
+                    cand = (model_features + 1) // 4
+                    if cand >= 4:
+                        inferred_points = int(cand)
+
+                if inferred_points is not None:
+                    _print(
+                        f"[model] Auto-adjusting num_points from {self._num_points} to {inferred_points} "
+                        f"based on model input size ({model_features} features)."
+                    )
+                    self._num_points = inferred_points
+                    expected_features = model_features
+                else:
+                    _print(
+                        f"[WARN] Model expects {model_features} features, but num_points={self._num_points} "
+                        f"implies {expected_features} features."
+                    )
+            else:
                 _print(
-                    f"[WARN] Model expects {in_shape[-1]} features, but num_points={self._num_points} "
-                    f"implies {expected_features} features."
+                    f"[model] Feature size matches num_points={self._num_points} ({expected_features} features)."
                 )
 
     # ------------------------------------------------------------------
@@ -427,7 +446,8 @@ class AnnGameApp:
             return False
         if self._latest_intercept is None:
             return False
-        if self._latest_intercept.buffer_points < self.MIN_SEND_BUFFER:
+        required_points = max(self.MIN_SEND_BUFFER, self._num_points)
+        if self._latest_intercept.buffer_points < required_points:
             return False
         return True
 
