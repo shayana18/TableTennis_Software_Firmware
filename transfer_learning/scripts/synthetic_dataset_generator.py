@@ -2,11 +2,12 @@
 """
 Synthetic dataset generator for ping pong interception learning.
 
-Key behavior mirrors top_level_control/trajectory/robot_predictor.py:
+Key behavior:
 1. Forward-simulate trajectory in robot frame.
-2. Select the in-workspace point closest to ROBOT_HOME.
-3. If no in-workspace point exists, label the closest trajectory point to
-   ROBOT_HOME anyway (marked `is_reachable=0`).
+2. Select the single trajectory point (after min_time_hit) that is closest to
+   ROBOT_HOME, regardless of workspace membership.
+3. Mark that selected point as `is_reachable=1` only if it lies inside the
+   workspace, else `is_reachable=0`.
 
 Inputs (default):
     x1 y1 z1 ... xK yK zK dt12 ... dt(K-1)K
@@ -276,8 +277,6 @@ def select_intercept_like_robot_predictor(
     min_time_hit_s: float,
 ) -> Optional[Dict[str, float]]:
     cx, cy, cz = ws.robot_home
-    best_ws: Optional[Dict[str, float]] = None
-    best_ws_d2 = float("inf")
     best_any: Optional[Dict[str, float]] = None
     best_any_d2 = float("inf")
 
@@ -292,6 +291,7 @@ def select_intercept_like_robot_predictor(
         d2 = (x - cx) ** 2 + (y - cy) ** 2 + (z - cz) ** 2
         if d2 < best_any_d2:
             best_any_d2 = float(d2)
+            reachable = 1.0 if in_workspace(float(x), float(y), float(z), ws) else 0.0
             best_any = {
                 "x_hit": float(x),
                 "y_hit": float(y),
@@ -302,31 +302,10 @@ def select_intercept_like_robot_predictor(
                 # Absolute hit time from launch-time reference (t=0 at x1 true sample).
                 # Converted to time-from-last-input-point (pointK) in build_row().
                 "t_hit_abs": ti,
-                "is_reachable": 0.0,
+                "is_reachable": reachable,
                 "bounces_before_hit": float(b_before),
                 "has_bounce_before_hit": has_bounce,
             }
-
-        if in_workspace(float(x), float(y), float(z), ws):
-            if d2 < best_ws_d2:
-                best_ws_d2 = float(d2)
-                best_ws = {
-                    "x_hit": float(x),
-                    "y_hit": float(y),
-                    "z_hit": float(z),
-                    "vx_hit": float(vx),
-                    "vy_hit": float(vy),
-                    "vz_hit": float(vz),
-                    # Absolute hit time from launch-time reference (t=0 at x1 true sample).
-                    # Converted to time-from-last-input-point (pointK) in build_row().
-                    "t_hit_abs": ti,
-                    "is_reachable": 1.0,
-                    "bounces_before_hit": float(b_before),
-                    "has_bounce_before_hit": has_bounce,
-                }
-
-    if best_ws is not None:
-        return best_ws
     return best_any
 
 
