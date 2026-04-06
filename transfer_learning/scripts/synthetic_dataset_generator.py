@@ -51,6 +51,11 @@ class WorkspaceConfig:
 @dataclass(frozen=True)
 class NoiseConfig:
     position_std_mm: float = 15.0
+    # Optional axis-wise position noise stds [mm]. If provided, they override
+    # position_std_mm per axis for x/y/z respectively.
+    position_std_x_mm: Optional[float] = None
+    position_std_y_mm: Optional[float] = None
+    position_std_z_mm: Optional[float] = None
     bias_std_mm: float = 4.0
     outlier_prob: float = 0.02
     outlier_std_mm: float = 30.0
@@ -84,6 +89,10 @@ class GeneratorConfig:
     table_width_mm: float = 1525.0
     max_bounces: int = 2
     preview_z_exaggeration: float = 1.8
+    # Optional reachable label balancing in generated dataset.
+    # None -> keep natural generated distribution.
+    # Float in [0,1] -> target fraction of samples with is_reachable=1.
+    reachable_target_frac: Optional[float] = None
 
 
 @dataclass(frozen=True)
@@ -109,6 +118,12 @@ class ObservationWindowConfig:
     # sample generation enforces x1 inside [x1_min, x1_max].
     x1_min: Optional[float] = None
     x1_max: Optional[float] = None
+    # Optional hard bounds for observed point1 y1 (mm).
+    y1_min: Optional[float] = None
+    y1_max: Optional[float] = None
+    # Optional hard bounds for observed point1 z1 (mm).
+    z1_min: Optional[float] = None
+    z1_max: Optional[float] = None
 
 
 @dataclass(frozen=True)
@@ -209,6 +224,83 @@ def _map_to_range(val: float, src_min: float, src_max: float, dst_min: float, ds
     alpha = (val - src_min) / (src_max - src_min)
     alpha = float(np.clip(alpha, 0.0, 1.0))
     return float(dst_min + alpha * (dst_max - dst_min))
+
+
+def _resolve_position_std_xyz(noise: NoiseConfig) -> np.ndarray:
+    sx = noise.position_std_x_mm if noise.position_std_x_mm is not None else noise.position_std_mm
+    sy = noise.position_std_y_mm if noise.position_std_y_mm is not None else noise.position_std_mm
+    sz = noise.position_std_z_mm if noise.position_std_z_mm is not None else noise.position_std_mm
+    return np.asarray(
+        [max(0.0, float(sx)), max(0.0, float(sy)), max(0.0, float(sz))],
+        dtype=float,
+    )
+
+
+def _intersect_time_range_linear_bounds(
+    t_min: float,
+    t_max: float,
+    p0: float,
+    v: float,
+    p_min: Optional[float],
+    p_max: Optional[float],
+) -> Optional[Tuple[float, float]]:
+    lo = t_min
+    hi = t_max
+
+    if p_min is None and p_max is None:
+        return lo, hi
+
+    if p_min is not None and p_max is not None and p_min > p_max:
+        p_min, p_max = p_max, p_min
+
+    if abs(v) <= 1e-9:
+        if p_min is not None and p0 < p_min:
+            return None
+        if p_max is not None and p0 > p_max:
+            return None
+        return lo, hi
+
+    if p_min is not None and p_max is not None:
+        t_a = (p_min - p0) / v
+        t_b = (p_max - p0) / v
+        lo = max(lo, min(t_a, t_b))
+        hi = min(hi, max(t_a, t_b))
+        return (lo, hi) if lo <= hi else None
+
+    if p_min is not None:
+        t_thr = (p_min - p0) / v
+        if v > 0:
+            lo = max(lo, t_thr)
+        else:
+            hi = min(hi, t_thr)
+    if p_max is not None:
+        t_thr = (p_max - p0) / v
+        if v > 0:
+            hi = min(hi, t_thr)
+        else:
+            lo = max(lo, t_thr)
+
+    return (lo, hi) if lo <= hi else None
+
+
+def _point1_in_constraints(point_xyz: np.ndarray, obs_window: ObservationWindowConfig) -> bool:
+    x1 = float(point_xyz[0])
+    y1 = float(point_xyz[1])
+    z1 = float(point_xyz[2])
+
+    if obs_window.x1_min is not None and x1 < float(obs_window.x1_min):
+        return False
+    if obs_window.x1_max is not None and x1 > float(obs_window.x1_max):
+        return False
+    if obs_window.y1_min is not None and y1 < float(obs_window.y1_min):
+        return False
+    if obs_window.y1_max is not None and y1 > float(obs_window.y1_max):
+        return False
+    if obs_window.z1_min is not None and z1 < float(obs_window.z1_min):
+        return False
+    if obs_window.z1_max is not None and z1 > float(obs_window.z1_max):
+        return False
+    return True
 
 
 def simulate_no_loss_trajectory(
@@ -470,22 +562,30 @@ def sample_observation_times(
     if t_start_min > t_start_max:
         return None
 
-    # Optionally constrain observed point1 x1 to configured bounds.
-    if obs_window.x1_min is not None and obs_window.x1_max is not None:
-        x1_lo = float(min(obs_window.x1_min, obs_window.x1_max))
-        x1_hi = float(max(obs_window.x1_min, obs_window.x1_max))
-        if abs(vx0) <= 1e-9:
-            if x0 < x1_lo or x0 > x1_hi:
-                return None
-        else:
-            t_x_lo = (x1_lo - x0) / vx0
-            t_x_hi = (x1_hi - x0) / vx0
-            t_x_min = min(t_x_lo, t_x_hi)
-            t_x_max = max(t_x_lo, t_x_hi)
-            t_start_min = max(t_start_min, t_x_min)
-            t_start_max = min(t_start_max, t_x_max)
-            if t_start_min > t_start_max:
-                return None
+    # Optionally constrain observed point1 x1/y1 to configured bounds.
+    t_range_x = _intersect_time_range_linear_bounds(
+        t_start_min,
+        t_start_max,
+        x0,
+        vx0,
+        obs_window.x1_min,
+        obs_window.x1_max,
+    )
+    if t_range_x is None:
+        return None
+    t_start_min, t_start_max = t_range_x
+
+    t_range_y = _intersect_time_range_linear_bounds(
+        t_start_min,
+        t_start_max,
+        y0,
+        vy0,
+        obs_window.y1_min,
+        obs_window.y1_max,
+    )
+    if t_range_y is None:
+        return None
+    t_start_min, t_start_max = t_range_y
 
     start_mode = str(cfg.obs_start_mode).strip().lower() or "entry"
     if rm_cfg is not None and rm_cfg.enabled:
@@ -524,7 +624,8 @@ def inject_observation_noise(
 ) -> Tuple[np.ndarray, np.ndarray]:
     # Per-trajectory systematic camera calibration bias.
     bias_xyz = rng.normal(0.0, noise.bias_std_mm, size=3)
-    noisy_points = points + bias_xyz + rng.normal(0.0, noise.position_std_mm, size=points.shape)
+    pos_std_xyz = _resolve_position_std_xyz(noise)
+    noisy_points = points + bias_xyz + rng.normal(0.0, pos_std_xyz, size=points.shape)
 
     # Sparse heavy outliers.
     for i in range(noisy_points.shape[0]):
@@ -685,6 +786,10 @@ def generate_single_sample(
         t_obs=t_obs,
     )
 
+    # Enforce optional point1 bounds on the clean sampled signal first.
+    if points_true.shape[0] > 0 and not _point1_in_constraints(points_true[0], obs_window):
+        return None
+
     noisy_points, noisy_t = inject_observation_noise(
         rng=rng,
         points=points_true,
@@ -693,17 +798,9 @@ def generate_single_sample(
         obs_window=obs_window,
     )
 
-    # Enforce optional x1 bounds on the final observed sample (after noise).
-    if (
-        noisy_points.shape[0] > 0
-        and obs_window.x1_min is not None
-        and obs_window.x1_max is not None
-    ):
-        x1_lo = float(min(obs_window.x1_min, obs_window.x1_max))
-        x1_hi = float(max(obs_window.x1_min, obs_window.x1_max))
-        x1_val = float(noisy_points[0, 0])
-        if x1_val < x1_lo or x1_val > x1_hi:
-            return None
+    # Enforce optional point1 bounds again on final observed sample (after noise).
+    if noisy_points.shape[0] > 0 and not _point1_in_constraints(noisy_points[0], obs_window):
+        return None
 
     row = build_row(
         noisy_points=noisy_points,
@@ -1143,7 +1240,10 @@ def parse_args() -> argparse.Namespace:
         help="Override: vertical exaggeration factor for 3D preview readability.",
     )
     parser.add_argument(
-        "--pos-noise-std", type=float, default=None, help="Override: Gaussian position noise std [mm]."
+        "--pos-noise-std",
+        type=float,
+        default=None,
+        help="Override: isotropic Gaussian position noise std [mm] (also clears axis-wise std overrides).",
     )
     parser.add_argument("--bias-noise-std", type=float, default=None, help="Override: per-trajectory bias std [mm].")
     parser.add_argument("--outlier-prob", type=float, default=None, help="Override: outlier probability per point.")
@@ -1213,7 +1313,13 @@ def main() -> None:
         cfg = replace(cfg, max_bounces=max(0, int(args.max_bounces)))
 
     if args.pos_noise_std is not None:
-        noise = replace(noise, position_std_mm=float(args.pos_noise_std))
+        noise = replace(
+            noise,
+            position_std_mm=float(args.pos_noise_std),
+            position_std_x_mm=None,
+            position_std_y_mm=None,
+            position_std_z_mm=None,
+        )
     if args.bias_noise_std is not None:
         noise = replace(noise, bias_std_mm=float(args.bias_noise_std))
     if args.outlier_prob is not None:
@@ -1236,6 +1342,16 @@ def main() -> None:
     rows: List[Dict[str, float]] = []
     max_attempts = cfg.n_samples * cfg.max_attempts_factor
     attempts = 0
+    target_reach_n: Optional[int] = None
+    target_unreach_n: Optional[int] = None
+    accepted_reach_n = 0
+    accepted_unreach_n = 0
+
+    if cfg.reachable_target_frac is not None:
+        frac = float(np.clip(cfg.reachable_target_frac, 0.0, 1.0))
+        target_reach_n = int(round(cfg.n_samples * frac))
+        target_unreach_n = cfg.n_samples - target_reach_n
+
     while len(rows) < cfg.n_samples and attempts < max_attempts:
         attempts += 1
         item = generate_single_sample(
@@ -1251,12 +1367,35 @@ def main() -> None:
         if item is None:
             continue
         row, _ = item
+
+        if target_reach_n is not None and target_unreach_n is not None:
+            is_reach = float(row.get("is_reachable", 0.0)) > 0.5
+            if is_reach:
+                if accepted_reach_n >= target_reach_n:
+                    continue
+            else:
+                if accepted_unreach_n >= target_unreach_n:
+                    continue
+
+            rows.append(row)
+            if is_reach:
+                accepted_reach_n += 1
+            else:
+                accepted_unreach_n += 1
+            continue
+
         rows.append(row)
 
     if len(rows) < cfg.n_samples:
+        extra = ""
+        if target_reach_n is not None and target_unreach_n is not None:
+            extra = (
+                f" Reachable accepted {accepted_reach_n}/{target_reach_n}, "
+                f"unreachable accepted {accepted_unreach_n}/{target_unreach_n}."
+            )
         raise RuntimeError(
             f"Only generated {len(rows)} / {cfg.n_samples} rows after {attempts} attempts. "
-            "Try loosening generation ranges or constraints."
+            "Try loosening generation ranges or constraints." + extra
         )
 
     write_csv(rows, output_path)
@@ -1291,6 +1430,11 @@ def main() -> None:
         f"invalid={invalid} ({100.0*invalid/len(rows):.1f}%), "
         f"bounce_before_hit={bounced} ({100.0*bounced/len(rows):.1f}%)"
     )
+    if cfg.reachable_target_frac is not None:
+        print(
+            "[INFO] Reachable target: "
+            f"{100.0*float(np.clip(cfg.reachable_target_frac, 0.0, 1.0)):.1f}%"
+        )
 
     reach_rows = [r for r in rows if r["intercept_valid"] > 0.5 and r["is_reachable"] > 0.5]
     if reach_rows:

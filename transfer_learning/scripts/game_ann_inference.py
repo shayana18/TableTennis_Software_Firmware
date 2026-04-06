@@ -95,6 +95,15 @@ class AnnGameApp:
         stale_reset_s: float,
         min_t_hit_s: float,
         max_t_hit_s: float,
+        strict_window_gate: bool,
+        obs_y_min_mm: float,
+        obs_y_max_mm: float,
+        x1_min_mm: float,
+        x1_max_mm: float,
+        y1_min_mm: float,
+        y1_max_mm: float,
+        z1_min_mm: float,
+        z1_max_mm: float,
         preview_width: int,
     ) -> None:
         self._stack_root = stack_root.resolve()
@@ -106,6 +115,15 @@ class AnnGameApp:
         self._stale_reset_s = float(stale_reset_s)
         self._min_t_hit_s = float(min_t_hit_s)
         self._max_t_hit_s = float(max_t_hit_s)
+        self._strict_window_gate = bool(strict_window_gate)
+        self._obs_y_min_mm = float(min(obs_y_min_mm, obs_y_max_mm))
+        self._obs_y_max_mm = float(max(obs_y_min_mm, obs_y_max_mm))
+        self._x1_min_mm = float(min(x1_min_mm, x1_max_mm))
+        self._x1_max_mm = float(max(x1_min_mm, x1_max_mm))
+        self._y1_min_mm = float(min(y1_min_mm, y1_max_mm))
+        self._y1_max_mm = float(max(y1_min_mm, y1_max_mm))
+        self._z1_min_mm = float(min(z1_min_mm, z1_max_mm))
+        self._z1_max_mm = float(max(z1_min_mm, z1_max_mm))
 
         self._state = RuntimeState()
         self._stop_event = threading.Event()
@@ -451,6 +469,21 @@ class AnnGameApp:
             return False
         return True
 
+    def _in_obs_y_window(self, sample) -> bool:
+        y = float(sample.y_mm)
+        return self._obs_y_min_mm <= y <= self._obs_y_max_mm
+
+    def _in_point1_window(self, sample) -> bool:
+        x = float(sample.x_mm)
+        y = float(sample.y_mm)
+        z = float(sample.z_mm)
+        return (
+            self._x1_min_mm <= x <= self._x1_max_mm
+            and self._y1_min_mm <= y <= self._y1_max_mm
+            and self._z1_min_mm <= z <= self._z1_max_mm
+            and self._in_obs_y_window(sample)
+        )
+
     def _process_sample(self, sample) -> None:
         if not self._state.gate_on:
             return
@@ -462,10 +495,24 @@ class AnnGameApp:
             return
 
         t_now = float(sample.capture_time)
-        if self._last_sample_time is not None and (t_now - self._last_sample_time) > self._gap_reset_s:
-            self._reset_throw(f"gap>{self._gap_reset_s:.3f}s")
-        self._last_sample_time = t_now
+        if self._throw_points and self._last_sample_time is not None:
+            if (t_now - self._last_sample_time) > self._gap_reset_s:
+                self._reset_throw(f"gap>{self._gap_reset_s:.3f}s")
 
+        # Point-1 window gate: only start collecting a throw when the first
+        # point enters the same workspace window used by synthetic generation.
+        if len(self._throw_points) == 0:
+            if self._strict_window_gate and not self._in_point1_window(sample):
+                self._last_throw_reset_reason = "await_p1_window"
+                return
+        else:
+            # For points 2..K, keep points inside observation Y window to match
+            # synthetic feature-space support and avoid early-camera extrapolation.
+            if self._strict_window_gate and not self._in_obs_y_window(sample):
+                self._reset_throw("obs_y_out_of_window")
+                return
+
+        self._last_sample_time = t_now
         if len(self._throw_points) < self._num_points:
             self._throw_points.append(sample)
 
@@ -519,13 +566,24 @@ class AnnGameApp:
             (200, 255, 200),
             1,
         )
+        cv2.putText(
+            vis,
+            f"Window gate:{'ON' if self._strict_window_gate else 'OFF'} "
+            f"Y[{self._obs_y_min_mm:.0f},{self._obs_y_max_mm:.0f}] "
+            f"P1x[{self._x1_min_mm:.0f},{self._x1_max_mm:.0f}]",
+            (10, 82),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.42,
+            (180, 220, 255),
+            1,
+        )
 
         if self._latest_sample is not None:
             s = self._latest_sample
             cv2.putText(
                 vis,
                 f"Ball(mm): X={s.x_mm:+.1f} Y={s.y_mm:+.1f} Z={s.z_mm:+.1f}",
-                (10, 91),
+                (10, 98),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.47,
                 (0, 255, 0),
@@ -537,7 +595,7 @@ class AnnGameApp:
             cv2.putText(
                 vis,
                 f"Pred(mm): X={ip.x_mm:+.1f} Y={ip.y_mm:+.1f} Z={ip.z_mm:+.1f} t={ip.intercept_time_s*1000:.1f}ms",
-                (10, 114),
+                (10, 121),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.47,
                 (0, 220, 220),
@@ -547,7 +605,7 @@ class AnnGameApp:
         cv2.putText(
             vis,
             f"Latency:{self._state.last_latency_ms:.1f}ms Adjusted:{self._state.last_adjusted_ms:.1f}ms",
-            (10, 137),
+            (10, 144),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.45,
             (255, 220, 120),
@@ -719,6 +777,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--stale-reset-ms", type=float, default=350.0, help="Reset throw if no new sample for this long.")
     parser.add_argument("--min-t-hit-ms", type=float, default=20.0, help="Minimum commanded intercept time.")
     parser.add_argument("--max-t-hit-ms", type=float, default=2000.0, help="Maximum commanded intercept time.")
+    parser.add_argument(
+        "--strict-window-gate",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "If enabled, point1 must fall within synthetic start window "
+            "(x1/y1/z1), and points 2..K must remain in observation Y window."
+        ),
+    )
+    parser.add_argument("--obs-y-min-mm", type=float, default=760.0, help="Synthetic observation window y_min [mm].")
+    parser.add_argument("--obs-y-max-mm", type=float, default=2450.0, help="Synthetic observation window y_max [mm].")
+    parser.add_argument("--x1-min-mm", type=float, default=-800.0, help="Synthetic point1 x_min [mm].")
+    parser.add_argument("--x1-max-mm", type=float, default=800.0, help="Synthetic point1 x_max [mm].")
+    parser.add_argument("--y1-min-mm", type=float, default=760.0, help="Point1 y_min [mm].")
+    parser.add_argument("--y1-max-mm", type=float, default=2450.0, help="Point1 y_max [mm].")
+    parser.add_argument("--z1-min-mm", type=float, default=-1200.0, help="Synthetic point1 z_min [mm].")
+    parser.add_argument("--z1-max-mm", type=float, default=-410.0, help="Synthetic point1 z_max [mm].")
     parser.add_argument("--preview-width", type=int, default=960)
     parser.add_argument("--quiet-uart", action="store_true")
     args = parser.parse_args()
@@ -751,6 +826,15 @@ def main() -> int:
         stale_reset_s=max(0.02, float(args.stale_reset_ms) / 1000.0),
         min_t_hit_s=max(0.001, float(args.min_t_hit_ms) / 1000.0),
         max_t_hit_s=max(0.01, float(args.max_t_hit_ms) / 1000.0),
+        strict_window_gate=bool(args.strict_window_gate),
+        obs_y_min_mm=float(args.obs_y_min_mm),
+        obs_y_max_mm=float(args.obs_y_max_mm),
+        x1_min_mm=float(args.x1_min_mm),
+        x1_max_mm=float(args.x1_max_mm),
+        y1_min_mm=float(args.y1_min_mm),
+        y1_max_mm=float(args.y1_max_mm),
+        z1_min_mm=float(args.z1_min_mm),
+        z1_max_mm=float(args.z1_max_mm),
         preview_width=max(320, int(args.preview_width)),
     )
     return app.run()

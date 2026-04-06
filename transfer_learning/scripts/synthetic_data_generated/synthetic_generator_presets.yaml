@@ -7,40 +7,48 @@ presets:
       scan_dt_s: 0.005
       min_time_hit_s: 0.10
       gravity_z_mm_s2: -9810.0
-      gravity_jitter_frac_std: 0.01
-      obs_dt_min_s: 0.013
-      obs_dt_max_s: 0.018
+      gravity_jitter_frac_std: 0.005
+      obs_dt_min_s: 0.0125
+      obs_dt_max_s: 0.0198
       obs_pre_hit_margin_s: 0.03
       obs_last_time_cap_s: 0.25
       obs_start_mode: uniform
-      max_attempts_factor: 60
+      max_attempts_factor: 100
       preview_duration_s: 2.5
       preview_dt_s: 0.005
       preview_stop_y_mm: -700.0
       preview_stop_z_mm: -1700.0
-      table_z_mm: -1150.74
+      table_z_mm: -1110.0
       table_length_mm: 2740.0
       table_width_mm: 1525.0
       max_bounces: 2
       preview_z_exaggeration: 1.8
+      reachable_target_frac: 0.70
     noise:
-      position_std_mm: 3.0
-      bias_std_mm: 1.5
-      outlier_prob: 0.005
-      outlier_std_mm: 10.0
-      timestamp_jitter_ms: 0.5
+      position_std_mm: 5.0
+      position_std_x_mm: 7.51
+      position_std_y_mm: 3.28
+      position_std_z_mm: 4.97
+      bias_std_mm: 1.2
+      outlier_prob: 0.0
+      outlier_std_mm: 0.0
+      timestamp_jitter_ms: 1.0
     launch_box:
       x_min: -1062.5
       x_max: 1062.5
       y_min: 1940.0
       y_max: 3240.0
-      z_min: -1150.74
-      z_max: -450.74
+      z_min: -1110.0
+      z_max: -410.0
     observation_window:
       y_min: 760.0
-      y_max: 2060.0
-      x1_min: -720.0
-      x1_max: 720.0
+      y_max: 2450.0
+      x1_min: -800.0
+      x1_max: 800.0
+      y1_min: 1600.0
+      y1_max: 2430.0
+      z1_min: -1125.0
+      z1_max: -410.0
     workspace:
       ellipse_a: 720.0
       ellipse_b: 470.0
@@ -56,8 +64,12 @@ presets:
     generator:
       gravity_jitter_frac_std: 0.0
       max_attempts_factor: 80
+      reachable_target_frac: null
     noise:
       position_std_mm: 0.0
+      position_std_x_mm: 0.0
+      position_std_y_mm: 0.0
+      position_std_z_mm: 0.0
       bias_std_mm: 0.0
       outlier_prob: 0.0
       outlier_std_mm: 0.0
@@ -76,8 +88,12 @@ presets:
       obs_last_time_cap_s: 0.34
       max_bounces: 2
       max_attempts_factor: 50
+      reachable_target_frac: null
     noise:
       position_std_mm: 3.5
+      position_std_x_mm: null
+      position_std_y_mm: null
+      position_std_z_mm: null
       bias_std_mm: 1.8
       outlier_prob: 0.003
       outlier_std_mm: 8.0
