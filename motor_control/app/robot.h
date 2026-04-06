@@ -37,21 +37,21 @@
 #define STRIKE_TARGET_X 0.0f
 #define STRIKE_TARGET_Y 2055.0f
 #define STRIKE_TARGET_Z -1150.0f
-#define STRIKE_BUFFER_DIST 50.0f //mm Additional distance to account for strike execution delay and ball contact
+#define STRIKE_BUFFER_DIST 80.0f //mm Additional distance to account for strike execution delay and ball contact
 #define STRIKE_Z_APEX_CLEARANCE 100.0f 
 #define RESTITUTION 0.90f
 #define STRIKE_POWER_GAIN 2.5f
 #define STRIKE_MIN_COMMAND_SPEED 2000.0f // (mm/s) minimum commanded paddle speed when striking
 #define STRIKE_SWEEP_DIST_GAIN 1.0f
-#define STRIKE_SWEEP_EXTRA_DIST 30.0f // (mm) adds extra counter-sweep coverage on top of stopping distance
-#define STRIKE_WINDUP_DIST_GAIN 2.5f // (>1) enlarge pre-contact travel for stronger impact speed
-#define STRIKE_FOLLOWTHROUGH_DIST_GAIN 1.0f // (<1) keep post-contact travel shorter than windup
+#define STRIKE_SWEEP_EXTRA_DIST 0.0f // (mm) adds extra counter-sweep coverage on top of stopping distance
+#define STRIKE_WINDUP_DIST_GAIN 1.0f // (>1) enlarge pre-contact travel for stronger impact speed
+#define STRIKE_FOLLOWTHROUGH_DIST_GAIN 2.0f // (<1) keep post-contact travel shorter than windup
 #define STRIKE_TAU_WINDOW_GAIN 1.35f
 #define STRIKE_TAU_WINDOW_MIN 0.015f // (s)
 #define STRIKE_TAU_WINDOW_MAX 0.180f // (s)
 #define STRIKE_TAU_POS_SCALE 1.60f
 #define STRIKE_TAU_NEG_SCALE 0.70f
-#define STRIKE_CONTACT_LEAD_TIME 0.040f // (s) schedule impact this much earlier to compensate latency
+#define STRIKE_CONTACT_LEAD_TIME 0.080f // (s) schedule impact this much earlier to compensate latency
 #define STRIKE_YAW_BIAS_DEG 0.0f // (deg) positive bias to steer returns more toward opponent center
 
 // Delta geometry (mm)
