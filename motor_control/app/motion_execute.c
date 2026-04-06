@@ -313,7 +313,7 @@ void motion_execute_plan_strike(robot_t *robot) {
   float windup_offset_selected = 0.0f;
   float followthrough_offset_selected = 0.0f;
   float sweep_scale = 1.0f;
-  for (int attempt = 0; attempt < 5 && !strike_targets_valid; attempt++) {
+  for (int attempt = 0; attempt < 8 && !strike_targets_valid; attempt++) {
     const float windup_offset = windup_offset_nominal * sweep_scale;
     const float followthrough_offset = followthrough_offset_nominal * sweep_scale;
 
@@ -331,7 +331,7 @@ void motion_execute_plan_strike(robot_t *robot) {
       windup_offset_selected = windup_offset;
       followthrough_offset_selected = followthrough_offset;
     }
-    sweep_scale *= 0.75f;
+    sweep_scale *= 0.85f;
   }
 
   if (!strike_targets_valid) {

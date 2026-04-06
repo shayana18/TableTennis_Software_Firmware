@@ -22,8 +22,8 @@
 #define MAX_JOINT_VEL 3000.0L      // RPM, Conservative values
 #define MAX_JOINT_ACC 10000.0L     // RPM/s, Conservative Values
 
-#define MAX_CART_VEL 4100.0f     // mm/s Default: 4000
-#define MAX_CART_ACC 24000.0f    // mm/s^2  default: 20000
+#define MAX_CART_VEL 4200.0f     // mm/s Default: 4000
+#define MAX_CART_ACC 25000.0f    // mm/s^2  default: 20000
 
 #define MAX_STRIKE_VEL MAX_CART_VEL    // mm/s
 
@@ -43,9 +43,9 @@
 #define STRIKE_POWER_GAIN 2.5f
 #define STRIKE_MIN_COMMAND_SPEED 2000.0f // (mm/s) minimum commanded paddle speed when striking
 #define STRIKE_SWEEP_DIST_GAIN 1.0f
-#define STRIKE_SWEEP_EXTRA_DIST 20.0f // (mm) adds extra counter-sweep coverage on top of stopping distance
+#define STRIKE_SWEEP_EXTRA_DIST 30.0f // (mm) adds extra counter-sweep coverage on top of stopping distance
 #define STRIKE_WINDUP_DIST_GAIN 2.5f // (>1) enlarge pre-contact travel for stronger impact speed
-#define STRIKE_FOLLOWTHROUGH_DIST_GAIN 2.5f // (<1) keep post-contact travel shorter than windup
+#define STRIKE_FOLLOWTHROUGH_DIST_GAIN 1.0f // (<1) keep post-contact travel shorter than windup
 #define STRIKE_TAU_WINDOW_GAIN 1.35f
 #define STRIKE_TAU_WINDOW_MIN 0.015f // (s)
 #define STRIKE_TAU_WINDOW_MAX 0.180f // (s)
