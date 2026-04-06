@@ -9,10 +9,6 @@ static volatile uint8_t s_motion_tick_pending = 0U;
 static uint32_t s_tick_ms_accum = 0U;
 
 
-// Pre-computed motion profile constants (independent of targets)OKa
-static const float s_ramp_time = MAX_CART_VEL / MAX_CART_ACC;
-static const float s_ramp_dist = 0.5f * MAX_CART_ACC * (MAX_CART_VEL / MAX_CART_ACC) * (MAX_CART_VEL / MAX_CART_ACC);
-
 static float unwrap_deg_near(float angle_deg, float ref_deg)
 {
   float out = angle_deg;
@@ -37,7 +33,7 @@ static float motion_profile_distance(const move_plan *plan, float t_s)
   // Any additional wait is represented by plan->t1 and applied after arrival.
   const float t_acc = plan->t2;
   const float t_cruise = plan->t3 - plan->t2;
-  const float a = MAX_CART_ACC;
+  const float a = (plan->max_cart_acc > 1e-6f) ? plan->max_cart_acc : MAX_CART_ACC;
   const float t_move_end = plan->t3 + t_acc;
 
   if (t_s <= 0.0f) {
@@ -331,7 +327,7 @@ void motion_execute_plan_strike(robot_t *robot) {
       windup_offset_selected = windup_offset;
       followthrough_offset_selected = followthrough_offset;
     }
-    sweep_scale *= 0.95f;
+    sweep_scale *= 0.96f;
   }
 
   if (!strike_targets_valid) {
@@ -372,6 +368,7 @@ void motion_execute_plan_strike(robot_t *robot) {
   strike_plan->D = D;
   strike_plan->yaw_angle_deg = paddle_yaw_deg;
   strike_plan->max_cart_vel = paddle_speed;
+  strike_plan->max_cart_acc = MAX_CART_ACC;
   strike_plan->ballistic_track = use_ballistic_path;
   strike_plan->ballistic_intercept_pos = interception_target;
   strike_plan->ballistic_intercept_vel = ball_vel;
@@ -385,13 +382,14 @@ void motion_execute_plan_strike(robot_t *robot) {
   // Strike Planning
   float t_acc;
   float t_cruise;
-  const float ramp_dist_max_v = (strike_plan->max_cart_vel * strike_plan->max_cart_vel) / (2.0f * MAX_CART_ACC);
+  const float ramp_dist_max_v =
+      (strike_plan->max_cart_vel * strike_plan->max_cart_vel) / (2.0f * strike_plan->max_cart_acc);
   if (strike_plan->D <= 2.0f * ramp_dist_max_v) {
-    t_acc = sqrtf(strike_plan->D / MAX_CART_ACC);
+    t_acc = sqrtf(strike_plan->D / strike_plan->max_cart_acc);
     t_cruise = 0.0f;
-    strike_plan->max_cart_vel = MAX_CART_ACC * t_acc;
+    strike_plan->max_cart_vel = strike_plan->max_cart_acc * t_acc;
   } else {
-    t_acc = strike_plan->max_cart_vel / MAX_CART_ACC;
+    t_acc = strike_plan->max_cart_vel / strike_plan->max_cart_acc;
     t_cruise = (strike_plan->D - 2.0f * ramp_dist_max_v) / strike_plan->max_cart_vel;
   }
 
@@ -462,6 +460,8 @@ void motion_execute_plan(robot_t *robot)
   plan->target_pos = target;
   plan->D = D;
   plan->prev_tick_ms = now_ms;
+  plan->max_cart_acc = (robot->current_target.type == TARGET_HOME) ? HOME_CART_ACC : MAX_CART_ACC;
+  plan->max_cart_vel = MAX_CART_VEL;
 
 
   if (D <= 1.0f) {
@@ -489,14 +489,17 @@ void motion_execute_plan(robot_t *robot)
   plan->dir.y = dy / D;
   plan->dir.z = dz / D;
 
+  const float ramp_time = plan->max_cart_vel / plan->max_cart_acc;
+  const float ramp_dist = 0.5f * plan->max_cart_acc * ramp_time * ramp_time;
   float t_acc;
   float t_cruise;
-  if (D <= 2.0f * s_ramp_dist) {
-    t_acc = sqrtf(D / MAX_CART_ACC);
+  if (D <= 2.0f * ramp_dist) {
+    t_acc = sqrtf(D / plan->max_cart_acc);
     t_cruise = 0.0f;
+    plan->max_cart_vel = plan->max_cart_acc * t_acc;
   } else {
-    t_acc = s_ramp_time;
-    t_cruise = (D - 2.0f * s_ramp_dist) / MAX_CART_VEL;
+    t_acc = ramp_time;
+    t_cruise = (D - 2.0f * ramp_dist) / plan->max_cart_vel;
   }
 
   const float t_move = (2.0f * t_acc) + t_cruise; // Total move time

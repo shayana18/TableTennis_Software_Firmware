@@ -23,7 +23,8 @@
 #define MAX_JOINT_ACC 10000.0L     // RPM/s, Conservative Values
 
 #define MAX_CART_VEL 4200.0f     // mm/s Default: 4000
-#define MAX_CART_ACC 25000.0f    // mm/s^2  default: 20000
+#define MAX_CART_ACC 28000.0f    // mm/s^2  default: 20000
+#define HOME_CART_ACC 6000.0f   // mm/s^2 slower home acceleration to reduce oscillation
 
 #define MAX_STRIKE_VEL MAX_CART_VEL    // mm/s
 
@@ -37,15 +38,15 @@
 #define STRIKE_TARGET_X 0.0f
 #define STRIKE_TARGET_Y 2055.0f
 #define STRIKE_TARGET_Z -1150.0f
-#define STRIKE_BUFFER_DIST 80.0f //mm Additional distance to account for strike execution delay and ball contact
+#define STRIKE_BUFFER_DIST 0.0f //mm Additional distance to account for strike execution delay and ball contact
 #define STRIKE_Z_APEX_CLEARANCE 100.0f 
 #define RESTITUTION 0.90f
 #define STRIKE_POWER_GAIN 2.5f
 #define STRIKE_MIN_COMMAND_SPEED 2000.0f // (mm/s) minimum commanded paddle speed when striking
 #define STRIKE_SWEEP_DIST_GAIN 1.0f
-#define STRIKE_SWEEP_EXTRA_DIST 0.0f // (mm) adds extra counter-sweep coverage on top of stopping distance
+#define STRIKE_SWEEP_EXTRA_DIST 50.0f // (mm) adds extra counter-sweep coverage on top of stopping distance
 #define STRIKE_WINDUP_DIST_GAIN 1.0f // (>1) enlarge pre-contact travel for stronger impact speed
-#define STRIKE_FOLLOWTHROUGH_DIST_GAIN 2.0f // (<1) keep post-contact travel shorter than windup
+#define STRIKE_FOLLOWTHROUGH_DIST_GAIN 1.0f // (<1) keep post-contact travel shorter than windup
 #define STRIKE_TAU_WINDOW_GAIN 1.35f
 #define STRIKE_TAU_WINDOW_MIN 0.015f // (s)
 #define STRIKE_TAU_WINDOW_MAX 0.180f // (s)
@@ -141,6 +142,7 @@ typedef struct {
   vec3 target_pos;
   vec3 dir;
   float max_cart_vel;
+  float max_cart_acc;
   float yaw_angle_deg;
   bool ballistic_track;
   vec3 ballistic_intercept_pos;
