@@ -167,8 +167,13 @@ bool motion_execute_safety_check_joint_limits(float q1_deg, float q2_deg, float 
 {
   char msg[100];
 
+  char msg[100];
+
   // Check if all joint angles are within the configured limits.
   if (q1_deg < MIN_JOINT_ANGLE_LIMIT || q1_deg > MAX_JOINT_ANGLE_LIMIT) {
+    long q1_deg_rounded = (long)lroundf(q1_deg);
+    snprintf(msg, sizeof(msg), "Invalid Joint 1 Angle: %ld deg\r\n", q1_deg_rounded);
+    robot_runtime_send_status(msg);
     long q1_deg_rounded = (long)lroundf(q1_deg);
     snprintf(msg, sizeof(msg), "Invalid Joint 1 Angle: %ld deg\r\n", q1_deg_rounded);
     robot_runtime_send_status(msg);
@@ -178,9 +183,15 @@ bool motion_execute_safety_check_joint_limits(float q1_deg, float q2_deg, float 
     long q2_deg_rounded = (long)lroundf(q2_deg);
     snprintf(msg, sizeof(msg), "Invalid Joint 2 Angle: %ld deg\r\n", q2_deg_rounded);
     robot_runtime_send_status(msg);
+    long q2_deg_rounded = (long)lroundf(q2_deg);
+    snprintf(msg, sizeof(msg), "Invalid Joint 2 Angle: %ld deg\r\n", q2_deg_rounded);
+    robot_runtime_send_status(msg);
     return false;
   }
   if (q3_deg < MIN_JOINT_ANGLE_LIMIT || q3_deg > MAX_JOINT_ANGLE_LIMIT) {
+    long q3_deg_rounded = (long)lroundf(q3_deg);
+    snprintf(msg, sizeof(msg), "Invalid Joint 3 Angle: %ld deg\r\n", q3_deg_rounded);
+    robot_runtime_send_status(msg);
     long q3_deg_rounded = (long)lroundf(q3_deg);
     snprintf(msg, sizeof(msg), "Invalid Joint 3 Angle: %ld deg\r\n", q3_deg_rounded);
     robot_runtime_send_status(msg);
@@ -529,6 +540,7 @@ void motion_execute_plan(robot_t *robot)
   if (t_extra < 0.0f) {
     t_extra = 0.0f;
     robot_runtime_send_status("WARN: Robot will be late\r\n");
+    robot_runtime_send_status("WARN: Robot will be late\r\n");
   }
 
   // Move immediately, then hold at target for t_extra.
@@ -619,6 +631,8 @@ void motion_execute_tick(robot_t *robot)
     q3_ik = unwrap_deg_near(q3_ik, plan->prev_joint_deg[2]);
   }
 
+  const bool joints_ok = motion_execute_safety_check_joint_limits(q1_ik, q2_ik, q3_ik);
+  if (!joints_ok && !(robot->current_target.type == TARGET_HOME)) {
   const bool joints_ok = motion_execute_safety_check_joint_limits(q1_ik, q2_ik, q3_ik);
   if (!joints_ok && !(robot->current_target.type == TARGET_HOME)) {
     motion_abort(robot, "PATH_ABORT: ROBOT JOINT LIMITS EXCEEDED\r\n");
