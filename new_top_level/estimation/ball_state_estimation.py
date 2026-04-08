@@ -31,13 +31,13 @@ class BallStateEstimator3D:
     def __init__(
         self,
         gravity_z: float,
-        accel_std: float = 2500.0,
-        meas_std_x: float = 1.0,
-        meas_std_y: float = 1.0,
-        meas_std_z: float = 1.0,
+        accel_std: float = 1800.0,
+        meas_std_x: float = 1.8,
+        meas_std_y: float = 1.5,
+        meas_std_z: float = 1.8,
         max_gap_s: float = 0.12,
         min_updates: int = 8,
-        fading_factor: float = 1.0,
+        fading_factor: float = 1.03,
     ) -> None:
         """
         Create the estimator.
@@ -57,7 +57,7 @@ class BallStateEstimator3D:
         if KalmanFilter is None:  # pragma: no cover - depends on local env
             raise ImportError(
                 "filterpy is required for BallStateEstimator3D. "
-                "Install dependencies from top_level_control/requirements.txt."
+                "Install dependencies from new_top_level/requirements.txt."
             ) from _FILTERPY_IMPORT_ERROR
 
         self.gravity_z = float(gravity_z)
