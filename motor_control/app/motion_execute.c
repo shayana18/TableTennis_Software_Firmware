@@ -29,12 +29,14 @@ static float unwrap_deg_near(float angle_deg, float ref_deg)
 static float motion_profile_distance(const move_plan *plan, float t_s)
 {
   // Phase timings are referenced from motion start (t=0):
-  // [0, t2): accel, [t2, t3): cruise, [t3, t3+t_acc): decel.
+  // [0, t2): accel, [t2, t3): cruise, [t3, t3+t_dec): decel.
   // Any additional wait is represented by plan->t1 and applied after arrival.
   const float t_acc = plan->t2;
   const float t_cruise = plan->t3 - plan->t2;
+  const float t_dec = ((plan->T - plan->t1) > plan->t3) ? ((plan->T - plan->t1) - plan->t3) : 0.0f;
   const float a = (plan->max_cart_acc > 1e-6f) ? plan->max_cart_acc : MAX_CART_ACC;
-  const float t_move_end = plan->t3 + t_acc;
+  const float d = (plan->max_cart_dec > 1e-6f) ? plan->max_cart_dec : MAX_CART_DEC;
+  const float t_move_end = plan->t3 + t_dec;
 
   if (t_s <= 0.0f) {
     return 0.0f;
@@ -54,9 +56,9 @@ static float motion_profile_distance(const move_plan *plan, float t_s)
   }
 
   if (t_s < t_move_end) {
-  const float dt = t_s - plan->t3;
-  const float d_cruise = v_peak * t_cruise;
-  return d_acc + d_cruise + v_peak * dt - 0.5f * a * dt * dt;
+    const float dt = t_s - plan->t3;
+    const float d_cruise = v_peak * t_cruise;
+    return d_acc + d_cruise + v_peak * dt - 0.5f * d * dt * dt;
   }
 
   return plan->D;
@@ -297,7 +299,7 @@ void motion_execute_plan_strike(robot_t *robot) {
   const vec3 strike_dir = {nx, ny, 0.0f};
 
 
-  const float nominal_stop_dist = (paddle_speed * paddle_speed) / (2.0f * MAX_CART_ACC);
+  const float nominal_stop_dist = (paddle_speed * paddle_speed) / (2.0f * MAX_CART_DEC);
   const float interception_target_offset =
       (nominal_stop_dist + STRIKE_BUFFER_DIST + STRIKE_SWEEP_EXTRA_DIST) * STRIKE_SWEEP_DIST_GAIN;
   const float windup_offset_nominal = interception_target_offset * STRIKE_WINDUP_DIST_GAIN;
@@ -369,6 +371,7 @@ void motion_execute_plan_strike(robot_t *robot) {
   strike_plan->yaw_angle_deg = paddle_yaw_deg;
   strike_plan->max_cart_vel = paddle_speed;
   strike_plan->max_cart_acc = MAX_CART_ACC;
+  strike_plan->max_cart_dec = MAX_CART_DEC;
   strike_plan->ballistic_track = use_ballistic_path;
   strike_plan->ballistic_intercept_pos = interception_target;
   strike_plan->ballistic_intercept_vel = ball_vel;
@@ -381,22 +384,30 @@ void motion_execute_plan_strike(robot_t *robot) {
 
   // Strike Planning
   float t_acc;
+  float t_dec;
   float t_cruise;
-  const float ramp_dist_max_v =
-      (strike_plan->max_cart_vel * strike_plan->max_cart_vel) / (2.0f * strike_plan->max_cart_acc);
-  if (strike_plan->D <= 2.0f * ramp_dist_max_v) {
-    t_acc = sqrtf(strike_plan->D / strike_plan->max_cart_acc);
+  const float a = (strike_plan->max_cart_acc > 1e-6f) ? strike_plan->max_cart_acc : MAX_CART_ACC;
+  const float d = (strike_plan->max_cart_dec > 1e-6f) ? strike_plan->max_cart_dec : MAX_CART_DEC;
+  const float d_acc_at_vmax =
+      (strike_plan->max_cart_vel * strike_plan->max_cart_vel) / (2.0f * a);
+  const float d_dec_at_vmax =
+      (strike_plan->max_cart_vel * strike_plan->max_cart_vel) / (2.0f * d);
+  if (strike_plan->D <= (d_acc_at_vmax + d_dec_at_vmax)) {
+    const float v_peak = sqrtf((2.0f * strike_plan->D * a * d) / (a + d));
+    t_acc = v_peak / a;
+    t_dec = v_peak / d;
     t_cruise = 0.0f;
-    strike_plan->max_cart_vel = strike_plan->max_cart_acc * t_acc;
+    strike_plan->max_cart_vel = v_peak;
   } else {
-    t_acc = strike_plan->max_cart_vel / strike_plan->max_cart_acc;
-    t_cruise = (strike_plan->D - 2.0f * ramp_dist_max_v) / strike_plan->max_cart_vel;
+    t_acc = strike_plan->max_cart_vel / a;
+    t_dec = strike_plan->max_cart_vel / d;
+    t_cruise = (strike_plan->D - d_acc_at_vmax - d_dec_at_vmax) / strike_plan->max_cart_vel;
   }
 
   strike_plan->t1 = 0.0f;
-  strike_plan->t2 = strike_plan->t1 + t_acc;
+  strike_plan->t2 = t_acc;
   strike_plan->t3 = strike_plan->t2 + t_cruise;
-  strike_plan->T = strike_plan->t3 + t_acc;
+  strike_plan->T = strike_plan->t3 + t_dec;
 
   strike_plan->active = true;
   
@@ -461,6 +472,7 @@ void motion_execute_plan(robot_t *robot)
   plan->D = D;
   plan->prev_tick_ms = now_ms;
   plan->max_cart_acc = (robot->current_target.type == TARGET_HOME) ? HOME_CART_ACC : MAX_CART_ACC;
+  plan->max_cart_dec = (robot->current_target.type == TARGET_HOME) ? HOME_CART_DEC : MAX_CART_DEC;
   plan->max_cart_vel = MAX_CART_VEL;
 
 
@@ -489,20 +501,26 @@ void motion_execute_plan(robot_t *robot)
   plan->dir.y = dy / D;
   plan->dir.z = dz / D;
 
-  const float ramp_time = plan->max_cart_vel / plan->max_cart_acc;
-  const float ramp_dist = 0.5f * plan->max_cart_acc * ramp_time * ramp_time;
   float t_acc;
+  float t_dec;
   float t_cruise;
-  if (D <= 2.0f * ramp_dist) {
-    t_acc = sqrtf(D / plan->max_cart_acc);
+  const float a = (plan->max_cart_acc > 1e-6f) ? plan->max_cart_acc : MAX_CART_ACC;
+  const float d = (plan->max_cart_dec > 1e-6f) ? plan->max_cart_dec : MAX_CART_DEC;
+  const float d_acc_at_vmax = (plan->max_cart_vel * plan->max_cart_vel) / (2.0f * a);
+  const float d_dec_at_vmax = (plan->max_cart_vel * plan->max_cart_vel) / (2.0f * d);
+  if (D <= (d_acc_at_vmax + d_dec_at_vmax)) {
+    const float v_peak = sqrtf((2.0f * D * a * d) / (a + d));
+    t_acc = v_peak / a;
+    t_dec = v_peak / d;
     t_cruise = 0.0f;
-    plan->max_cart_vel = plan->max_cart_acc * t_acc;
+    plan->max_cart_vel = v_peak;
   } else {
-    t_acc = ramp_time;
-    t_cruise = (D - 2.0f * ramp_dist) / plan->max_cart_vel;
+    t_acc = plan->max_cart_vel / a;
+    t_dec = plan->max_cart_vel / d;
+    t_cruise = (D - d_acc_at_vmax - d_dec_at_vmax) / plan->max_cart_vel;
   }
 
-  const float t_move = (2.0f * t_acc) + t_cruise; // Total move time
+  const float t_move = t_acc + t_cruise + t_dec; // Total move time
   const float t_processing_time_buffer = ((float)(HAL_GetTick() - robot->current_target.received_time)) * 0.001f;
 
 
@@ -517,7 +535,7 @@ void motion_execute_plan(robot_t *robot)
   plan->t1 = t_extra;  // post-arrival hold duration
   plan->t2 = t_acc;
   plan->t3 = plan->t2 + t_cruise;
-  plan->T = plan->t3 + t_acc + plan->t1;
+  plan->T = plan->t3 + t_dec + plan->t1;
   plan->t_start_ms = now_ms;
   plan->active = true;
 }

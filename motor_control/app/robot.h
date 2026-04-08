@@ -23,8 +23,10 @@
 #define MAX_JOINT_ACC 10000.0L     // RPM/s, Conservative Values
 
 #define MAX_CART_VEL 4000.0f     // mm/s Default: 4000
-#define MAX_CART_ACC 17000.0f    // mm/s^2  default: 20000
-#define HOME_CART_ACC 4000.0f   // mm/s^2 slower home acceleration to reduce oscillation
+#define MAX_CART_ACC 20000.0f    // mm/s^2  default: 20000
+#define MAX_CART_DEC 14000.0f    // mm/s^2 softer stop to reduce jerk at end of move
+#define HOME_CART_ACC 3000.0f   // mm/s^2 slower home acceleration to reduce oscillation
+#define HOME_CART_DEC 2500.0f   // mm/s^2 gentler home deceleration
 
 #define MAX_STRIKE_VEL MAX_CART_VEL    // mm/s
 
@@ -146,6 +148,7 @@ typedef struct {
   vec3 dir;
   float max_cart_vel;
   float max_cart_acc;
+  float max_cart_dec;
   float yaw_angle_deg;
   bool ballistic_track;
   vec3 ballistic_intercept_pos;
