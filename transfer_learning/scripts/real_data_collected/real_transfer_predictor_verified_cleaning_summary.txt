@@ -1,0 +1,15 @@
+Predictor-Verified Dataset Cleaning Summary
+
+Source: scripts\real_data_collected\real_transfer_predictor_verified.csv
+Cleaned: scripts\real_data_collected\real_transfer_predictor_verified_clean.csv
+Total rows: 107
+Kept rows: 102
+Dropped rows: 5
+Rule: max(dt) <= 30.0 ms, dt>0, all required numeric fields finite
+
+Dropped sample_ids and reasons:
+  sample_id=5: large_gap_dt56>0.03
+  sample_id=18: large_gap_dt23>0.03
+  sample_id=20: large_gap_dt45>0.03
+  sample_id=21: large_gap_dt23>0.03; large_gap_dt34>0.03
+  sample_id=85: large_gap_dt34>0.03; large_gap_dt56>0.03

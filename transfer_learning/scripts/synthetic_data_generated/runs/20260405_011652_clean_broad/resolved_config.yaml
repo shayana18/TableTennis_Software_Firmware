@@ -1,0 +1,71 @@
+timestamp: '20260405_011652'
+preset: clean_broad
+seed: 42
+presets_yaml: C:\Users\rocky\Personal\UBC\Year 4\IGEN 430\TableTennis_Software_Firmware\transfer_learning\scripts\synthetic_data_generated\synthetic_generator_presets.yaml
+generator:
+  n_samples: 20000
+  k_points: 6
+  scan_duration_s: 1.5
+  scan_dt_s: 0.005
+  min_time_hit_s: 0.1
+  gravity_z_mm_s2: -9810.0
+  gravity_jitter_frac_std: 0.0
+  obs_dt_min_s: 0.013
+  obs_dt_max_s: 0.018
+  obs_pre_hit_margin_s: 0.03
+  obs_last_time_cap_s: 0.25
+  max_attempts_factor: 80
+  preview_duration_s: 2.5
+  preview_dt_s: 0.005
+  preview_stop_y_mm: -700.0
+  preview_stop_z_mm: -1700.0
+  table_z_mm: -1150.74
+  table_length_mm: 2740.0
+  table_width_mm: 1525.0
+  max_bounces: 2
+  preview_z_exaggeration: 1.8
+noise:
+  position_std_mm: 0.0
+  bias_std_mm: 0.0
+  outlier_prob: 0.0
+  outlier_std_mm: 0.0
+  timestamp_jitter_ms: 0.0
+workspace:
+  ellipse_a: 720.0
+  ellipse_b: 470.0
+  z_min: -1020.0
+  z_max: -800.0
+  robot_home:
+  - 0.0
+  - 0.0
+  - -900.0
+launch_box:
+  x_min: -1062.5
+  x_max: 1062.5
+  y_min: 1940.0
+  y_max: 3240.0
+  z_min: -1150.74
+  z_max: -450.74
+observation_window:
+  y_min: 760.0
+  y_max: 2060.0
+real_match:
+  enabled: false
+  dt_mode: uniform
+  dt_mean_s: 0.0158
+  dt_std_s: 0.0013
+  dt_min_s: 0.0125
+  dt_max_s: 0.021
+  require_valid_intercept: false
+  require_reachable: false
+  second_bounce_prob: 1.0
+  t_hit_min_s: null
+  t_hit_max_s: null
+  vx_scale: 1.0
+  vy_scale: 1.0
+  vz_scale: 1.0
+  vz_bias_mm_s: 0.0
+  vx_noise_std_mm_s: 180.0
+  vy_noise_std_mm_s: 220.0
+  vz_noise_std_mm_s: 180.0
+output_csv: C:\Users\rocky\Personal\UBC\Year 4\IGEN 430\TableTennis_Software_Firmware\transfer_learning\learning_data\synthetic_data\broad_noloss_clean.csv

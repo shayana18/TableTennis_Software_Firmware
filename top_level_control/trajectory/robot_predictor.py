@@ -19,7 +19,6 @@ import numpy as np
 from .workspace import (
     MAX_CLAMP_DIST, GRAVITY_Z, DRAG_K,
     Z_TABLE_SURFACE, RESTITUTION_COEFF, FRICTION_COEFF, MAX_BOUNCES,
-    ROBOT_HOME,
     in_workspace, clamp_to_workspace,
 )
 from .ball_state_estimation import BallStateEstimator3D
@@ -417,9 +416,9 @@ class RobotPredictor:
 
         return x, y, z, vx, vy, vz, True
 
-    # Workspace center — the robot's ideal resting position.
-    # Intercept is chosen as the in-workspace point closest to this.
-    WORKSPACE_CENTER = ROBOT_HOME  # (0, 0, -900)
+    # Workspace center used for target selection.
+    # Intercept is chosen as the in-workspace point closest to this max-Z center.
+    WORKSPACE_CENTER = (0.0, 0.0, -800.0)
 
     def _scan_trajectory(self, x, y, z, vx, vy, vz):
         """Forward-simulate trajectory and return the in-workspace point
