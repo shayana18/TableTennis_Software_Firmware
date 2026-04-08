@@ -22,9 +22,9 @@
 #define MAX_JOINT_VEL 3000.0L      // RPM, Conservative values
 #define MAX_JOINT_ACC 10000.0L     // RPM/s, Conservative Values
 
-#define MAX_CART_VEL 4200.0f     // mm/s Default: 4000
-#define MAX_CART_ACC 24000.0f    // mm/s^2  default: 20000
-#define HOME_CART_ACC 6000.0f   // mm/s^2 slower home acceleration to reduce oscillation
+#define MAX_CART_VEL 4000.0f     // mm/s Default: 4000
+#define MAX_CART_ACC 17000.0f    // mm/s^2  default: 20000
+#define HOME_CART_ACC 4000.0f   // mm/s^2 slower home acceleration to reduce oscillation
 
 #define MAX_STRIKE_VEL MAX_CART_VEL    // mm/s
 
@@ -60,18 +60,21 @@
 #define EE_RADIUS 50.0f
 #define UPPER_ARM_LENGTH 350.0f
 #define LOWER_ARM_LENGTH 1000.0f
-#define PADDLE_ARM_OFFSET 206.0f // mm
-#define PADDLE_OFFSET_Z -90.0f   // mm
+#define PADDLE_X_OFFSET 206.0f // mm
+#define PADDLE_Y_OFFSET 34.0f // mm
+#define PADDLE_OFFSET_Z -88.0f   // mm
 
 // PADDLE Workspace bounds (mm) - (Paddle)  Elliptic Cylinder
 #define PADDLE_ELLIPSE_RADIUS_X 790.0f
 #define PADDLE_ELLIPSE_RADIUS_Y 540.0f
 #define PADDLE_LIMIT_POS_Z -800.0f
 #define PADDLE_LIMIT_NEG_Z -1020.0f
+#define PADDLE_STARTING_OFFSET_DEG 230.0f // deg, angle relative to horizontal
+#define PADDLE_TICKS_PER_DEG ((PULSES_PER_REV * PADDLE_GEAR_RATIO) / 360.0f)
 #define NET_Z_TOP -1000.0f
 
 // ROBOT EE Workspace bounds (mm) - (Robot EE)  Elliptic Cylinder
-#define ROBOT_EE_ELLIPSE_RADIUS_X   (PADDLE_ELLIPSE_RADIUS_X - PADDLE_ARM_OFFSET)
+#define ROBOT_EE_ELLIPSE_RADIUS_X   (PADDLE_ELLIPSE_RADIUS_X - PADDLE_X_OFFSET)
 #define ROBOT_EE_ELLIPSE_RADIUS_Y   (PADDLE_ELLIPSE_RADIUS_Y)
 #define ROBOT_EE_LIMIT_POS_Z        (PADDLE_LIMIT_POS_Z - PADDLE_OFFSET_Z)
 #define ROBOT_EE_LIMIT_NEG_Z        (PADDLE_LIMIT_NEG_Z - PADDLE_OFFSET_Z)

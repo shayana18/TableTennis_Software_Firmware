@@ -117,10 +117,13 @@ void robot_runtime_set_paddle_abs_deg(float paddle_yaw_deg) {
   if (s_motor_com == NULL) {
     robot_runtime_send_status("PADDLE CMD SKIPPED: motor comm not bound\r\n");
     return;
+  } else if (paddle_yaw_deg < -1.0f || paddle_yaw_deg > 181.0f) {
+    char msg[100];
+    snprintf(msg, sizeof(msg), "PADDLE CMD OUT OF RANGE: %f deg\r\n", paddle_yaw_deg);
+    robot_runtime_send_status(msg);
+    return;
   }
-  const float paddle_ticks_per_deg =
-      ((float)PULSES_PER_REV * PADDLE_GEAR_RATIO) / 360.0f;
-  const float motor_tick = paddle_yaw_deg * paddle_ticks_per_deg;
+  const float motor_tick = -1 * (PADDLE_STARTING_OFFSET_DEG - paddle_yaw_deg) * PADDLE_TICKS_PER_DEG;
   const long paddle_tick = (long)lroundf(motor_tick);
   move_abs32(s_motor_com, ROBOT_MOTOR_1_ID, paddle_tick);
 }

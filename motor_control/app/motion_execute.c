@@ -103,8 +103,8 @@ static vec3 strike_ball_pos_at_tau(vec3 intercept_pos, vec3 intercept_vel, float
 static vec3 strike_ee_pos_from_ball(vec3 ball_pos, float paddle_yaw_rad)
 {
   vec3 ee = {
-      ball_pos.x - (PADDLE_ARM_OFFSET * cosf(paddle_yaw_rad)),
-      ball_pos.y - (PADDLE_ARM_OFFSET * sinf(paddle_yaw_rad)),
+      ball_pos.x - (PADDLE_X_OFFSET * cosf(paddle_yaw_rad) - PADDLE_Y_OFFSET * sinf(paddle_yaw_rad)),
+      ball_pos.y - (PADDLE_X_OFFSET * sinf(paddle_yaw_rad) + PADDLE_Y_OFFSET * cosf(paddle_yaw_rad)),
       ball_pos.z - PADDLE_OFFSET_Z,
   };
   return ee;
@@ -260,12 +260,12 @@ void motion_execute_plan_strike(robot_t *robot) {
   }
   float paddle_yaw = yaw_norm;
 
-  if (yaw_norm < (HALF_PI_F)) {
+  // Pick one face deterministically at the 90 deg boundary (avoid the old
+  // special-case that pointed the axis to 90 deg, which mismatched both sides).
+  if (yaw_norm <= HALF_PI_F) {
     paddle_yaw += HALF_PI_F;
-  } else if (yaw_norm > (HALF_PI_F)) {
-    paddle_yaw -= HALF_PI_F;
   } else {
-    paddle_yaw = HALF_PI_F;
+    paddle_yaw -= HALF_PI_F;
   }
   paddle_yaw += (STRIKE_YAW_BIAS_DEG * DTR);
   while (paddle_yaw >= PI_F) {
