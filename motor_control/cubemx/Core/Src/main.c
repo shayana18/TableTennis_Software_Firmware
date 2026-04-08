@@ -145,6 +145,7 @@ int main(void)
   Turn_const_speed(&motor_com, ROBOT_MOTOR_1_ID, 0);
   Turn_const_speed(&motor_com, ROBOT_MOTOR_2_ID, 0);
   Turn_const_speed(&motor_com, ROBOT_MOTOR_3_ID, 0);
+  Turn_const_speed(&motor_com, ROBOT_MOTOR_4_ID, 0);
   /* USER CODE END 2 */
 
   /* Initialize leds */
@@ -231,7 +232,7 @@ static void MX_TIM1_Init(void)
   htim1.Instance = TIM1;
   htim1.Init.Prescaler = 47;
   htim1.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim1.Init.Period = 11111;
+  htim1.Init.Period = 15384;
   htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim1.Init.RepetitionCounter = 0;
   htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
@@ -463,7 +464,7 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
   if (huart->Instance == USART2) {
     // float msg[TARGET_MSG_FLOAT_COUNT];
     memcpy(msg, uart2_rx_buf, sizeof(msg));
-    mailbox_mail_arrived(&traj_new_mail, msg);
+    mailbox_mail_arrived(&traj_new_mail, msg, HAL_GetTick());
     HAL_UART_Receive_IT(&huart2, uart2_rx_buf, sizeof(uart2_rx_buf));
 
   }

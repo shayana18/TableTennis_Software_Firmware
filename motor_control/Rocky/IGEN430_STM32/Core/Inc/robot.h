@@ -31,8 +31,8 @@
 #define ELLIPSE_RADIUS_Y_LIMIT
 #define LIMIT_POS_Y
 #define LIMIT_NEG_Y
-#define LIMIT_POS_Z
-#define LIMIT_NEG_Z
+#define PADDLE_LIMIT_POS_Z
+#define PADDLE_LIMIT_NEG_Z
 
 
 // ROBOT PARAMETER TYPES

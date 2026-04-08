@@ -4,14 +4,6 @@
 #include <math.h>
 #include <stdio.h>
 
-#define PI_F 3.14159265358979323846f
-#define DTR (PI_F / 180.0f)
-#define SQRT3 1.7320508075688772f
-#define TAN30 (1.0f / SQRT3)
-#define SIN30 0.5f
-#define TAN60 SQRT3
-#define SIN120 0.8660254037844386f
-#define COS120 -0.5f
 
 const vec3 home = {HOME_X, HOME_Y, HOME_Z};
 
@@ -55,9 +47,10 @@ void robot_set_target_from_mail(robot_target_t *dst, const target_t *src)
   dst->type = src->type;
   dst->target_ID = 0.0f;
   dst->pos = src->intercept_pos;
-  dst->ball_vel = src->ball_velocity;
+  dst->vel = src->intercept_vel;
   dst->t_arrival_s = src->intercept_time;
   dst->timestamp = src->timestamp;
+  dst->received_time = src->received_time;
 }
 
 float robot_calc_dist(vec3 current, vec3 target, float *out_dx, float *out_dy, float *out_dz)
@@ -71,14 +64,35 @@ float robot_calc_dist(vec3 current, vec3 target, float *out_dx, float *out_dy, f
   return sqrtf(x * x + y * y + z * z);
 }
 
-bool robot_target_in_workspace(vec3 pos)
+bool robot_EE_in_workspace(vec3 pos)
 {
+
+  if (isnan(pos.x) || isnan(pos.y) || isnan(pos.z)) {
+    return false;
+  }
   // Ellipse Formula
-  float value = (pos.x * pos.x) / (ELLIPSE_RADIUS_X * ELLIPSE_RADIUS_X) + (pos.y * pos.y) / (ELLIPSE_RADIUS_Y * ELLIPSE_RADIUS_Y);
+  float value = (pos.x * pos.x) / (ROBOT_EE_ELLIPSE_RADIUS_X * ROBOT_EE_ELLIPSE_RADIUS_X) + (pos.y * pos.y) / (ROBOT_EE_ELLIPSE_RADIUS_Y * ROBOT_EE_ELLIPSE_RADIUS_Y);
 
   if (value > 1.0f) {
     return false;
-    } else if (pos.z > LIMIT_POS_Z || pos.z < LIMIT_NEG_Z) {
+    } else if (pos.z > ROBOT_EE_LIMIT_POS_Z || pos.z < ROBOT_EE_LIMIT_NEG_Z) {
+    return false; 
+  }
+
+  return true;
+}
+
+bool robot_target_in_workspace(vec3 pos)
+{
+  if (isnan(pos.x) || isnan(pos.y) || isnan(pos.z)) {
+    return false;
+  }
+  // Ellipse Formula
+  float value = (pos.x * pos.x) / (INTERCEPTION_ELLIPSE_RADIUS_X * INTERCEPTION_ELLIPSE_RADIUS_X) + (pos.y * pos.y) / (INTERCEPTION_ELLIPSE_RADIUS_Y * INTERCEPTION_ELLIPSE_RADIUS_Y);
+
+  if (value > 1.0f) {
+    return false;
+    } else if (pos.z > INTERCEPTION_LIMIT_POS_Z || pos.z < INTERCEPTION_LIMIT_NEG_Z) {
     return false; 
   }
 
@@ -340,6 +354,7 @@ void set_idle(robot_t *robot)
 {
   motion_execute_stop_all();
   robot_runtime_clear_mailbox();
+  robot_runtime_clear_mailbox();
   if (robot != NULL) {
     robot->flag_ready_to_move = false;
   }
@@ -364,5 +379,6 @@ void print_joint_angles(){
     robot_runtime_send_status(msg);
   }
 }
+
 
 
