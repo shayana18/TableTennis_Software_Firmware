@@ -14,6 +14,8 @@ static long s_speed_cmd_last_1 = 0;
 static long s_speed_cmd_last_2 = 0;
 static long s_speed_cmd_last_3 = 0;
 
+static long robot_runtime_joint_deg_to_motor_tick(float q_deg);
+
 void robot_runtime_bind(mailbox_t *mailbox, io_motor_com_t *motor_com)
 {
   s_mailbox = mailbox;
@@ -63,13 +65,13 @@ void robot_runtime_set_joint_speed(long cmd1, long cmd2, long cmd3)
   const long motor_cmd3 = (long)lroundf((float)cmd3 * ROBOT_JOINT_SIGN);
 
   if (!s_speed_cmd_valid || motor_cmd1 != s_speed_cmd_last_1) {
-    Turn_const_speed(s_motor_com, ROBOT_MOTOR_1_ID, motor_cmd1);
+    Turn_const_speed(s_motor_com, ROBOT_MOTOR_2_ID, motor_cmd1);
   }
   if (!s_speed_cmd_valid || motor_cmd2 != s_speed_cmd_last_2) {
-    Turn_const_speed(s_motor_com, ROBOT_MOTOR_2_ID, motor_cmd2);
+    Turn_const_speed(s_motor_com, ROBOT_MOTOR_3_ID, motor_cmd2);
   }
   if (!s_speed_cmd_valid || motor_cmd3 != s_speed_cmd_last_3) {
-    Turn_const_speed(s_motor_com, ROBOT_MOTOR_3_ID, motor_cmd3);
+    Turn_const_speed(s_motor_com, ROBOT_MOTOR_4_ID, motor_cmd3);
   }
 
   s_speed_cmd_last_1 = motor_cmd1;
@@ -96,9 +98,9 @@ void robot_runtime_set_joint_position_abs_ticks(long q1_tick, long q2_tick, long
     return;
   }
 
-  move_abs32(s_motor_com, ROBOT_MOTOR_1_ID, q1_tick);
-  move_abs32(s_motor_com, ROBOT_MOTOR_2_ID, q2_tick);
-  move_abs32(s_motor_com, ROBOT_MOTOR_3_ID, q3_tick);
+  move_abs32(s_motor_com, ROBOT_MOTOR_2_ID, q1_tick);
+  move_abs32(s_motor_com, ROBOT_MOTOR_3_ID, q2_tick);
+  move_abs32(s_motor_com, ROBOT_MOTOR_4_ID, q3_tick);
 }
 
 void robot_runtime_set_joint_position_abs_deg(float q1_deg, float q2_deg, float q3_deg)
@@ -110,29 +112,47 @@ void robot_runtime_set_joint_position_abs_deg(float q1_deg, float q2_deg, float 
   robot_runtime_set_joint_position_abs_ticks(q1_tick, q2_tick, q3_tick);
 }
 
+void robot_runtime_set_paddle_abs_deg(float paddle_yaw_deg) {
+
+  if (s_motor_com == NULL) {
+    robot_runtime_send_status("PADDLE CMD SKIPPED: motor comm not bound\r\n");
+    return;
+  } else if (paddle_yaw_deg < -1.0f || paddle_yaw_deg > 181.0f) {
+    char msg[100];
+    snprintf(msg, sizeof(msg), "PADDLE CMD OUT OF RANGE: %f deg\r\n", paddle_yaw_deg);
+    robot_runtime_send_status(msg);
+    return;
+  }
+  const float motor_tick = -1 * (PADDLE_STARTING_OFFSET_DEG - paddle_yaw_deg) * PADDLE_TICKS_PER_DEG;
+  const long paddle_tick = (long)lroundf(motor_tick);
+  move_abs32(s_motor_com, ROBOT_MOTOR_1_ID, paddle_tick);
+}
 
 
 bool robot_runtime_get_joint_ticks(long *q1_tick, long *q2_tick, long *q3_tick)
 {
-  if (s_motor_com == NULL || q1_tick == NULL || q2_tick == NULL || q3_tick == NULL) {
+  if (q1_tick == NULL || q2_tick == NULL || q3_tick == NULL) {
     return false;
   }
 
+  if (s_motor_com == NULL) {
+    return false;
+  }
 
   // Request and read encoder positions from each motor driver
-  if (!ReadMotorPosition32(s_motor_com, ROBOT_MOTOR_1_ID)) {
+  if (!ReadMotorPosition32(s_motor_com, ROBOT_MOTOR_2_ID)) {
     robot_runtime_send_status("ERR: m1 pos timeout\r\n");
     return false;
   }
   long p1 = io_motor_com_get_motor_pos(s_motor_com);
 
-  if (!ReadMotorPosition32(s_motor_com, ROBOT_MOTOR_2_ID)) {
+  if (!ReadMotorPosition32(s_motor_com, ROBOT_MOTOR_3_ID)) {
     robot_runtime_send_status("ERR: m2 pos timeout\r\n");
     return false;
   }
   long p2 = io_motor_com_get_motor_pos(s_motor_com);
 
-  if (!ReadMotorPosition32(s_motor_com, ROBOT_MOTOR_3_ID)) {
+  if (!ReadMotorPosition32(s_motor_com, ROBOT_MOTOR_4_ID)) {
     robot_runtime_send_status("ERR: m3 pos timeout\r\n");
     return false;
   }
@@ -173,3 +193,4 @@ void robot_runtime_scan_motor_ids(char first_id, char last_id)
     }
   }
 }
+

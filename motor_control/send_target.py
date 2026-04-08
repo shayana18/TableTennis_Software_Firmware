@@ -10,7 +10,7 @@ from typing import Optional
 import serial
 
 
-TARGET_MSG_FLOAT_COUNT = 7
+TARGET_MSG_FLOAT_COUNT = 10
 DEFAULT_HOME = (0.0, 0.0, -900.0)
 
 ser: Optional[serial.Serial] = None
@@ -48,22 +48,65 @@ def reader_loop() -> None:
             break
 
 
-def send_message(msg_type: float, x: float, y: float, z: float, arrival_time: float) -> None:
+def send_message(
+    msg_type: float,
+    x: float,
+    y: float,
+    z: float,
+    arrival_time: float,
+    x_vel: float = 0.0,
+    y_vel: float = 0.0,
+    z_vel: float = 0.0,
+) -> None:
     assert ser is not None
-    msg = struct.pack("<7f", msg_type, x, y, z, arrival_time, 0.0, 0.0)
+    now_s = time.time()
+    msg = struct.pack(
+        "<10f",
+        msg_type,
+        x,
+        y,
+        z,
+        x_vel,
+        y_vel,
+        z_vel,
+        arrival_time,
+        now_s,
+        0.0,
+    )
     ser.write(msg)
     ser.flush()
     safe_print(
-        f"[TX] type={msg_type:.1f} x={x:.2f} y={y:.2f} z={z:.2f} t={arrival_time:.2f}s"
+        "[TX] "
+        f"type={msg_type:.1f} "
+        f"x={x:.2f} y={y:.2f} z={z:.2f} "
+        f"vx={x_vel:.2f} vy={y_vel:.2f} vz={z_vel:.2f} "
+        f"t={arrival_time:.2f}s"
     )
 
 
 def send_home(home_xyz: tuple[float, float, float]) -> None:
-    send_message(3.0, home_xyz[0], home_xyz[1], home_xyz[2], 5.0)
+    send_message(3.0, home_xyz[0], home_xyz[1], home_xyz[2], 5.0, 0.0, 0.0, 0.0)
 
 
-def send_intercept(x: float, y: float, z: float, t_s: float) -> None:
-    send_message(1.0, x, y, z, t_s)
+def send_intercept(
+    x: float,
+    y: float,
+    z: float,
+    t_s: float,
+    x_vel: float = 0.0,
+    y_vel: float = 0.0,
+    z_vel: float = 0.0,
+) -> None:
+    send_message(1.0, x, y, z, t_s, x_vel, y_vel, z_vel)
+
+
+def send_test(
+    x: float,
+    y: float,
+    z: float,
+    t_s: float,
+) -> None:
+    send_message(4.0, x, y, z, t_s, 0.0, 0.0, 0.0)
 
 
 def show_menu() -> None:
@@ -71,11 +114,10 @@ def show_menu() -> None:
     safe_print("ROBOT TARGET SENDER + SERIAL MONITOR")
     safe_print("=" * 54)
     safe_print("1) Send HOME")
-    safe_print("2) Send INTERCEPT (custom position)")
-    safe_print("3) Send INTERCEPT (quick default)")
-    safe_print("4) Send INTERCEPT (x=680 y=0 z=-700 t=2.0s)")
-    safe_print("5) Send INTERCEPT (x=-680 y=0 z=-1000 t=2.0s)")
-    safe_print("6) Exit")
+    safe_print("2) Send TEST (custom position)")
+    safe_print("3) Send TEST (quick default)")
+    safe_print("4) Send INTERCEPT (custom position + velocity)")
+    safe_print("5) Exit")
     safe_print("=" * 54)
 
 
@@ -98,7 +140,7 @@ def main() -> int:
     try:
         while True:
             show_menu()
-            choice = input("Enter choice (1-6): ").strip()
+            choice = input("Enter choice (1-5): ").strip()
 
             if choice == "1":
                 send_home(DEFAULT_HOME)
@@ -108,20 +150,28 @@ def main() -> int:
                     y = float(input("  Y position (mm) [default -25.0]: ") or "-25.0")
                     z = float(input("  Z position (mm) [default -800.0]: ") or "-800.0")
                     t = float(input("  Arrival time (s) [default 0.5]: ") or "0.5")
-                    send_intercept(x, y, z, t)
+                    send_test(x, y, z, t)
                 except ValueError:
                     safe_print("[WARN] Invalid input: numbers only.")
             elif choice == "3":
-                send_intercept(50.0, -25.0, -800.0, 0.5)
+                send_test(50.0, -25.0, -800.0, 0.5)
             elif choice == "4":
-                send_intercept(680.0, 0.0, -700.0, 2.0)
+                try:
+                    x = float(input("  X position (mm) [default 50.0]: ") or "50.0")
+                    y = float(input("  Y position (mm) [default -25.0]: ") or "-25.0")
+                    z = float(input("  Z position (mm) [default -800.0]: ") or "-800.0")
+                    vx = float(input("  X velocity (mm/s) [default 0.0]: ") or "0.0")
+                    vy = float(input("  Y velocity (mm/s) [default 0.0]: ") or "0.0")
+                    vz = float(input("  Z velocity (mm/s) [default 0.0]: ") or "0.0")
+                    t = float(input("  Arrival time (s) [default 0.5]: ") or "0.5")
+                    send_intercept(x, y, z, t, vx, vy, vz)
+                except ValueError:
+                    safe_print("[WARN] Invalid input: numbers only.")
             elif choice == "5":
-                send_intercept(-680.0, 0.0, -1000.0, 2.0)
-            elif choice == "6":
                 safe_print("[INFO] Exiting.")
                 break
             else:
-                safe_print("[WARN] Invalid choice. Enter 1-6.")
+                safe_print("[WARN] Invalid choice. Enter 1-5.")
 
             time.sleep(0.15)
     except KeyboardInterrupt:

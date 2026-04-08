@@ -29,7 +29,7 @@ bool safety_check_target(vec3 pos) {
 	if (pos.y < LIMIT_NEG_Y || pos.y > LIMIT_POS_Y) {
 		return false;
 	}
-	if (pos.z < LIMIT_NEG_Z || pos.z > LIMIT_POS_Z) {
+	if (pos.z < PADDLE_LIMIT_NEG_Z || pos.z > PADDLE_LIMIT_POS_Z) {
 		return false;
 	}
 

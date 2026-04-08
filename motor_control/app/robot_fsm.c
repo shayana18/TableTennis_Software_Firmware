@@ -4,8 +4,11 @@
 #include "robot.h"
 #include "robot_runtime.h"
 #include "shared_types.h"
+#include <math.h>
+#include <stdio.h>
 
 
+int x = 0;
 
 void delta_fsm_init(robot_t *robot)
 {
@@ -51,17 +54,39 @@ void delta_fsm(robot_t *robot)
 
   switch (robot->state) {
     case STATE_OFF:
-
-    // TO Implement: Limit switch logic
+    
+    while (x < 1){
       robot_runtime_send_status("STATE: OFF\r\n");
-      robot->state = STATE_IDLE;
-      robot_runtime_send_status("STATE: IDLE\r\n");
+      x++;
+    }
+      
+
+      if(robot_runtime_pop_target(&robot->current_target) && robot->current_target.type == TARGET_HOME)
+      {
+          robot_runtime_send_status("HOMING...\r\n");
+          motion_execute_make_home_target(robot);
+          robot->state = STATE_PLAN;
+          robot_runtime_send_status("STATE: PLAN\r\n");
+      }
       break;
       
     case STATE_IDLE:
       if (!robot_runtime_pop_target(&robot->current_target)) {
         break;
-      } else if(robot->current_target.type == TARGET_INTERCEPT)
+      }
+
+      {
+        char msg[128];
+        snprintf(msg, sizeof(msg),
+                 "RX TARGET: type=%d x=%ld y=%ld z=%ld\r\n",
+                 (int)robot->current_target.type,
+                 (long)lroundf(robot->current_target.pos.x),
+                 (long)lroundf(robot->current_target.pos.y),
+                 (long)lroundf(robot->current_target.pos.z));
+        robot_runtime_send_status(msg);
+      }
+
+      if(robot->current_target.type == TARGET_INTERCEPT || robot->current_target.type == TARGET_TEST)
       {
         robot->state = STATE_PLAN;
         robot_runtime_send_status("STATE: PLAN\r\n");
@@ -77,24 +102,38 @@ void delta_fsm(robot_t *robot)
 
 
     case STATE_PLAN:
-      if (!robot_target_in_workspace(robot->current_target.pos)) {
-        robot_runtime_send_status("TARGET OUT OF WORKSPACE\r\n");
+
+      motion_execute_plan(robot);
+
+      // Planning may intentionally conclude with no motion needed
+      // (e.g., target is already within 1 mm of current pose).
+      // Treat that as success, not a planning error.
+      if (robot->flag_path_done) {
         robot->state = STATE_IDLE;
         set_idle(robot);
         robot_runtime_send_status("STATE: IDLE\r\n");
-      } else {
-        motion_execute_plan(robot);
-        motion_execute_start(robot);
-        if (!robot->flag_ready_to_move) {
-          robot_runtime_send_status("Planning Failed\r\n");
-          robot->state = STATE_IDLE;
-          set_idle(robot);
-          robot_runtime_send_status("STATE: IDLE\r\n");
-          break;
-        }
-        robot->state = STATE_MOVE;
-        robot_runtime_send_status("STATE: MOVE\r\n");
+        break;
       }
+
+      // If planning already aborted itself (workspace/IK/etc), do not run start.
+      if (robot->flag_path_abort) {
+        robot->state = STATE_IDLE;
+        set_idle(robot);
+        robot_runtime_send_status("STATE: IDLE\r\n");
+        break;
+      }
+
+      motion_execute_start(robot);
+      if (!robot->flag_ready_to_move) {
+        robot_runtime_send_status("Planning Failed\r\n");
+        robot->state = STATE_IDLE;
+        set_idle(robot);
+        robot_runtime_send_status("STATE: IDLE\r\n");
+        break;
+      }
+      robot->state = STATE_MOVE;
+      robot_runtime_send_status("STATE: MOVE\r\n");
+      
       break;
 
     case STATE_MOVE:
@@ -114,14 +153,6 @@ void delta_fsm(robot_t *robot)
 
       if (robot->flag_path_done) {
 
-        // Simple logic chain: Just set robot state to IDLE
-        robot->state = STATE_IDLE;
-        set_idle(robot);
-        robot_runtime_send_status("STATE: IDLE\r\n");
-        print_joint_angles();
-        
-        // True logic chain
-        /*
         if (robot->current_target.type == TARGET_INTERCEPT) {
           robot->state = STATE_STRIKE;
           robot_runtime_send_status("STATE: STRIKE\r\n");
@@ -134,24 +165,23 @@ void delta_fsm(robot_t *robot)
           set_idle(robot);
           robot_runtime_send_status("REACHED HOME\r\n");
           robot_runtime_send_status("STATE: IDLE\r\n");
-        } else {
+        } else { // Test target type
         robot->state = STATE_IDLE;
         set_idle(robot);
         robot_runtime_send_status("STATE: IDLE\r\n");
+        print_joint_angles();
         }
-        */
 
       }
       break;
 
     case STATE_STRIKE:
-      motion_execute_plan_strike(robot);
-      if (!robot_target_in_workspace(robot->current_target.pos)) {
-        robot_runtime_send_status("PATH_INVALID, SENDING HOME\r\n");
-        motion_execute_make_home_target(robot);
-        robot->state = STATE_PLAN;
+      motion_execute_prepare_strike(robot);
+      if (!robot_EE_in_workspace(robot->current_target.pos)) {
+        robot->state = STATE_IDLE;
+        set_idle(robot);
+        robot_runtime_send_status("STATE: IDLE\r\n");
       } else {
-        motion_execute_plan(robot);
         motion_execute_start(robot);
         if (!robot->flag_ready_to_move) {
           robot->state = STATE_IDLE;
