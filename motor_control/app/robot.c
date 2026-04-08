@@ -55,6 +55,7 @@ void robot_set_target_from_mail(robot_target_t *dst, const target_t *src)
   dst->type = src->type;
   dst->target_ID = 0.0f;
   dst->pos = src->intercept_pos;
+  dst->ball_vel = src->ball_velocity;
   dst->t_arrival_s = src->intercept_time;
   dst->timestamp = src->timestamp;
 }

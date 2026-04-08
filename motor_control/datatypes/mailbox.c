@@ -7,6 +7,9 @@ static void mailbox_parse_target(const float *data, target_t *out_target)
     out_target->intercept_pos.x = data[TARGET_MSG_X_POS];
     out_target->intercept_pos.y = data[TARGET_MSG_Y_POS];
     out_target->intercept_pos.z = data[TARGET_MSG_Z_POS];
+    out_target->ball_velocity.x = data[TARGET_MSG_VX];
+    out_target->ball_velocity.y = data[TARGET_MSG_VY];
+    out_target->ball_velocity.z = data[TARGET_MSG_VZ];
     out_target->intercept_time = data[TARGET_MSG_INTERCEPT_TIME];
     out_target->time_sent = data[TARGET_MSG_TIME_SENT];
     out_target->timestamp = data[TARGET_MSG_TIMESTAMP];

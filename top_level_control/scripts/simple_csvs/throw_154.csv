@@ -1,0 +1,6 @@
+throw_id,frame_idx,timestamp_s,dt_ms,cam_x,cam_y,cam_z,rob_x,rob_y,rob_z,accepted,reject_reason,disparity,reproj_err,kf_pos_x,kf_pos_y,kf_pos_z,vel_x,vel_y,vel_z,kf_ready,kf_updates,buf_size,pred_x,pred_y,pred_z,pred_t_ms,pred_vx,pred_vy,pred_vz,confidence,spread_mm,hit_ratio,clamped,clamp_dist,bounces
+154,0,1220123.751272,,-118.51,-18.82,282.58,-239.8,107.1,-794.3,True,,136.5,0.1,-239.8,107.1,-794.3,,,,False,1,1,,,,,,,,,,,,,0
+154,1,1220123.767571,16.3,-118.92,-18.66,283.56,-245.7,98.8,-797.5,True,,136.1,0.5,-245.7,98.8,-797.5,,,,False,2,2,,,,,,,,,,,,,0
+154,2,1220123.793838,,,,,,,,,,,,-245.7,98.8,-797.5,,,,False,2,2,,,,,,,,,,,,,0
+154,3,1220123.81371,46.14,-119.6,-19.12,284.47,-250.5,87.9,-794.6,True,,135.6,0.6,-252.5,85.8,-798.4,,,,False,3,3,,,,,,,,,,,,,0
+154,4,1220123.829761,,,,,,,,,,,,-252.5,85.8,-798.4,,,,False,3,3,,,,,,,,,,,,,0

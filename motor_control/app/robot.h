@@ -67,6 +67,7 @@ typedef struct {
   target_type type;
   float target_ID;
   vec3 pos;
+  vec3 ball_vel;       // (mm/s) ball velocity at intercept
   float t_arrival_s;
   float timestamp;
 } robot_target_t;

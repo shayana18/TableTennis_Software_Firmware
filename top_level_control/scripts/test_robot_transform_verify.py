@@ -1,20 +1,17 @@
 """
-Robot transform verification and comparison tool.
+Robot transform verification tool.
 
-Compares two camera->robot transform methods on clicked stereo points:
-1) Offset/pose-based transform from trajectory_predictor.py (current pipeline)
-2) Points-based transform loaded from points_based_transform_result.json
+Verifies the points-based camera->robot transform on clicked stereo points.
 
 Workflow:
   1. Freeze frame (SPACE), click same target in LEFT then RIGHT image.
   2. Script triangulates camera point (cm).
-  3. Script transforms that camera point using both methods.
+  3. Script transforms that camera point to robot frame using points-based transform.
   4. Compare robot XYZ outputs against tape-measure ground truth.
 
 Controls:
   SPACE - freeze/unfreeze frame
   r     - reset current click pair
-  u     - reload offset/pose transform from trajectory_predictor.py constants
   o     - reload points-based transform file
   p     - print summary table
   q     - quit
@@ -25,7 +22,6 @@ Prerequisite: run trigger_setup.py first for camera sync.
 from __future__ import annotations
 
 import argparse
-import importlib
 import os
 import sys
 import time
@@ -39,23 +35,15 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from comm_function.points_based_transform import (
     DEFAULT_POINTS_BASED_TRANSFORM_FILE,
     load_points_based_transform,
+    cam_to_robot,
 )
 from config.camera_config import load_camera_settings
 from tracking.stereo_triangulator import StereoTriangulator
-from trajectory.trajectory_predictor import (
-    CAM_POSE_PITCH,
-    CAM_POSE_ROLL,
-    CAM_POSE_X_MM,
-    CAM_POSE_Y_MM,
-    CAM_POSE_YAW,
-    CAM_POSE_Z_MM,
-    ROBOT_HOME,
-    TrajectoryPredictor,
-)
+from trajectory.workspace import ROBOT_HOME, in_workspace
 
 
 class RobotTransformVerifier:
-    """Click-to-verify and compare camera->robot transforms."""
+    """Click-to-verify camera->robot transform."""
 
     def __init__(self, points_transform_file: str) -> None:
         self.script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -75,11 +63,6 @@ class RobotTransformVerifier:
         )
 
         self.triangulator: Optional[StereoTriangulator] = None
-
-        # Offset/pose-based transform used by current trajectory predictor.
-        self.predictor = TrajectoryPredictor(
-            buffer_size=5, min_points=3, gravity=981.0, y_down=True, enable_drag=False
-        )
 
         # Points-based transform loaded from file.
         self.points_transform_file = os.path.abspath(points_transform_file)
@@ -156,12 +139,6 @@ class RobotTransformVerifier:
         reproj = max(err_l, err_r)
         return tuple(pos), reproj
 
-    def _offset_transform(self) -> tuple[np.ndarray, np.ndarray]:
-        """Return current predictor rotation/translation (camera cm -> robot mm)."""
-        R = np.asarray(self.predictor._R_cam_to_robot, dtype=float)
-        t = np.asarray(self.predictor._t_cam_to_robot, dtype=float).reshape(3)
-        return R, t
-
     def _load_points_transform(self, verbose: bool = True) -> bool:
         try:
             self.points_transform = load_points_based_transform(self.points_transform_file)
@@ -183,60 +160,30 @@ class RobotTransformVerifier:
         R = self.points_transform["rotation"]
         t = self.points_transform["translation"]
         scale = float(self.points_transform.get("camera_scale_to_robot_units", 1.0))
-        cam_vec = np.array([cam_x, cam_y, cam_z], dtype=float) * scale
-        p_robot = R @ cam_vec + t
-        return float(p_robot[0]), float(p_robot[1]), float(p_robot[2])
+        return cam_to_robot(R, t, scale, cam_x, cam_y, cam_z)
 
     def _refresh_measurement_transform_values(self, m: dict) -> None:
         cam_x, cam_y, cam_z = m["cam_x"], m["cam_y"], m["cam_z"]
 
-        # Offset/pose-based output.
-        off_x, off_y, off_z = self.predictor.cam_to_robot(cam_x, cam_y, cam_z)
-        m["offset_x"] = off_x
-        m["offset_y"] = off_y
-        m["offset_z"] = off_z
-        m["offset_in_workspace"] = self.predictor.check_workspace(off_x, off_y, off_z)
-
-        # Points-based output (if file is loaded).
         pts_xyz = self._points_based_cam_to_robot(cam_x, cam_y, cam_z)
         if pts_xyz is None:
-            m["points_x"] = None
-            m["points_y"] = None
-            m["points_z"] = None
-            m["points_in_workspace"] = None
-            m["delta_x"] = None
-            m["delta_y"] = None
-            m["delta_z"] = None
-            m["delta_norm"] = None
+            m["robot_x"] = None
+            m["robot_y"] = None
+            m["robot_z"] = None
+            m["in_workspace"] = None
             return
 
-        pts_x, pts_y, pts_z = pts_xyz
-        m["points_x"] = pts_x
-        m["points_y"] = pts_y
-        m["points_z"] = pts_z
-        m["points_in_workspace"] = self.predictor.check_workspace(pts_x, pts_y, pts_z)
-
-        dx = pts_x - off_x
-        dy = pts_y - off_y
-        dz = pts_z - off_z
-        m["delta_x"] = dx
-        m["delta_y"] = dy
-        m["delta_z"] = dz
-        m["delta_norm"] = float(np.linalg.norm([dx, dy, dz]))
+        rx, ry, rz = pts_xyz
+        m["robot_x"] = rx
+        m["robot_y"] = ry
+        m["robot_z"] = rz
+        m["in_workspace"] = in_workspace(rx, ry, rz)
 
     def _recompute_existing_measurements(self) -> None:
         for m in self.measurements:
             self._refresh_measurement_transform_values(m)
 
     def _print_transform_matrices(self) -> None:
-        R_off, t_off = self._offset_transform()
-        print("\n  Offset/Pose-based transform (trajectory_predictor)")
-        print("    Equation: p_robot = R_off @ (p_cam_cm * 10.0) + t_off")
-        print("    R_off =")
-        print(np.array2string(R_off, precision=8, suppress_small=False))
-        print("    t_off =")
-        print(np.array2string(t_off, precision=8, suppress_small=False))
-
         if self.points_transform is None:
             print(
                 f"\n  Points-based transform not loaded: {self.points_transform_file}\n"
@@ -247,57 +194,32 @@ class RobotTransformVerifier:
         t_pts = self.points_transform["translation"]
         scale = float(self.points_transform.get("camera_scale_to_robot_units", 1.0))
         print(f"\n  Points-based transform (file: {self.points_transform_file})")
-        print("    Equation: p_robot = R_pts @ (p_cam * scale) + t_pts")
+        print("    Equation: p_robot = R @ (p_cam * scale) + t")
         print(f"    scale = {scale}")
-        print("    R_pts =")
+        print("    R =")
         print(np.array2string(R_pts, precision=8, suppress_small=False))
-        print("    t_pts =")
+        print("    t =")
         print(np.array2string(t_pts, precision=8, suppress_small=False))
         print()
-
-    def reload_camera_pose(self) -> None:
-        """Reload CAM_POSE_* constants from trajectory_predictor.py."""
-        import trajectory.trajectory_predictor as tp_mod
-
-        importlib.reload(tp_mod)
-        self.predictor.set_camera_pose(
-            tp_mod.CAM_POSE_X_MM,
-            tp_mod.CAM_POSE_Y_MM,
-            tp_mod.CAM_POSE_Z_MM,
-            tp_mod.CAM_POSE_YAW,
-            tp_mod.CAM_POSE_PITCH,
-            tp_mod.CAM_POSE_ROLL,
-        )
-        print("  Offset/pose transform reloaded from trajectory_predictor.py")
-        self._recompute_existing_measurements()
 
     def _print_point_report(self, m: dict) -> None:
         n = m["n"]
         cx, cy, cz = m["cam_x"], m["cam_y"], m["cam_z"]
         reproj = m["reproj"]
-        off_x, off_y, off_z = m["offset_x"], m["offset_y"], m["offset_z"]
-        off_ws = "IN" if m["offset_in_workspace"] else "OUT"
 
         print()
         print(f"  POINT #{n}")
         print("  Camera (cm):")
         print(f"    X={cx:+8.2f} Y={cy:+8.2f} Z={cz:+8.2f}")
-        print("  Offset/Pose-based robot (mm):")
-        print(f"    X={off_x:+8.1f} Y={off_y:+8.1f} Z={off_z:+8.1f}  WS:{off_ws}")
 
-        if m["points_x"] is None:
-            print("  Points-based robot (mm):")
+        if m["robot_x"] is None:
+            print("  Robot (mm):")
             print("    unavailable (transform file not loaded)")
         else:
-            pts_x, pts_y, pts_z = m["points_x"], m["points_y"], m["points_z"]
-            pts_ws = "IN" if m["points_in_workspace"] else "OUT"
-            print("  Points-based robot (mm):")
-            print(f"    X={pts_x:+8.1f} Y={pts_y:+8.1f} Z={pts_z:+8.1f}  WS:{pts_ws}")
-            print("  Delta (points - offset) (mm):")
-            print(
-                f"    dX={m['delta_x']:+7.1f} dY={m['delta_y']:+7.1f} "
-                f"dZ={m['delta_z']:+7.1f}  |d|={m['delta_norm']:.1f}"
-            )
+            rx, ry, rz = m["robot_x"], m["robot_y"], m["robot_z"]
+            ws = "IN" if m["in_workspace"] else "OUT"
+            print("  Robot (mm):")
+            print(f"    X={rx:+8.1f} Y={ry:+8.1f} Z={rz:+8.1f}  WS:{ws}")
 
         print(f"  Reprojection error: {reproj:.2f}px")
         print(
@@ -360,7 +282,7 @@ class RobotTransformVerifier:
         scale_y = self.display_height / self.frame_height
 
         freeze_label = " [FROZEN]" if self.frozen else ""
-        pts_label = "PtsFile:ON" if self.points_transform is not None else "PtsFile:OFF"
+        pts_label = "Transform:ON" if self.points_transform is not None else "Transform:OFF"
         for img, label in ((left_small, "LEFT"), (right_small, "RIGHT")):
             cv2.rectangle(img, (0, 0), (420, 52), (0, 0, 0), -1)
             cv2.putText(
@@ -463,25 +385,15 @@ class RobotTransformVerifier:
                 1,
             )
 
-            # Comparison on right panel.
-            box_r = h - 120
+            # Robot coords on right panel.
+            box_r = h - 80
             cv2.rectangle(right_small, (0, box_r), (self.display_width, h), (0, 0, 0), -1)
-            cv2.putText(
-                right_small,
-                "Offset: "
-                f"X={last['offset_x']:+.0f} Y={last['offset_y']:+.0f} Z={last['offset_z']:+.0f} mm",
-                (10, box_r + 20),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.40,
-                (0, 255, 255),
-                1,
-            )
 
-            if last["points_x"] is None:
+            if last["robot_x"] is None:
                 cv2.putText(
                     right_small,
-                    "Points: unavailable (press 'o' after generating transform file)",
-                    (10, box_r + 42),
+                    "Robot: unavailable (press 'o' to load transform file)",
+                    (10, box_r + 20),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.35,
                     (0, 180, 255),
@@ -490,44 +402,29 @@ class RobotTransformVerifier:
             else:
                 cv2.putText(
                     right_small,
-                    "Points: "
-                    f"X={last['points_x']:+.0f} Y={last['points_y']:+.0f} Z={last['points_z']:+.0f} mm",
-                    (10, box_r + 42),
+                    "Robot: "
+                    f"X={last['robot_x']:+.0f} Y={last['robot_y']:+.0f} Z={last['robot_z']:+.0f} mm",
+                    (10, box_r + 20),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.40,
                     (0, 255, 0),
                     1,
                 )
+                ws = "IN" if last["in_workspace"] else "OUT"
                 cv2.putText(
                     right_small,
-                    "Delta(points-offset): "
-                    f"dX={last['delta_x']:+.0f} dY={last['delta_y']:+.0f} dZ={last['delta_z']:+.0f} mm",
-                    (10, box_r + 64),
+                    f"WS: {ws}",
+                    (10, box_r + 42),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.35,
-                    (160, 220, 255),
+                    (180, 180, 180),
                     1,
                 )
 
-            off_ws = "IN" if last["offset_in_workspace"] else "OUT"
-            pts_ws = (
-                ("IN" if last["points_in_workspace"] else "OUT")
-                if last["points_in_workspace"] is not None
-                else "NA"
-            )
             cv2.putText(
                 right_small,
-                f"WS offset:{off_ws}  points:{pts_ws}",
-                (10, box_r + 86),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.35,
-                (180, 180, 180),
-                1,
-            )
-            cv2.putText(
-                right_small,
-                "r=reset  u=reload offset  o=reload points  p=summary",
-                (10, box_r + 108),
+                "r=reset  o=reload transform  p=summary",
+                (10, box_r + 64),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.33,
                 (150, 150, 150),
@@ -549,38 +446,33 @@ class RobotTransformVerifier:
             print("\n  No measurements yet.\n")
             return
 
-        bar = "=" * 132
+        bar = "=" * 90
         print(f"\n  {bar}")
         print(f"  ROBOT TRANSFORM VERIFY SUMMARY - {len(self.measurements)} points")
         print(f"  {bar}")
         print(
             "    #     CamX    CamY    CamZ |"
-            "   OffX   OffY   OffZ |"
-            "   PtsX   PtsY   PtsZ |"
-            "   |d|  Reprj  WS(o/p)"
+            "   RobX   RobY   RobZ |"
+            "  Reprj  WS"
         )
-        print(f"  {'-' * 132}")
+        print(f"  {'-' * 90}")
 
         for m in self.measurements:
-            off_ws = "OK" if m["offset_in_workspace"] else "OUT"
-            if m["points_in_workspace"] is None:
-                pts_ws = "NA"
+            if m["in_workspace"] is None:
+                ws = "NA"
             else:
-                pts_ws = "OK" if m["points_in_workspace"] else "OUT"
+                ws = "OK" if m["in_workspace"] else "OUT"
             print(
                 f"  {m['n']:4d} "
                 f"{m['cam_x']:+7.1f} {m['cam_y']:+7.1f} {m['cam_z']:+7.1f} |"
-                f" {m['offset_x']:+6.0f} {m['offset_y']:+6.0f} {m['offset_z']:+6.0f} |"
-                f" {self._fmt_opt(m['points_x'], 6, 0)}"
-                f" {self._fmt_opt(m['points_y'], 6, 0)}"
-                f" {self._fmt_opt(m['points_z'], 6, 0)} |"
-                f" {self._fmt_opt(m['delta_norm'], 5, 1)}"
-                f"  {m['reproj']:5.1f}   {off_ws:>3}/{pts_ws:<3}"
+                f" {self._fmt_opt(m['robot_x'], 6, 0)}"
+                f" {self._fmt_opt(m['robot_y'], 6, 0)}"
+                f" {self._fmt_opt(m['robot_z'], 6, 0)} |"
+                f"  {m['reproj']:5.1f}   {ws:>3}"
             )
 
         print(f"  {bar}")
-        print("  Compare both robot-frame outputs against tape-measure values.")
-        print("  Smaller real-world error is the better transform.")
+        print("  Compare robot-frame outputs against tape-measure values.")
         print()
 
     # ================================================================
@@ -589,20 +481,15 @@ class RobotTransformVerifier:
 
     def run(self):
         print("\n" + "=" * 70)
-        print("  ROBOT TRANSFORM VERIFICATION (OFFSET VS POINTS-BASED)")
+        print("  ROBOT TRANSFORM VERIFICATION (POINTS-BASED)")
         print("=" * 70)
-        print("  Click known points and compare both transformed robot-frame outputs.")
-        print("  Controls: SPACE=freeze  r=reset  u=reload offset  o=reload points  p=summary  q=quit")
+        print("  Click known points and verify transformed robot-frame outputs.")
+        print("  Controls: SPACE=freeze  r=reset  o=reload transform  p=summary  q=quit")
         print("=" * 70)
 
-        print("\n  Current camera pose constants (offset method):")
-        print(f"    Position: ({CAM_POSE_X_MM}, {CAM_POSE_Y_MM}, {CAM_POSE_Z_MM}) mm")
-        print(f"    Yaw={CAM_POSE_YAW} deg  Pitch={CAM_POSE_PITCH} deg  Roll={CAM_POSE_ROLL} deg")
-        if CAM_POSE_X_MM == 0 and CAM_POSE_Y_MM == 0 and CAM_POSE_Z_MM == 0:
-            print("    WARNING: camera position constants are all zeros.")
-        print(f"  Points-based transform file: {self.points_transform_file}")
+        print(f"\n  Points-based transform file: {self.points_transform_file}")
         print(
-            "  Points-based status: "
+            "  Status: "
             f"{'LOADED' if self.points_transform_ok else 'NOT LOADED'}"
         )
         self._print_transform_matrices()
@@ -675,18 +562,11 @@ class RobotTransformVerifier:
                     self.click_stage = 0
                     print("  [RESET] click next point")
                     continue
-                if key == ord("u"):
-                    self.reload_camera_pose()
-                    if self.measurements:
-                        print(f"  Re-transformed {len(self.measurements)} points with offset method")
-                        self.print_summary()
-                    self._print_transform_matrices()
-                    continue
                 if key == ord("o"):
                     self.points_transform_ok = self._load_points_transform(verbose=True)
                     self._recompute_existing_measurements()
                     if self.measurements:
-                        print(f"  Re-transformed {len(self.measurements)} points with points method")
+                        print(f"  Re-transformed {len(self.measurements)} points")
                         self.print_summary()
                     self._print_transform_matrices()
                     continue
@@ -708,8 +588,7 @@ class RobotTransformVerifier:
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Verify camera->robot transform by click triangulation and compare "
-            "offset-based vs points-based outputs."
+            "Verify camera->robot transform by click triangulation."
         )
     )
     parser.add_argument(

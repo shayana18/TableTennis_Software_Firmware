@@ -1,5 +1,13 @@
 """
-Trajectory Predictor - Main Prediction Class
+DEPRECATED — use trajectory.robot_predictor.RobotPredictor for real-time robot control.
+
+This module is kept for backward compatibility with camera-frame analysis scripts
+(test_velocity_validation.py, test_trajectory_prediction.py). For new code, use:
+    from trajectory.robot_predictor import RobotPredictor
+    from trajectory.workspace import in_workspace, ROBOT_HOME, ...
+    from comm_function.points_based_transform import cam_to_robot
+
+Trajectory Predictor - Camera-Frame Prediction Class (DEPRECATED)
 
 Predicts where and when the ball will arrive at the robot's end of the table.
 
@@ -120,10 +128,10 @@ CM_TO_MM = 10.0
 # │  predictor.set_camera_pose(x, y, z, yaw, pitch, roll).        │
 # └─────────────────────────────────────────────────────────────────┘
 #
-CAM_POSE_X_MM   = 1582.5      # camera is to robot's RIGHT (+X)
-CAM_POSE_Y_MM   = 1500.0     # camera is toward net from origin
-CAM_POSE_Z_MM   = -452.4     # camera is below base plate (-Z)
-CAM_POSE_YAW    = 185        # camera faces -X (180°) + 5° yaw toward net
+CAM_POSE_X_MM   = 1600.5      # camera is to robot's RIGHT (+X)
+CAM_POSE_Y_MM   = 1300     # camera is toward net from origin
+CAM_POSE_Z_MM   = -485.4     # camera is below base plate (-Z)
+CAM_POSE_YAW    = 180        # camera faces -X (180°) + 5° yaw toward net
 CAM_POSE_PITCH  = 20.0       # camera tilted 20° downward (fixed stand)
 CAM_POSE_ROLL   = 0.0        # camera is level
 

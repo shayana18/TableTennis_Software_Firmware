@@ -1,0 +1,4 @@
+frame_idx,timestamp_s,raw_x_mm,raw_y_mm,raw_z_mm,accepted,reject_reason,kf_x_mm,kf_y_mm,kf_z_mm,vel_x_mm_s,vel_y_mm_s,vel_z_mm_s,kf_ready,kf_updates,buffer_size,bounce_detected,bounce_count,rising_count,z_min_since_reset_mm,bounce_fall_from_first_mm
+1,28741.049815,184.763,295.704,-1023.723,True,,184.763,295.704,-1023.723,0.0,0.0,0.0,False,1,1,False,0,0,,
+2,28741.065303,143.129,255.419,-1018.236,True,,143.129,255.419,-1018.236,-2688.177,-2601.118,354.234,False,1,2,False,0,0,,
+3,28741.080921,103.728,228.518,-1013.475,True,,103.234,225.89,-1013.556,-2684.984,-2584.153,201.55,False,2,3,False,0,1,-1013.475,-10.248
