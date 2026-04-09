@@ -61,6 +61,7 @@ class UartWorker(threading.Thread):
         self._last_tx_time = 0.0
         self._pending_action = None  # 'home' | 'intercept' | None
         self._stm32_moving = False
+        self._allow_intercept_overwrite_while_moving = False
 
     def _emit(self, kind: UartEventKind, line: str | None = None, **data) -> None:
         _push_latest(
@@ -115,7 +116,13 @@ class UartWorker(threading.Thread):
             self._pending_action = None
             self._stm32_moving = False
             self._emit(UartEventKind.TARGET_REJECTED, line=line)
-        if "PLANNING FAILED" in upper or "PLAN_ABORT" in upper:
+        if (
+            "PLANNING FAILED" in upper
+            or "PLAN FAILED" in upper
+            or "PLAN_ABORT" in upper
+            or "STRIKE SWEEP OUT OF WORKSPACE" in upper
+            or "STRIKE SWEEP TOO SHORT" in upper
+        ):
             self._pending_action = None
             self._stm32_moving = False
             self._emit(UartEventKind.PLAN_FAILED, line=line)
@@ -168,6 +175,7 @@ class UartWorker(threading.Thread):
             latency_ms=latency_s * 1000.0,
             adjusted_time_ms=adjusted_t * 1000.0,
             frame_id=cmd.intercept.source_frame_id,
+            source_capture_time=cmd.intercept.source_capture_time,
             clamped=cmd.intercept.clamped,
             confidence=cmd.intercept.confidence,
             is_update=is_update,
@@ -186,7 +194,13 @@ class UartWorker(threading.Thread):
             if self._pending_action is None:
                 self._send_intercept(cmd, is_update=False)
                 return
-            if self._pending_action == "intercept" and not self._stm32_moving:
+            if (
+                self._pending_action == "intercept"
+                and (
+                    self._allow_intercept_overwrite_while_moving
+                    or not self._stm32_moving
+                )
+            ):
                 self._send_intercept(cmd, is_update=True)
 
     def run(self) -> None:
