@@ -30,11 +30,10 @@ class RobotPredictor:
     Uses BallStateEstimator3D when available, else falls back to legacy fitting.
     """
 
-    BUFFER_SIZE    = 15
-    MIN_POINTS     = 5      # minimum points for regression velocity (was 8 for KF)
-    MIN_TIME_SPAN  = 0.06   # seconds of measurement history before ready (was 0.08)
+    MIN_POINTS     = 8      # minimum points for regression velocity
+    MIN_TIME_SPAN  = 0.08   # seconds of measurement history before ready
     MAX_SPEED      = 15000.0 # mm/s
-    MAX_JUMP       = 200.0   # mm
+    MAX_JUMP       = 200   # mm
     GAP_RESET      = 0.12   # seconds
     STALE_TIMEOUT  = 0.15   # seconds
 
@@ -67,7 +66,8 @@ class RobotPredictor:
     # MIN_POINTS observations on the new arc before prediction resumes.
 
     def __init__(self):
-        self.positions = deque(maxlen=self.BUFFER_SIZE)
+        # Keep all accepted points for the current arc until reset/gap/bounce.
+        self.positions = deque()
         self.velocity = None
         self.state_estimator = None
         self._using_state_estimator = False
@@ -75,7 +75,7 @@ class RobotPredictor:
             self.state_estimator = BallStateEstimator3D(
                 gravity_z=GRAVITY_Z,
                 max_gap_s=self.GAP_RESET,
-                min_updates=4,  # fewer updates needed with smoother KF
+                min_updates=8,
             )
             self._using_state_estimator = True
         except ImportError:
@@ -90,6 +90,16 @@ class RobotPredictor:
         self._has_fallen = False  # True once we've seen enough falling frames
         self._bounce_count = 0
         self._velocity_seeded = False
+
+    def _buffer_span(self):
+        if len(self.positions) < 2:
+            return 0.0
+        return self.positions[-1][3] - self.positions[0][3]
+
+    def _regression_gate_open(self):
+        if not self.positions:
+            return False
+        return self.positions[-1][1] <= self.MAX_PREDICT_Y
 
     def reset(self):
         self.positions.clear()
@@ -175,13 +185,12 @@ class RobotPredictor:
                 self._last_reject_reason = "kf_dt"
                 return False
 
-        # Always use regression velocity — it fits ALL buffered points equally
-        # and is far more stable than the KF for near-zero axes (e.g. X).
-        # The KF position is still used for smoothed position in _get_prediction_state.
-        if len(self.positions) >= self.MIN_POINTS:
-            span = self.positions[-1][3] - self.positions[0][3]
-            if span >= self.MIN_TIME_SPAN:
-                self._estimate_velocity_legacy()
+        # Delay the first regression until the latest point crosses MAX_PREDICT_Y,
+        # so the initial fit uses the full accumulated approach arc.
+        if (len(self.positions) >= self.MIN_POINTS
+                and self._buffer_span() >= self.MIN_TIME_SPAN
+                and self._regression_gate_open()):
+            self._estimate_velocity_legacy(self.positions)
 
         return True
 
@@ -289,10 +298,16 @@ class RobotPredictor:
         self._has_fallen = False
         self._bounce_count += 1
 
-    def _estimate_velocity_legacy(self):
-        """Fallback regression estimator used when FilterPy is unavailable."""
-        n = len(self.positions)
-        pts = list(self.positions)
+    def _estimate_velocity_legacy(self, pts=None):
+        """Regression velocity estimator over the provided arc points."""
+        if pts is None:
+            pts = self.positions
+
+        pts = list(pts)
+        n = len(pts)
+        if n < 2:
+            self.velocity = None
+            return
 
         t_ref = pts[-1][3]
         dt = np.array([p[3] - t_ref for p in pts])
@@ -331,8 +346,11 @@ class RobotPredictor:
             return False
         if self.velocity is None:
             return False
-        span = self.positions[-1][3] - self.positions[0][3]
-        if span < self.MIN_TIME_SPAN:
+        if len(self.positions) < self.MIN_POINTS:
+            return False
+        if self._buffer_span() < self.MIN_TIME_SPAN:
+            return False
+        if not self._regression_gate_open():
             return False
         age = time.perf_counter() - self.positions[-1][3]
         return age < self.STALE_TIMEOUT
@@ -361,6 +379,7 @@ class RobotPredictor:
         if abs(y_now) < self.APPROACH_Y_THRESHOLD:
             return True
         return vy < self.MIN_APPROACH_VY
+        return True
 
     @staticmethod
     def _step_euler(x, y, z, vx, vy, vz, dt):
@@ -584,11 +603,13 @@ class RobotPredictor:
         y_now = pos[1] if pos is not None else (self.positions[-1][1] if self.positions else 9999)
         return {
             'buffer': len(self.positions),
+            'buffer_span_s': self._buffer_span(),
             'accepted': self._accepted,
             'rejected': self._rejected,
             'has_vel': self.velocity is not None,
             'approaching': self._ball_approaching() if self.velocity else False,
             'close_enough': y_now <= self.MAX_PREDICT_Y,
+            'regression_gate_open': self._regression_gate_open(),
             'bounces': self._bounce_count,
             'kf_ready': self.state_estimator.is_ready() if self.state_estimator is not None else False,
             'kf_updates': self.state_estimator.update_count if self.state_estimator is not None else 0,

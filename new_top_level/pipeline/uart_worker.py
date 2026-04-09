@@ -93,6 +93,11 @@ class UartWorker(threading.Thread):
         if "STATE: MOVE" in upper:
             self._stm32_moving = True
             self._emit(UartEventKind.STATE_MOVE, line=line)
+        if "STRIKE DONE -> HOME" in upper:
+            # Strike motion has completed and firmware is transitioning into
+            # the auto-home phase. Treat this as the end of the "moving"
+            # window so game-day rally code may send the next candidate target.
+            self._stm32_moving = False
         if "STATE: IDLE" in upper:
             self._emit(UartEventKind.STATE_IDLE, line=line)
             # Keep IDLE-based completion as a fallback in case firmware branch
@@ -153,6 +158,7 @@ class UartWorker(threading.Thread):
             time_sent_s=now,
             timestamp_s=cmd.intercept.source_capture_time,
         )
+        self._print("INTERCEPTION TARGET SENT")
         self._last_tx_time = now
         if self._pending_action is None:
             self._pending_action = "intercept"

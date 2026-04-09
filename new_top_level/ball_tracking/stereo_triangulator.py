@@ -55,9 +55,9 @@ class StereoTriangulator:
     MAX_DISPARITY    = 500    # px — above this something is wrong
     MIN_Z            = 10     # calibration units — too close is suspect
     MAX_Z            = 500    # calibration units — too far is suspect
-    MAX_EPIPOLAR_ERR = 15     # px — rectification makes epipolar ~0; if this fires
+    MAX_EPIPOLAR_ERR = 25     # px — rectification makes epipolar ~0; if this fires
                               #      it usually means bad calibration/rectification
-    MAX_REPROJ_ERR   = 8      # px — max reprojection error to accept
+    MAX_REPROJ_ERR   = 5.0      # px — max reprojection error to accept
 
     WARMUP_FRAMES = 120       # ~1.5s at 80fps — frames before detection is reliable
 

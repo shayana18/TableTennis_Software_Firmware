@@ -1,5 +1,5 @@
-camera0: 2
-camera1: 0
+camera0: 0
+camera1: 1
 frame_width: 640
 frame_height: 480
 mono_calibration_frames: 30
@@ -8,4 +8,4 @@ view_resize: 1
 checkerboard_box_size_scale: 3.18
 checkerboard_rows: 4
 checkerboard_columns: 7
-cooldown: 100
+cooldown: 40
