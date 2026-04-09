@@ -221,7 +221,12 @@ class UartWorker(threading.Thread):
                         self._emit(UartEventKind.UART_ERROR, error=str(exc))
 
                 for line in self._uart.poll_status_lines():
-                    self._parse_line(line)
+                    try:
+                        self._parse_line(str(line))
+                    except Exception as exc:
+                        # Never let a malformed/unexpected status line stop
+                        # the UART thread; report and continue.
+                        self._emit(UartEventKind.UART_ERROR, line=str(line), error=f"parse_line: {exc}")
 
                 time.sleep(0.002)
         except Exception as exc:

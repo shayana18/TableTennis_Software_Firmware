@@ -158,6 +158,8 @@ class GameApp:
         self._latest_predictor_update: Optional[PredictorUpdate] = None
         self._latest_intercept = None
         self._last_sent_intercept = None
+        # Allow exactly one intercept send per robot IDLE cycle.
+        self._idle_send_armed = False
         self._fps = 0.0
         self._fps_count = 0
         self._fps_t0 = time.perf_counter()
@@ -250,6 +252,7 @@ class GameApp:
         elif evt.kind == UartEventKind.TX_INTERCEPT:
             self._state.intercept_inflight = True
             self._state.robot_at_home = False
+            self._idle_send_armed = False
             is_update = bool(evt.data.get("is_update", False))
             if is_update:
                 self._state.updates_sent += 1
@@ -273,12 +276,16 @@ class GameApp:
             self._state.robot_at_home = True
             self._state.intercept_inflight = False
             self._state.robot_state = "IDLE"
+            self._idle_send_armed = True
             self._send_predictor(PredictorCommandKind.RESET)
             self._last_sent_intercept = None
         elif evt.kind in (UartEventKind.TARGET_REJECTED, UartEventKind.PLAN_FAILED):
+            # Treat planner rejects/failures as recoverable and keep the game loop
+            # live. Do not block on an additional HOME handshake here.
             self._state.intercept_inflight = False
-            self._state.robot_at_home = False
-            self._send_uart(UartCommandKind.HOME)
+            self._state.robot_at_home = True
+            self._state.robot_state = "IDLE"
+            self._idle_send_armed = True
             self._send_predictor(PredictorCommandKind.RESET)
             self._latest_intercept = None
             self._last_sent_intercept = None
@@ -307,6 +314,8 @@ class GameApp:
             return False
         if not self._state.gate_on:
             return False
+        if not self._idle_send_armed:
+            return False
         if not self._state.robot_at_home:
             return False
         if self._state.intercept_inflight:
@@ -314,27 +323,8 @@ class GameApp:
         return self._intercept_common_ready()
 
     def _can_send_update_intercept(self) -> bool:
-        """Legacy pre-move update gate.
-
-        Allow updates only while an intercept is pending and robot has not entered
-        MOVE yet. Require target movement >= 80mm to avoid noisy update spam.
-        """
-        if not self._state.gate_on:
-            return False
-        if not self._state.intercept_inflight:
-            return False
-        if self._state.robot_state == "MOVE":
-            return False
-        if self._last_sent_intercept is None:
-            return False
-        if not self._intercept_common_ready():
-            return False
-
-        dx = self._latest_intercept.x_mm - self._last_sent_intercept.x_mm
-        dy = self._latest_intercept.y_mm - self._last_sent_intercept.y_mm
-        dz = self._latest_intercept.z_mm - self._last_sent_intercept.z_mm
-        dist = (dx * dx + dy * dy + dz * dz) ** 0.5
-        return dist >= 80.0
+        # One target per IDLE cycle: no pre-MOVE target overwrite updates.
+        return False
 
     def _draw_overlay(self):
         """Main-thread visualization only (OpenCV UI should stay on main thread)."""
@@ -431,6 +421,7 @@ class GameApp:
         if not self._wait_for_startup_home():
             self._stop_event.set()
             return 1
+        self._idle_send_armed = True
 
         # Start compute workers only after startup homing is confirmed complete.
         self._predictor_worker.start()
@@ -490,6 +481,8 @@ class GameApp:
                         # Fresh throw: clear old state, then enable predictor.
                         self._send_predictor(PredictorCommandKind.RESET)
                         self._send_predictor(PredictorCommandKind.ENABLE)
+                        if self._state.robot_at_home and not self._state.intercept_inflight:
+                            self._idle_send_armed = True
                         _print("[gate] ON")
                     else:
                         # Gate-off should stop prediction immediately.
@@ -501,6 +494,7 @@ class GameApp:
                 elif key == ord("h"):
                     self._state.gate_on = False
                     self._state.intercept_inflight = False
+                    self._idle_send_armed = False
                     self._latest_intercept = None
                     self._last_sent_intercept = None
                     self._send_predictor(PredictorCommandKind.DISABLE)
