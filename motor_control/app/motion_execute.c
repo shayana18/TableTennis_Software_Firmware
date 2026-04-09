@@ -333,7 +333,7 @@ void motion_execute_plan_strike(robot_t *robot) {
   }
 
   if (!strike_targets_valid) {
-    motion_abort(robot, "STRIKE SWEEP OUT OF WORKSPACE\r\n");
+    motion_abort(robot, NULL);
     robot->state = STATE_IDLE;
     set_idle(robot);
     robot_runtime_send_status("STATE: IDLE\r\n");
