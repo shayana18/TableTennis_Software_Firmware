@@ -159,9 +159,10 @@ void delta_fsm(robot_t *robot)
           robot->state = STATE_STRIKE;
           robot_runtime_send_status("STATE: STRIKE\r\n");
         } else if (robot->current_target.type == TARGET_STRIKE) {
-          HAL_Delay(500);
+          HAL_Delay(100);
           motion_execute_make_home_target(robot);
           robot->state = STATE_PLAN;
+          robot_runtime_clear_mailbox();
           robot_runtime_send_status("STRIKE DONE -> HOME\r\n");
         } else if (robot->current_target.type == TARGET_HOME) {
           robot->state = STATE_IDLE;
