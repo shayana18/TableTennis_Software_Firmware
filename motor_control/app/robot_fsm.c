@@ -159,7 +159,7 @@ void delta_fsm(robot_t *robot)
           robot->state = STATE_STRIKE;
           robot_runtime_send_status("STATE: STRIKE\r\n");
         } else if (robot->current_target.type == TARGET_STRIKE) {
-          HAL_Delay(100);
+          HAL_Delay(200);
           motion_execute_make_home_target(robot);
           robot->state = STATE_PLAN;
           // robot->state = STATE_IDLE;
