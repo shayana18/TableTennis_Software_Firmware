@@ -22,7 +22,7 @@
 #define MAX_JOINT_VEL 3000.0L      // RPM, Conservative values
 #define MAX_JOINT_ACC 10000.0L     // RPM/s, Conservative Values
 
-#define MAX_CART_VEL 3500.0f     // mm/s Default: 4000
+#define MAX_CART_VEL 3800.0f     // mm/s Default: 4000
 #define MAX_CART_ACC 24000.0f    // mm/s^2  default: 20000
 #define MAX_CART_DEC 16000.0f    // mm/s^2 softer stop to reduce jerk at end of move
 #define HOME_CART_ACC 16000.0f   // mm/s^2 slower home acceleration to reduce oscillation

@@ -1,0 +1,1 @@
+sample_id,captured_at,x1,y1,z1,x2,y2,z2,x3,y3,z3,x4,y4,z4,x5,y5,z5,x6,y6,z6,dt12,dt23,dt34,dt45,dt56,x_hit,y_hit,z_hit,vx_hit,vy_hit,vz_hit,t_hit,is_reachable,intercept_valid,bounces_before_hit,has_bounce_before_hit,hit_obs_index,hit_obs_in_workspace,hit_obs_selected_from_workspace_pool,hit_center_dist_mm

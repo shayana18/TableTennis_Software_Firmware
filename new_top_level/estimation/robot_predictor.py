@@ -34,7 +34,7 @@ class RobotPredictor:
     MIN_POINTS     = 5      # minimum points for regression velocity (was 8 for KF)
     MIN_TIME_SPAN  = 0.06   # seconds of measurement history before ready (was 0.08)
     MAX_SPEED      = 15000.0 # mm/s
-    MAX_JUMP       = 400.0   # mm
+    MAX_JUMP       = 200.0   # mm
     GAP_RESET      = 0.12   # seconds
     STALE_TIMEOUT  = 0.15   # seconds
 
@@ -59,7 +59,7 @@ class RobotPredictor:
     MIN_HIT_RATIO         = 0.5    # at least 50% of samples must find a workspace hit
 
     # Observed bounce detection
-    MIN_BOUNCE_FALL_Z  = 150.0  # mm minimum Z descent before accepting bounce (was 50; stereo noise is ±30-50mm)
+    MIN_BOUNCE_FALL_Z  = 50.0  # mm minimum Z descent before accepting bounce (was 50; stereo noise is ±30-50mm)
     BOUNCE_RISE_FRAMES = 3      # consecutive rising frames to confirm (was 2)
     BOUNCE_FALL_FRAMES = 3      # consecutive falling frames required BEFORE rising can trigger
 
