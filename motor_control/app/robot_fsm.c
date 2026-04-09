@@ -4,6 +4,8 @@
 #include "robot.h"
 #include "robot_runtime.h"
 #include "shared_types.h"
+#include "stm32c0xx_hal.h"
+
 #include <math.h>
 #include <stdio.h>
 
@@ -157,8 +159,12 @@ void delta_fsm(robot_t *robot)
           robot->state = STATE_STRIKE;
           robot_runtime_send_status("STATE: STRIKE\r\n");
         } else if (robot->current_target.type == TARGET_STRIKE) {
+          HAL_Delay(100);
           motion_execute_make_home_target(robot);
           robot->state = STATE_PLAN;
+          // robot->state = STATE_IDLE;
+          // set_idle(robot);
+          
           robot_runtime_send_status("STRIKE DONE -> HOME\r\n");
         } else if (robot->current_target.type == TARGET_HOME) {
           robot->state = STATE_IDLE;

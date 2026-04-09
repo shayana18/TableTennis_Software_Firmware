@@ -26,7 +26,7 @@ class BallDetector:
     match detection_experiments/stereo_detection.py exactly.
     """
 
-    def __init__(self, min_area=80, max_area=2000, min_circularity=0.35,
+    def __init__(self, min_area=50, max_area=2000, min_circularity=0.35,
                  search_radius=150, roi=None):
         """
         Args:

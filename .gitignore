@@ -14,3 +14,7 @@ __pycache__/
 **/build/
 .cache/
 **/build-release/
+top_level_control/scripts/PIPELINE_REVIEW.metadata
+top_level_control/CHANGELOG.md  
+
+

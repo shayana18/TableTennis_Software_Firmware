@@ -34,10 +34,15 @@ if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 
 from tracking.stereo_triangulator import StereoTriangulator
-from trajectory.trajectory_predictor import (
-    TrajectoryPredictor, ELLIPSE_RADIUS_X, ELLIPSE_RADIUS_Y,
-    LIMIT_POS_Z, LIMIT_NEG_Z,
-    ROBOT_HOME, CM_TO_MM)
+from trajectory.trajectory_predictor import TrajectoryPredictor  # deprecated, camera-frame analysis
+from trajectory.workspace import (
+    ROBOT_HOME, CM_TO_MM,
+)
+# Workspace constants - use new names (firmware ellipse with safety margins)
+from trajectory.workspace import ELLIPSE_A as ELLIPSE_RADIUS_X
+from trajectory.workspace import ELLIPSE_B as ELLIPSE_RADIUS_Y
+from trajectory.workspace import Z_MAX as LIMIT_POS_Z
+from trajectory.workspace import Z_MIN as LIMIT_NEG_Z
 from config.camera_config import load_camera_settings
 
 

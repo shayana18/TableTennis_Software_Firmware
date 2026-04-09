@@ -35,7 +35,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config.camera_config import load_camera_settings
 from tracking.stereo_triangulator import StereoTriangulator
-from trajectory.trajectory_predictor import TrajectoryPredictor
+from comm_function.points_based_transform import load_points_based_transform
 
 
 class DistanceRobotFrameVerifier:
@@ -57,7 +57,13 @@ class DistanceRobotFrameVerifier:
         )
 
         self.triangulator = None
-        self.predictor = TrajectoryPredictor()
+
+        # Load points-based cam->robot transform
+        tf = load_points_based_transform()
+        self._tf_R = tf["rotation"]
+        self._tf_t = tf["translation"]
+        self._tf_scale = tf["camera_scale_to_robot_units"]
+        print(f"Loaded points-based transform (scale={self._tf_scale})")
 
         self.frozen = False
         self.frozen_left = None
@@ -146,7 +152,9 @@ class DistanceRobotFrameVerifier:
             return
 
         (cam_x, cam_y, cam_z), reproj, disparity = tri_out
-        robot_x, robot_y, robot_z = self.predictor.cam_to_robot(cam_x, cam_y, cam_z)
+        cam_scaled = np.array([cam_x, cam_y, cam_z]) * self._tf_scale
+        robot_pt = self._tf_R @ cam_scaled + self._tf_t
+        robot_x, robot_y, robot_z = float(robot_pt[0]), float(robot_pt[1]), float(robot_pt[2])
 
         m = {
             "n": len(self.measurements) + 1,

@@ -32,7 +32,9 @@ CRITICAL: Uses grab()/retrieve() pattern for synchronized stereo capture.
 
 import cv2
 import sys
+import time
 import numpy as np
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from .ball_detector import BallDetector
 from config.camera_config import (
@@ -70,6 +72,9 @@ class StereoTriangulator:
         # Shared BallDetector instances (canonical detection logic)
         self.detector_left = BallDetector()
         self.detector_right = BallDetector()
+
+        # Thread pool for parallel left/right detection (OpenCV releases GIL)
+        self._detect_pool = ThreadPoolExecutor(max_workers=2)
 
         # Warmup tracking (MOG2 needs frames to learn background)
         self._frame_count = 0
@@ -457,23 +462,37 @@ class StereoTriangulator:
         # --- CRITICAL: grab both before retrieving ---
         grabbed_l = self.cap_left.grab()
         grabbed_r = self.cap_right.grab()
+        capture_time = time.perf_counter()
 
         if not grabbed_l or not grabbed_r:
             return result
 
-        ret_left, frame_left = self.cap_left.retrieve()
-        ret_right, frame_right = self.cap_right.retrieve()
+        result['capture_time'] = capture_time
 
-        if not ret_left or not ret_right:
+        # Fused retrieve+detect per camera — each thread decodes MJPG then
+        # runs MOG2 detection back-to-back, so the two cameras fully overlap.
+        # Saves ~4ms vs sequential parallel-retrieve then parallel-detect.
+        def _retrieve_and_detect(cap, detector):
+            ret, frame = cap.retrieve()
+            if not ret or frame is None:
+                return False, None, (None, [], [], None)
+            det = detector.detect(frame)
+            return True, frame, det
+
+        fut_l = self._detect_pool.submit(_retrieve_and_detect, self.cap_left, self.detector_left)
+        fut_r = self._detect_pool.submit(_retrieve_and_detect, self.cap_right, self.detector_right)
+        ok_l, frame_left, det_l = fut_l.result()
+        ok_r, frame_right, det_r = fut_r.result()
+
+        if not ok_l or not ok_r:
             return result
 
         result['left_frame'] = frame_left
         result['right_frame'] = frame_right
         self._frame_count += 1
 
-        # --- Detect ball in both frames ---
-        best_l, cands_l, rej_l, mask_l = self.detector_left.detect(frame_left)
-        best_r, cands_r, rej_r, mask_r = self.detector_right.detect(frame_right)
+        best_l, cands_l, rej_l, mask_l = det_l
+        best_r, cands_r, rej_r, mask_r = det_r
 
         result['left_detection'] = best_l
         result['right_detection'] = best_r

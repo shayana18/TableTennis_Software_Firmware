@@ -22,11 +22,11 @@
 #define MAX_JOINT_VEL 3000.0L      // RPM, Conservative values
 #define MAX_JOINT_ACC 10000.0L     // RPM/s, Conservative Values
 
-#define MAX_CART_VEL 4000.0f     // mm/s Default: 4000
-#define MAX_CART_ACC 20000.0f    // mm/s^2  default: 20000
-#define MAX_CART_DEC 14000.0f    // mm/s^2 softer stop to reduce jerk at end of move
-#define HOME_CART_ACC 3000.0f   // mm/s^2 slower home acceleration to reduce oscillation
-#define HOME_CART_DEC 2500.0f   // mm/s^2 gentler home deceleration
+#define MAX_CART_VEL 4200.0f     // mm/s Default: 4000
+#define MAX_CART_ACC 24000.0f    // mm/s^2  default: 20000
+#define MAX_CART_DEC 24000.0f    // mm/s^2 softer stop to reduce jerk at end of move
+#define HOME_CART_ACC 6000.0f   // mm/s^2 slower home acceleration to reduce oscillation
+#define HOME_CART_DEC 6000.0f   // mm/s^2 gentler home deceleration
 
 #define MAX_STRIKE_VEL MAX_CART_VEL    // mm/s
 
@@ -34,7 +34,7 @@
 #define HOME_X 0.0f
 #define HOME_Y 0.0f
 #define HOME_Z -880.0f
-#define HOME_TIME 2.0f
+#define HOME_TIME 0.4f
 
 // Striking Parameters
 #define STRIKE_TARGET_X 0.0f
@@ -54,7 +54,7 @@
 #define STRIKE_TAU_WINDOW_MAX 0.180f // (s)
 #define STRIKE_TAU_POS_SCALE 1.60f
 #define STRIKE_TAU_NEG_SCALE 0.70f
-#define STRIKE_CONTACT_LEAD_TIME 0.080f // (s) schedule impact this much earlier to compensate latency
+#define STRIKE_CONTACT_LEAD_TIME 0.15f // (s) schedule impact this much earlier to compensate latency
 #define STRIKE_YAW_BIAS_DEG 0.0f // (deg) positive bias to steer returns more toward opponent center
 
 // Delta geometry (mm)

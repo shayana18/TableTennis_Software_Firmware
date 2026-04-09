@@ -1,11 +1,12 @@
 """
+DEPRECATED — used only by trajectory_predictor.py (deprecated camera-frame predictor).
+For new code, use trajectory.robot_predictor.RobotPredictor which has integrated velocity
+estimation with gravity correction.
+
 Velocity Estimator - Calculate Ball Velocity from Position History
 
 Computes velocity vector (Vx, Vy, Vz) from timestamped positions.
 Uses linear regression for noise-robust estimation.
-
-Part of trajectory prediction pipeline:
-  position_buffer.py  →  velocity_estimator.py  →  trajectory_predictor.py
 """
 
 import numpy as np
