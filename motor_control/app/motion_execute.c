@@ -329,7 +329,7 @@ void motion_execute_plan_strike(robot_t *robot) {
       windup_offset_selected = windup_offset;
       followthrough_offset_selected = followthrough_offset;
     }
-    sweep_scale *= 0.96f;
+    sweep_scale *= 0.94f;
   }
 
   if (!strike_targets_valid) {
